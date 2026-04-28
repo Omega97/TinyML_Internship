@@ -9,7 +9,7 @@ Meeting all'ufficio del prof. Zennaro (Marconi Lab 2° piano)
 
 > Caricare un'AI di scacchi su un componente di edge-computing. L'obbiettivo è avere un prodotto funzionante, che bilancia prestazioni e consumo. 
 > Misureremo l'elo della policy contro una policy di Elo noto e comparabile (molto efficiente, le partite durano meno di un secondo). 
-> Se il chip dovesse essere in grado di gestire una *tree search*, dovremmo modellare il consumo del chip come $overhead + consumo/nodo * \#nodi$ . 
+> Se il chip dovesse essere in grado di gestire una *tree search*, dovremmo modellare il consumo del chip come $overhead + consumo/nodo * nodi$ . 
 > Inoltre, la *tree search* userebbe una *value function*. Possiamo misurare la forza di questa in modo simile, trasformandola però prima in una *policy* (valutando ciascuna mossa possibile).
 > L'aspetto interessante dal punto di vista teorico, invece, potrebbe essere quello di valutare le performance di una rete neurale quantizzata e distillata.
 
