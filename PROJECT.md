@@ -14,4 +14,7 @@
 
 ## **Data & Training**
 
-- Large chess datasets (e.g., Lichess) for distillation.
+- Large chess datasets for distillation.
+  -  [Lichess](https://database.lichess.org/)
+- Small chess datasets for testing.
+  - [Kaggle](https://www.kaggle.com/datasets/datasnaek/chess)

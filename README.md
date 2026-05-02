@@ -66,7 +66,7 @@ modello studente con prestazioni più basse, ma molto più compatto.
 
 ---
 
-## 28 Aprile
+## 27 Aprile - 3 Maggio
 
 
 ### 1. Xiao Setup
