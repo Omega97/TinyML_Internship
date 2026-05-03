@@ -2,6 +2,10 @@
 # Report del Progetto
 **Progetto di Tirocinio all'ICTP**
 
+> Dettagli progetto:[PROJECT.md](PROJECT.md) 
+
+> Note progetto: [NOTES.md](NOTES.md) 
+
 ---
 
 ## 22 Aprile
@@ -30,8 +34,6 @@ Meeting all'ufficio del prof. Zennaro
 5. [MLSysBook AI kits](https://mlsysbook.ai/kits/)
 
 #todo: Review Papers on state of the art about compressing chess engine into small chip
-
-> Vedi >> [dettagli progetto](PROJECT.md) <<
 
 ---
 

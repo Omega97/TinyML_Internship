@@ -1,8 +1,9 @@
 
 ### TinyML
 
-Il framework [TinyML](https://github.com/marcozennaro/ICTP-UNU-TinyML) , sviluppato dall’ICTP di Trieste nasce con l’obiettivo di 
-rendere l’intelligenza artificiale accessibile su hardware a basso consumo e costo contenuto. 
+Il framework [TinyML](https://github.com/marcozennaro/ICTP-UNU-TinyML) , 
+sviluppato dall’ICTP di Trieste nasce con l’obiettivo di rendere l’intelligenza artificiale 
+accessibile su hardware a basso consumo e costo contenuto. 
 A differenza dei framework commerciali, si concentra sulla portabilità estrema e sulla 
 semplificazione del codice C++ per permettere l’esecuzione di modelli complessi 
 (come le reti neurali) su dispositivi con risorse limitate.
@@ -19,6 +20,15 @@ Originally invented for Shogi by Yu Nasu in 2018 and later popularized in chess 
 in 2020, NNUE revolutionized traditional alpha-beta engines by replacing hand-crafted 
 evaluation functions with a compact neural network while maintaining extremely high speed.
 
+[Basic NNUE](https://www.chessprogramming.org/NNUE#Basic_NNUE): The most basic form 
+of an NNUE network consists of three layers: an input layer of length 768 
+(768 = 6 pieces x 2 colors x 64 squares), one hidden layer of arbitrary size, and 
+an output layer consisting of one neuron, representing the evaluation of the position. 
+A NNUE network also commonly consists of two perspectives. That is, two hidden layers 
+representing both sides are concatenated into a single hidden layer of twice the length, 
+before being forwarded to the output layer. 
+
+Read also: [NNUE Stockfish](https://official-stockfish.github.io/docs/nnue-pytorch-wiki/docs/nnue.html)
 
 ### Tecniche di Compressione del Modello
 
