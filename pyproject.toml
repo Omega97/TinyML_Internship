@@ -1,0 +1,57 @@
+[project]
+name = "tinymlinternship"
+version = "0.1.0"
+description = "TinyML Chess Engine - Running compressed chess AI on edge devices (XIAO)"
+readme = "README.md"
+requires-python = ">=3.9"
+license = {text = "MIT"}
+authors = [
+    {name = "Your Name", email = "your.email@example.com"},
+]
+
+dependencies = [
+    "pandas",
+    "kagglehub",
+    "python-chess>=1.0.0",
+    "numpy",
+]
+
+[project.optional-dependencies]
+dev = [
+    "pytest",
+    "black",
+    "isort",
+    "flake8",
+    "mypy",
+    "ipykernel",           # for notebooks
+]
+
+[tool.setuptools.packages.find]
+where = ["src"]
+namespaces = false
+
+[tool.setuptools.package-data]
+"tinymlinternship" = ["**/*.txt", "**/*.md"]
+
+# =============================================
+# Tool configurations
+# =============================================
+
+[tool.black]
+line-length = 100
+target-version = ['py39']
+
+[tool.isort]
+profile = "black"
+src_paths = ["src"]
+
+[tool.pytest.ini_options]
+minversion = "7.0"
+addopts = "-ra --tb=short"
+testpaths = ["tests"]
+
+[tool.mypy]
+python_version = "3.9"
+warn_return_any = true
+warn_unused_configs = true
+disallow_untyped_defs = true
