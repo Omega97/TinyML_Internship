@@ -105,3 +105,24 @@ al libro [_"Machine Learning Systems"_](https://mlsysbook.ai/book/) di **Vijay J
 **Contenuto:** Sono kit progettati per imparare a distribuire modelli ML 
 su hardware reale ("TinyML kits"), affrontando problemi di latenza, 
 memoria e affidabilità dei sistemi.
+
+---
+
+### FEN string
+
+FEN (Forsyth-Edwards Notation) is a standard string representation of a chess position. 
+It has 6 fields, separated by spaces:
+
+$$
+  \underbrace{\text{rnbqkbnr/pppppppp/8/8/4P3/8/PPPP1PPP/RNBQKBNR}}_{\substack{\textbf{Piece Placement} \\ \text{(Ranks 8 to 1)}}}
+  \;
+  \underbrace{\text{b}}_{\substack{\textbf{Active Color} \\ \text{(w or b)}}}
+  \;
+  \underbrace{\text{KQkq}}_{\substack{\textbf{Castling} \\ \text{Availability}}}
+  \;
+  \underbrace{\text{e6}}_{\substack{\textbf{En Passant} \\ \text{Target}}}
+  \;
+  \underbrace{\text{0}}_{\substack{\textbf{Halfmove} \\ \text{Clock}}}
+  \;
+  \underbrace{\text{2}}_{\substack{\textbf{Fullmove} \\ \text{Number}}}
+$$

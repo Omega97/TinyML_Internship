@@ -2,7 +2,7 @@
 # Report del Progetto
 **Progetto di Tirocinio all'ICTP**
 
-> Dettagli progetto:[PROJECT.md](PROJECT.md) 
+> Dettagli progetto: [PROJECT.md](PROJECT.md) 
 
 > Note progetto: [NOTES.md](NOTES.md) 
 
@@ -60,6 +60,16 @@ Meeting all'ufficio del prof. Zennaro
 
 - [download_data.py](scripts/download_data.py)
 - [test_data.py](tests/test_data.py)
-- [view_game.py](tests/view_game.py)
+- [example_game.py](tests/example_game.py)
 
 ---
+
+## 4-10 Maggio
+
+### Repo work
+
+
+- [FEN](NOTES.md#fen-string)
+- [example_fen.py](tests/example_fen.py)
+- [test_policy_inference.py](tests/test_policy_inference.py)
+- [featurizer.py](src/tinymlinternship/datasets/featurizer.py)
