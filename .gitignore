@@ -1,4 +1,24 @@
-data/
+
+# ===== Repo-specific =====
+
+# Data
+data/raw/
+data/processed/
+*.csv
+*.pgn
+*.bz2
+
+# Models
+models/checkpoints/
+models/exported/
+*.pt
+*.tflite
+*.onnx
+
+# Other
+PRIVATE
+
+# ===== Standard =====
 
 # Git
 .gitattributes
@@ -50,5 +70,3 @@ docs/_templates/
 *.bak
 *.tmp
 *.cache
-
-PRIVATE

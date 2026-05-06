@@ -126,3 +126,12 @@ $$
   \;
   \underbrace{\text{2}}_{\substack{\textbf{Fullmove} \\ \text{Number}}}
 $$
+
+---
+
+### Pawn Promotion
+
+- Create promotion move: `chess.Move.from_uci("e7e8q")` 
+- 5th char = piece (q,r,b,n)
+- Check if promotion: `if move.promotion: ...`
+- The standard 4096-output head doesn't distinguish promotions -> default to Queen

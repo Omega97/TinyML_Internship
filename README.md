@@ -33,8 +33,6 @@ Meeting all'ufficio del prof. Zennaro
 4. OTII
 5. [MLSysBook AI kits](https://mlsysbook.ai/kits/)
 
-#todo: Review Papers on state of the art about compressing chess engine into small chip
-
 ---
 
 ## 23-26 Aprile
@@ -57,19 +55,33 @@ Meeting all'ufficio del prof. Zennaro
 - [MLSysBook AI Kits](NOTES.md#mlsysbook-ai-kits)
 
 ### Repo work
-
+                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                            
+- basic repo structure
 - [download_data.py](scripts/download_data.py)
 - [test_data.py](tests/test_data.py)
-- [example_game.py](tests/example_game.py)
+- [example_game.py](examples/example_game.py)
 
 ---
 
 ## 4-10 Maggio
 
+- [FEN](NOTES.md#fen-string)
+- [Value functions](PROJECT.md#value-functions)
+- [Policy functions](PROJECT.md#policy-functions)
+
 ### Repo work
 
-
-- [FEN](NOTES.md#fen-string)
-- [example_fen.py](tests/example_fen.py)
+- [example_fen.py](examples/example_fen.py)
 - [test_policy_inference.py](tests/test_policy_inference.py)
 - [featurizer.py](src/tinymlinternship/datasets/featurizer.py)
+
+---
+
+## TODOs
+
+- **Models**
+- **Data Pipeline**
+- **Quantization & Export**
+- **MCU Deployment**
+- **Power Profiling (OTII)**
+- Review Papers on state of the art about compressing chess engine into small chip

@@ -1,8 +1,13 @@
 """
 Minimal script to display moves from a specific game in the Lichess dataset.
 """
+import chess
 import pandas as pd
 from src.tinymlinternship.config.settings import LICHESS_CSV
+from src.tinymlinternship.datasets.featurizer import fen_to_tensor, get_legal_mask
+
+
+TEST_FEN = "rnbqkbnr/pppppppp/8/8/4P3/8/PPPP1PPP/RNBQKBNR b KQkq e3 0 1"
 
 
 def display_game(game_id: int = 0):
@@ -25,7 +30,10 @@ def display_game(game_id: int = 0):
         print(f"{key:_<15}  {game.get(key, 'Unknown')}")
 
 
-def main():
+# ===== Examples =====
+
+
+def example_make_move():
     """
     GAME #1
     id_____________  l1NXvwaE
@@ -48,5 +56,28 @@ def main():
     display_game(game_id=1)
 
 
+def example_fen_to_tensor():
+    """
+     torch.Size([12, 8, 8])
+    """
+    board = chess.Board(TEST_FEN)
+    tensor_board = fen_to_tensor(board)
+
+    print(tensor_board.shape)
+
+
+def example_legal_moves():
+    """
+    tensor([False, False, False,  ..., False, False, False])
+    torch.Size([4096])
+    """
+    board = chess.Board(TEST_FEN)
+    mask = get_legal_mask(board)
+    print(mask)
+    print(mask.shape)
+
+
 if __name__ == "__main__":
-    main()
+    # example_make_move()
+    # example_fen_to_tensor()
+    example_legal_moves()
