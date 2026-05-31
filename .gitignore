@@ -1,4 +1,3 @@
-
 # ===== Repo-specific =====
 
 # Data
@@ -17,6 +16,9 @@ models/exported/
 
 # Other
 PRIVATE
+
+# ===== Obsidian =====
+.obsidian
 
 # ===== Standard =====
 
