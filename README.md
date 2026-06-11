@@ -2,9 +2,9 @@
 # Report del Progetto
 **Progetto di Tirocinio all'ICTP**
 
-> Dettagli progetto: [PROJECT.md](PROJECT.md) 
+> Dettagli progetto: [PROJECT.md](PROJECT.md)
 
-> Note progetto: [NOTES.md](NOTES.md) 
+> Note progetto: [NOTES/notes.md](NOTES/notes.md)
 
 ---
 
@@ -36,26 +36,27 @@ Meeting all'ufficio del prof. Zennaro
 ---
 
 ## 23-26 Aprile
+- TinyML Framework
+- NNUE
+- Model Compression
+- Knowledge Distillation
 
-- [TinyML Framework](NOTES.md#tinyml)
-- [NNUE](NOTES.md#NNUE)
-- [Model Compression](NOTES.md#tecniche-di-compressione-del-modello)
-- [Knowledge Distillation](NOTES.md#knowledge-distillation-stockfish--nn)
+(See [NOTES/notes.md](NOTES/notes.md) for details.)
 
 ---
 
 ## 27 Aprile - 3 Maggio
+- Xiao Setup
+- Edge Impulse
+- SenseCraft
+- LiteRT
+- PyTorch Workflow
+- Power Measurement with OTII
+- MLSysBook AI Kits
 
-- [Xiao Setup](NOTES.md#xiao-setup)
-- [Edge Impulse](NOTES.md#edge-impulse)
-- [SenseCraft](NOTES.md#sensecraft)
-- [LiteRT](NOTES.md#litert)
-- [PyTorch Workflow](NOTES.md#pytorch-workflow)
-- [Power Measurement with OTII](NOTES.md#otii-otii-arc)
-- [MLSysBook AI Kits](NOTES.md#mlsysbook-ai-kits)
+(See [NOTES/notes.md](NOTES/notes.md) for details.)
 
 ### Repo work
-                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                            
 - basic repo structure
 - [download_data.py](scripts/download_data.py)
 - [test_data.py](tests/test_data.py)
@@ -64,24 +65,29 @@ Meeting all'ufficio del prof. Zennaro
 ---
 
 ## 4-10 Maggio
+- FEN
+- Value functions
+- Policy functions
 
-- [FEN](NOTES.md#fen-string)
-- [Value functions](PROJECT.md#value-functions)
-- [Policy functions](PROJECT.md#policy-functions)
+(See [NOTES/notes.md](NOTES/notes.md) for chess/hardware/software notes; [PROJECT.md](PROJECT.md) for model details.)
 
 ### Repo work
-
 - [example_fen.py](examples/example_fen.py)
 - [test_policy_inference.py](tests/test_policy_inference.py)
 - [featurizer.py](src/tinymlinternship/datasets/featurizer.py)
 
 ---
 
-## TODOs
+## 25-31 Maggio
 
-- **Models**
-- **Data Pipeline**
-- **Quantization & Export**
-- **MCU Deployment**
-- **Power Profiling (OTII)**
-- Review Papers on state of the art about compressing chess engine into small chip
+- **Models**: list of model candidates
+- **MCU Deployment**: what is it about?
+- **Quantization**: How to perform (can it be done in Python??)
+- MicroPython
+- CircuitPython: what is it?
+- **Power Profiling (OTII)**: how to
+- TinyTorch not on hardware? How it works? does it work?
+
+---
+
+#core

@@ -92,5 +92,9 @@ _Note: there is no direct "policy NNUE" equivalent in chess engines for tiny/MCU
 - **Why**: Designed specifically for edge computing.
 - **Edge fit**: Perfect for MCU deployment.
 - **Links**: [TU Wien PDF](https://repositum.tuwien.at/bitstream/20.500.12708/227472/1/Tayari%20Hakim%20-%202026%20-%20Tiny%20Deep%20Reinforcement%20Learni...).
+- https://arxiv.org/pdf/2410.23753v1
 
 ---
+
+#core 
+

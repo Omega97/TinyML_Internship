@@ -1,9 +1,6 @@
-
-# Chess notes ♟
-
+# Chess Notes ♟
 
 > *Everything Chess-related...*
-
 
 ### NNUE
 
@@ -58,3 +55,5 @@ $$
 - The standard 4096-output head doesn't distinguish promotions -> default to Queen
 
 ---
+
+[← Back to Notes index](notes.md)
