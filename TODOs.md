@@ -9,9 +9,10 @@
 - [x] **Power Profiling (OTII)**: how to
 - [x] TinyTorch not on hardware? How it works? does it work?
 - [x] Arduino project HUB: what is it and how it works
+- [ ] Guardare video per imparare Arduino 
+- [ ] Tutorial on how to load model on *Wio terminal*
 - [ ] Reddit projects: explore for interesting projects
 - [ ] Provare a trainare un mini bot di scacchi 🤖
-- [ ] Guardare video per imparare Arduino 🤖
 - [ ] Review materiale tirocinio 🤖
 - [ ] Provare il metodo dei non-linear probes per vedere se un grosso modello è in grado di ricostruire lo stato del gioco (per scacchi) 🤖
 - [ ] Thesis on Explainable tiny chess and World Models (TODO find name opposite of Magnus, which means big) Can models also build an internal board?

@@ -74,6 +74,17 @@ Its combination of a color screen, wireless connectivity, rich sensors, and smal
 - TinyML/edge AI experiments
 - Interactive gadgets and educational projects
 
+#### Porte  e Interfacce Esterne Principali
+
+| Porta / Connettore          | Nome / Descrizione                           | Posizione / Note      |
+| --------------------------- | -------------------------------------------- | --------------------- |
+| **USB Type-C**              | USB Type-C (Power + Data + OTG)              | Lato inferiore        |
+| **Grove Port 1** (sinistra) | **Grove I²C** (principale, multifunzione)    | Fondo, lato sinistro  |
+| **Grove Port 2** (destra)   | **Grove Digital/Analog/PWM** (configurabile) | Fondo, lato destro    |
+| **40-pin GPIO**             | **Raspberry Pi compatible 40-pin header**    | Retro del dispositivo |
+| **microSD Card Slot**       | Slot per scheda microSD (fino a 16 GB)       | Lato inferiore        |
+| **FPC Connector**           | Connettore FPC 20-pin (per display interno)  | Interno               |
+
 ---
 
 [← Back to Notes index](notes.md)

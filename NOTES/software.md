@@ -126,4 +126,28 @@ Progetti principali:
 
 ---
 
+### TorchScript
+
+TorchScript is a way to intermediate between PyTorch and a high-performance environment. It is a subset of Python code that can be compiled, optimized, and run **entirely independently of Python**.
+
+- **Static Compilation:** TorchScript analyzes your PyTorch code and serializes it into a static, structure-defined computation graph. It compiles your model into an intermediate representation (IR).
+    
+- **Python-Independent:** Once a model is compiled into TorchScript (often saved as a `.ts.pt` file, like in Step 2 of your pipeline), it can be loaded directly into a **C++ runtime** (`LibTorch`) or a specialized embedded loader. It no longer needs Python.
+    
+- **Primary Use:** Production deployment, embedding models into C++ applications, and serving models on edge hardware or microcontrollers.
+
+---
+
+### ONNX
+
+**ONNX** (Open Neural Network Exchange) is essentially a universal translator for AI models.
+
+- **Freezes the Architecture:** It takes your dynamic PyTorch code and bakes it into a rigid, serialized graph of mathematical operations (like matrix multiplications and activations).
+    
+- **Removes Python Dependency:** The resulting `.onnx` file is completely decoupled from PyTorch and Python. It is just raw data describing the neural network structure and its weights.
+    
+- **Enables Cross-Platform Compatibility:** Once a model is in ONNX format, it can be easily converted into almost any target hardware format. For example, optimization toolchains (like Edge Impulse, TensorFlow Lite Converter, or specialized compiler tools for microcontrollers) often use ONNX as their preferred input format because it is standardized.
+
+---
+
 [← Back to Notes index](notes.md)
