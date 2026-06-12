@@ -6,12 +6,6 @@ NOTE: For lab deployment on Arduino/XIAO, prefer the more complete script:
 
 This script also generates the C header ready to include in a TFLite Micro sketch.
 """
-import sys
-from pathlib import Path
-
-# Add src to path
-sys.path.insert(0, str(Path(__file__).parent.parent / "src"))
-
 import onnx
 from onnx_tf.backend import prepare
 import torch

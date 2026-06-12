@@ -46,14 +46,14 @@ import torch.optim as optim
 
 # Project imports
 sys.path.insert(0, str(Path(__file__).parent.parent / "src"))
-from tinymlinternship.config.settings import (
+from src.tinymlinternship.config.settings import (
     CHECKPOINTS_DIR,
     EXPORTED_DIR,
     ARDUINO_MODELS_DIR,
     RAW_DATA_DIR,
 )
-from tinymlinternship.models.value import TinyValueMLP, UltraTinyValueMLP
-from tinymlinternship.datasets.featurizer import fen_to_tensor
+from src.tinymlinternship.models.value import TinyValueMLP, UltraTinyValueMLP
+from src.tinymlinternship.datasets.featurizer import fen_to_tensor
 import chess
 
 
