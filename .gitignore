@@ -3,9 +3,12 @@
 # Data
 data/raw/
 data/processed/
+models/
+
 *.csv
 *.pgn
 *.bz2
+*.h
 
 # Models
 models/checkpoints/
