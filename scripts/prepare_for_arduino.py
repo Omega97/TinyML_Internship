@@ -2,11 +2,19 @@
 """
 Lab-ready script: Prepare a TinyML chess model for deployment on Arduino / XIAO ESP32-S3.
 
+This script focuses on the **TFLite + TFLM path** (good when you want a real .tflite
+flatbuffer that you can also use with standard TFLite Micro).
+
 Pipeline:
   1. Load model (from checkpoint .pt or random for testing)
   2. Export / convert to TensorFlow Lite (.tflite), with optional quantization
   3. Generate Arduino-compatible C header containing the flatbuffer model data
      (ready to #include in a TFLite Micro sketch)
+
+Note:
+  For the very small value networks targeting the Wio Terminal, prefer
+  `scripts/prepare_wio_tiny.py` (it produces much smaller models suitable for
+  512 KB flash + 192 KB RAM devices).
 
 Usage examples:
   # Basic (float32 tflite + C header) from existing checkpoint
@@ -23,16 +31,14 @@ Usage examples:
 
 Outputs are placed under models/exported/ and models/arduino/models/
 """
-
 import argparse
 import sys
-from pathlib import Path
-
-# Ensure we can import the project package
-sys.path.insert(0, str(Path(__file__).parent.parent / "src"))
-
 import torch
 import numpy as np
+from pathlib import Path
+
+# Ensure we can import the project package   (Note: removed /src at the end)
+sys.path.insert(0, str(Path(__file__).parent.parent))
 
 from src.tinymlinternship.config.settings import (
     CHECKPOINTS_DIR,
@@ -48,7 +54,14 @@ def ensure_dirs():
 
 
 def load_model(model_name: str) -> torch.nn.Module:
-    """Load TinyPolicy from checkpoint or create random one."""
+    """
+    Load a TinyPolicy (the current default model for this script).
+
+    Note:
+        This script is currently oriented toward the policy network.
+        For the much smaller value networks (Wio Terminal), use
+        scripts/prepare_wio_tiny.py instead.
+    """
     model = TinyPolicy(hidden_channels=16)
     checkpoint_path = CHECKPOINTS_DIR / f"{model_name}.pt"
 
@@ -74,9 +87,11 @@ def export_to_tflite(
       - "dynamic": post-training dynamic range quantization (good size/speed win, easy)
       - "int8": full integer quantization (best for MCU; needs representative dataset)
     """
+    # Heavy dependencies are imported here so that --help and --from-tflite
+    # work even if tensorflow + onnx-tf are not installed.
+    import tensorflow as tf
     import onnx
     from onnx_tf.backend import prepare
-    import tensorflow as tf
 
     dummy_input = torch.randn(1, 12, 8, 8)
 
@@ -85,9 +100,11 @@ def export_to_tflite(
 
     # 2. ONNX (stable intermediate)
     onnx_path = EXPORTED_DIR / f"{model_name}.onnx"
+    # Passing a single tensor works at runtime. Wrapping in a tuple helps some
+    # static type checkers with the expected signature.
     torch.onnx.export(
         traced,
-        dummy_input,
+        (dummy_input,),
         onnx_path,
         export_params=True,
         opset_version=17,
@@ -101,7 +118,9 @@ def export_to_tflite(
     onnx_model = onnx.load(onnx_path)
     tf_rep = prepare(onnx_model)
     saved_model_dir = EXPORTED_DIR / f"{model_name}_saved_model"
-    tf_rep.export_graph(str(saved_model_dir))
+    # onnx-tf's PreparedModel has export_graph at runtime, but it is not
+    # visible to static analysis / IDEs.
+    tf_rep.export_graph(str(saved_model_dir))  # type: ignore[attr-defined]
 
     # 4. Convert to TFLite + apply quantization
     converter = tf.lite.TFLiteConverter.from_saved_model(str(saved_model_dir))
@@ -117,9 +136,11 @@ def export_to_tflite(
 
         # Representative dataset is critical for good int8 accuracy
         def representative_dataset():
-            # TODO: replace with real board positions from your dataset for production
+            # TODO (future): replace random data with real board positions
+            # from your training set (use fen_to_tensor(..., flatten=False)).
+            # Using random data works for a first smoke test but gives
+            # suboptimal quantization ranges.
             for _ in range(50):
-                # Random but valid-shaped input (in real use: fen_to_tensor results)
                 data = np.random.randn(1, 12, 8, 8).astype(np.float32)
                 yield [data]
 
@@ -159,7 +180,7 @@ def tflite_to_c_header(
     # Build C array content (12 bytes per line is readable)
     lines = []
     for i in range(0, model_len, 12):
-        chunk = data[i : i + 12]
+        chunk = data[i: i + 12]
         hex_values = ", ".join(f"0x{b:02x}" for b in chunk)
         lines.append(f"  {hex_values}")
 
