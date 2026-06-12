@@ -14,6 +14,10 @@ MODELS_DIR = PROJECT_ROOT / "models"
 CHECKPOINTS_DIR = MODELS_DIR / "checkpoints"
 EXPORTED_DIR = MODELS_DIR / "exported"
 
+# Arduino / hardware deployment outputs
+ARDUINO_DIR = MODELS_DIR / "arduino"
+ARDUINO_MODELS_DIR = ARDUINO_DIR / "models"
+
 # Example specific files
 LICHESS_CSV = RAW_DATA_DIR / "games.csv"
 
