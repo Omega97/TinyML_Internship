@@ -9,7 +9,7 @@ import torch.nn as nn
 import subprocess
 from pathlib import Path
 import logging
-from src.tinymlinternship.config.settings import CHECKPOINTS_DIR, EXPORTED_DIR
+from tinymlinternship.config.settings import CHECKPOINTS_DIR, EXPORTED_DIR
 
 
 # Configure logging
