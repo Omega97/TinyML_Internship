@@ -55,4 +55,25 @@ per raccogliere dati in tempo reale.
 
 ---
 
+### Wio Terminal D51R
+
+The **Wio Terminal** is a compact, feature-rich, all-in-one development board ideal for rapid IoT prototyping, interactive projects, and portable HMI applications. 🚀
+
+- **MCU**: Microchip **ATSAMD51P19** (ARM Cortex-M4F @ 120 MHz, boostable to 200 MHz) with 512 KB flash, 192 KB RAM, and 4 MB external SPI flash.
+- **Wireless**: Realtek **RTL8720DN** supporting **dual-band Wi-Fi (2.4/5 GHz)** and **Bluetooth/BLE 5.0**.
+- **Display**: 2.4-inch TFT LCD (320×240 resolution).
+- **Built-in Peripherals**: LIS3DHTR IMU (accelerometer), light sensor, microphone, buzzer, IR emitter, microSD slot, 5-way joystick, and three buttons.
+- **Expansion**: 2× Grove ports + Raspberry Pi-compatible 40-pin GPIO + USB-C (with OTG).
+
+**Software Support**: Excellent compatibility with **Arduino** (primary), **CircuitPython**, and **MicroPython**, making it accessible for both beginners and advanced users.
+
+#### Strengths & Use Cases
+Its combination of a color screen, wireless connectivity, rich sensors, and small form factor (~72 × 57 × 12 mm) makes it particularly strong for:
+- Wireless sensors and data loggers
+- Portable dashboards and HMIs
+- TinyML/edge AI experiments
+- Interactive gadgets and educational projects
+
+---
+
 [← Back to Notes index](notes.md)

@@ -1,5 +1,10 @@
 """
 Export TinyPolicy to TensorFlow Lite / LiteRT format.
+
+NOTE: For lab deployment on Arduino/XIAO, prefer the more complete script:
+    python scripts/prepare_for_arduino.py --model-name tiny_policy_v0.1 --quantize dynamic
+
+This script also generates the C header ready to include in a TFLite Micro sketch.
 """
 import sys
 from pathlib import Path
