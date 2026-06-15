@@ -2,16 +2,34 @@
 
 This document describes the **minimal steps** to go from a model definition in code to something that can be loaded and run on the target hardware (e.g. Wio Terminal D51R or Seeed XIAO).
 
+Full pipeline at [scripts/run_pipeline.py](scripts/run_pipeline.py).
+
 #todo add the quantization/pruning steps.
 
 ---
 
-## 1. Download the Base Model 
+## 1. Create the Base Model
 
-Download the base model using the project's model scripts. Produce a PyTorch checkpoint (`.pt` file containing `state_dict` or a full model).
+Create the base model using the project's model code. Produce a PyTorch checkpoint (`.pt` file containing `state_dict` or a full model).
 
-- Policy models (original TinyPolicy): [models/policy.py](src/tinymlinternship/models/policy.py) — see `create_and_save_random_policy()` and the `main()` entrypoint.
-- Ultra-tiny value nets (recommended for Wio Terminal D51R): [models/value.py](src/tinymlinternship/models/value.py) — `TinyValueMLP`, `UltraTinyValueMLP`, and the `create_tiny_value()` helper.
+### Ultra-tiny value net (recommended for Wio Terminal D51R)
+```bash
+py -3.12 -c '
+import sys
+from pathlib import Path
+sys.path.insert(0, str(Path("src").resolve()))
+import torch
+from tinymlinternship.models.value import UltraTinyValueMLP
+
+model = UltraTinyValueMLP().eval()
+Path("models/checkpoints").mkdir(parents=True, exist_ok=True)
+torch.save(model.state_dict(), "models/checkpoints/my_tiny_model.pt")
+print("✅ Created models/checkpoints/my_tiny_model.pt")
+'
+```
+
+### Policy net (larger, original TinyPolicy)
+See the `create_and_save_random_policy()` function and `main()` entrypoint in [src/tinymlinternship/models/policy.py](src/tinymlinternship/models/policy.py).
 
 **Output:**
 - `models/checkpoints/my_tiny_model.pt` (or `tiny_value_wio.pt`, etc.)
@@ -22,9 +40,33 @@ The model is now in a standard PyTorch format and ready for export.
 
 ## 2. Export to a Portable Intermediate Format
 
-Convert the PyTorch model to ONNX or TorchScript. These formats are easier to consume in conversion tools or for direct embedding.
+Convert the PyTorch model to TorchScript (preferred for direct embedding) or ONNX.
 
-The export logic (TorchScript + ONNX) lives in the prepare scripts:
+### Explicit command (TorchScript)
+From the checkpoint produced in step 1:
+
+```bash
+py -3.12 -c '
+import sys
+from pathlib import Path
+sys.path.insert(0, str(Path("src").resolve()))
+import torch
+from tinymlinternship.models.value import UltraTinyValueMLP   # use policy.TinyPolicy for the larger net
+
+model = UltraTinyValueMLP().eval()
+model.load_state_dict(torch.load("models/checkpoints/my_tiny_model.pt", map_location="cpu"))
+model.eval()
+
+dummy = torch.randn(1, 768)   # 768 for value nets; use torch.randn(1, 12, 8, 8) for policy
+traced = torch.jit.trace(model, dummy)
+
+Path("models/exported").mkdir(parents=True, exist_ok=True)
+traced.save("models/exported/my_tiny_model.ts.pt")
+print("✅ Created models/exported/my_tiny_model.ts.pt")
+'
+```
+
+The full export logic (including ONNX) is also implemented inside:
 
 - [scripts/prepare_for_arduino.py](scripts/prepare_for_arduino.py) (general case)
 - [scripts/prepare_wio_tiny.py](scripts/prepare_wio_tiny.py) (Wio Terminal focused, also handles value nets)
@@ -37,7 +79,7 @@ The export logic (TorchScript + ONNX) lives in the prepare scripts:
 
 ## 3. Prepare the Hardware Artifact (C Header / Blob)
 
-Turn the exported binary into something that can be compiled into an Arduino sketch or stored on external flash.
+Turn the exported binary into a C header that can be compiled into an Arduino sketch or stored on external flash.
 
 Use the dedicated utility:
 
@@ -51,11 +93,11 @@ py -3.12 scripts/bin_to_c_header.py \
     --out models/arduino/models/my_tiny_model.h
 ```
 
-This produces a header in `models/arduino/models/` containing the model as a C byte array (see the script for the exact output format).
+This produces `models/arduino/models/my_tiny_model.h` containing the model as a C byte array (see the script for the exact output format).
 
 You can now:
 - `#include "my_tiny_model.h"` directly in your `.ino` / `.cpp` files (the data goes into flash).
-- Or extract just the raw binary (`my_tiny_model.ts.pt` or the `.bin` produced by some prepare scripts) and store it on the Wio Terminal's **4 MB external SPI flash** at runtime (better for larger models or when you want to update the model without reflashing firmware).
+- Or extract just the raw binary (`my_tiny_model.ts.pt` or the `.bin` produced by some prepare scripts) and store it on the Wio Terminal's **4 MB external SPI flash** at runtime (better for larger models or when you want to update the model without re-flashing firmware).
 
 **Scripts that wrap this step:**
 - [scripts/prepare_for_arduino.py](scripts/prepare_for_arduino.py)
@@ -89,28 +131,28 @@ See `NOTES/hardware.md` (Wio Terminal section) for board-specific details.
 
 ## Summary of the Bare Pipeline
 
-1. **Obtain base model** → `models/checkpoints/xxx.pt`  
-   (via functions in [src/tinymlinternship/models/policy.py](src/tinymlinternship/models/policy.py) or [src/tinymlinternship/models/value.py](src/tinymlinternship/models/value.py), or the prepare scripts)
+1. **Create base model** → `models/checkpoints/my_tiny_model.pt`  
+   (run the one-liner in step 1 above using [src/tinymlinternship/models/value.py](src/tinymlinternship/models/value.py) or [src/tinymlinternship/models/policy.py](src/tinymlinternship/models/policy.py), or the prepare scripts)
 
-2. **Export** → `models/exported/xxx.ts.pt` (and/or `.onnx`)  
-   (see export logic in [scripts/prepare_for_arduino.py](scripts/prepare_for_arduino.py) and [scripts/prepare_wio_tiny.py](scripts/prepare_wio_tiny.py))
+2. **Export to TorchScript** → `models/exported/my_tiny_model.ts.pt`  
+   (run the one-liner in step 2 above, or via [scripts/prepare_for_arduino.py](scripts/prepare_for_arduino.py) / [scripts/prepare_wio_tiny.py](scripts/prepare_wio_tiny.py))
 
-3. **Generate hardware artifact** → `models/arduino/models/xxx_model.h` (or raw `.bin`)  
-   (via [scripts/bin_to_c_header.py](scripts/bin_to_c_header.py))
+3. **Generate hardware artifact** → `models/arduino/models/my_tiny_model.h`  
+   (run the command in step 3 above using [scripts/bin_to_c_header.py](scripts/bin_to_c_header.py))
 
-4. **Load on device** → `#include` the header (or read from external flash) and pass the bytes to your inference runtime / custom loader. (See [PRIVATE/load-model-howto.md](PRIVATE/load-model-howto.md))
+4. **Load on device** → `#include` the header (or read the raw binary from external flash) and pass the bytes to your inference runtime / custom loader. (See [PRIVATE/load-model-howto.md](PRIVATE/load-model-howto.md))
 
 ---
 
 ## Key Scripts & Files
 
-| Step              | Script / File                                                                 | Output Location                  |
-|-------------------|-------------------------------------------------------------------------------|----------------------------------|
-| Create model      | [src/tinymlinternship/models/policy.py](src/tinymlinternship/models/policy.py)<br>[src/tinymlinternship/models/value.py](src/tinymlinternship/models/value.py) | `models/checkpoints/`            |
-| Export            | [scripts/prepare_for_arduino.py](scripts/prepare_for_arduino.py)<br>[scripts/prepare_wio_tiny.py](scripts/prepare_wio_tiny.py) | `models/exported/`               |
-| Header generation | [scripts/bin_to_c_header.py](scripts/bin_to_c_header.py)                      | `models/arduino/models/`         |
-| Full Wio pipeline | [scripts/prepare_wio_tiny.py](scripts/prepare_wio_tiny.py)                    | All of the above + int8 `.bin`   |
-| Detailed how-to   | [PRIVATE/load-model-howto.md](PRIVATE/load-model-howto.md)                    | —                                |
+| Step              | Script / File                                                                                                                             | Output Location                |
+| ----------------- | ----------------------------------------------------------------------------------------------------------------------------------------- | ------------------------------ |
+| Create model      | [src/tinymlinternship/models/policy.py](src/tinymlinternship/models/policy.py)<br>[src/tinymlinternship/models/value.py](src/tinymlinternship/models/value.py) | `models/checkpoints/`          |
+| Export            | [scripts/prepare_for_arduino.py](scripts/prepare_for_arduino.py)<br>[scripts/prepare_wio_tiny.py](scripts/prepare_wio_tiny.py)            | `models/exported/`             |
+| Header generation | [scripts/bin_to_c_header.py](scripts/bin_to_c_header.py)                                                                                  | `models/arduino/models/`       |
+| Full Wio pipeline | [scripts/prepare_wio_tiny.py](scripts/prepare_wio_tiny.py)                                                                                | All of the above + int8 `.bin` |
+| Detailed how-to   | [PRIVATE/load-model-howto.md](PRIVATE/load-model-howto.md)                                                                                | —                              |
 
 ---
 
