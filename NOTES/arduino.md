@@ -19,4 +19,19 @@
 
 ---
 
-[← Back to Notes index](notes.md)
+Arduino IDE
+1. Boards Manager: Ctrl + Shift + B
+2. Search for "Wio Terminal".
+3. Install "Seeed SAMD Boards" (the official package).
+4. **After install, go to Tools > Board and select "Seeed Wio Terminal".**
+5. Select the correct port (Tools > Port > "COM5")
+
+File > Examples > 01.Basics > Blink
+Verify, Upload
+
+
+File > Examples > Seeed_Arduino_LCD > "320 x 240" > ...
+
+---
+
+[← Back to Notes index](NOTES/notes.md)

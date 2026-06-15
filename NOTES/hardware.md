@@ -87,4 +87,4 @@ Its combination of a color screen, wireless connectivity, rich sensors, and smal
 
 ---
 
-[← Back to Notes index](notes.md)
+[← Back to Notes index](NOTES/notes.md)

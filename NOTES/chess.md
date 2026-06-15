@@ -56,4 +56,4 @@ $$
 
 ---
 
-[← Back to Notes index](notes.md)
+[← Back to Notes index](NOTES/notes.md)
