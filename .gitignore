@@ -23,6 +23,10 @@ PRIVATE
 # ===== Obsidian =====
 .obsidian
 
+
+# ===== AI agents =====
+AI-SKILLS/
+
 # ===== Standard =====
 
 # Git
