@@ -32,6 +32,8 @@ Verify, Upload
 
 File > Examples > Seeed_Arduino_LCD > "320 x 240" > ...
 
+`python scripts/fen_to_c_array.py "rnbqkbnr/pppppppp/8/8/4P3/8/PPPP1PPP/RNBQKBNR b KQkq e3 0 1" --output Arduino/Wio_TinyValueTest/fen_input.h`
+
 ---
 
 [← Back to Notes index](NOTES/notes.md)
