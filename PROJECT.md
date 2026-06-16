@@ -3,10 +3,12 @@
 
 ## **Scope & Milestones**
 
-1. Get a minimal NNUE-like policy network running inference on XIAO (no search). Measure latency/power on random positions.
+1. Follow the [export pipeline](export_pipeline.md) to get a minimal NNUE-like policy network running inference on XIAO (no search). Measure latency/power on random positions.
 2. Add shallow search 
-3. distillation/pruning + Elo testing (power optimization)
-4. Full system (input/output).
+3. distillation/pruning 
+4. Elo testing 
+5. power optimization
+6. Full system (input/output).
 
 ---
 
@@ -97,4 +99,3 @@ _Note: there is no direct "policy NNUE" equivalent in chess engines for tiny/MCU
 ---
 
 #core 
-
