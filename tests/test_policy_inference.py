@@ -4,7 +4,7 @@ This program creates a minimal random policy
 """
 import torch
 import chess
-from src.tinymlinternship.datasets.featurizer import fen_to_tensor, get_legal_mask
+from tinymlinternship.datasets.featurizer import fen_to_tensor, get_legal_mask
 
 
 TEST_FEN = "r1bqkbnr/pppp1ppp/2n5/4p3/4P3/5N2/PPPP1PPP/RNBQKB1R w KQkq - 2 3"

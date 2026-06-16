@@ -3,8 +3,13 @@ Download Lichess datasets and save them to the correct data folders.
 """
 import kagglehub
 import pandas as pd
+import sys
 from pathlib import Path
-from src.tinymlinternship.config.settings import (
+
+# Runtime path hack for direct runs (consistent with other scripts)
+sys.path.insert(0, str(Path(__file__).parent.parent / "src"))
+
+from tinymlinternship.config.settings import (
     PROJECT_ROOT,
     RAW_DATA_DIR,
     PROCESSED_DATA_DIR,

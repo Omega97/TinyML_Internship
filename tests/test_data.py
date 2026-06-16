@@ -2,7 +2,7 @@
 Tests for data loading and basic dataset validation.
 """
 import pandas as pd
-from src.tinymlinternship.config.settings import RAW_DATA_DIR, LICHESS_CSV
+from tinymlinternship.config.settings import RAW_DATA_DIR, LICHESS_CSV
 
 
 def test_data_files_exist():

@@ -3,8 +3,8 @@ Minimal script to display moves from a specific game in the Lichess dataset.
 """
 import chess
 import pandas as pd
-from src.tinymlinternship.config.settings import LICHESS_CSV
-from src.tinymlinternship.datasets.featurizer import fen_to_tensor, get_legal_mask
+from tinymlinternship.config.settings import LICHESS_CSV
+from tinymlinternship.datasets.featurizer import fen_to_tensor, get_legal_mask
 
 
 TEST_FEN = "rnbqkbnr/pppppppp/8/8/4P3/8/PPPP1PPP/RNBQKBNR b KQkq e3 0 1"
