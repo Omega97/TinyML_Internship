@@ -6,12 +6,18 @@ NOTE: For lab deployment on Arduino/XIAO, prefer the more complete script:
 
 This script also generates the C header ready to include in a TFLite Micro sketch.
 """
+import sys
+from pathlib import Path
+
+# Runtime path hack (consistent style)
+sys.path.insert(0, str(Path(__file__).parent.parent / "src"))
+
 import onnx
 from onnx_tf.backend import prepare
 import torch
-from src.tinymlinternship.config.settings import CHECKPOINTS_DIR
-from src.tinymlinternship.models.policy import TinyPolicy
-from src.tinymlinternship.config.settings import EXPORTED_DIR
+from tinymlinternship.config.settings import CHECKPOINTS_DIR
+from tinymlinternship.models.policy import TinyPolicy
+from tinymlinternship.config.settings import EXPORTED_DIR
 
 
 def export_to_tflite(model_name: str = "tiny_policy_v0.1"):

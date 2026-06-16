@@ -7,10 +7,10 @@ This is a standalone inference tool for models produced by the export pipeline
 
 Usage examples:
   # Value net (recommended for Wio)
-  python .\scripts\run_model.py --checkpoint models/checkpoints/tiny_value_wio.pt --type value --fen "rnbqkbnr/pppppppp/8/8/4P3/8/PPPP1PPP/RNBQKBNR b KQkq e3 0 1"
+  python scripts/run_model.py --checkpoint models/checkpoints/tiny_value_wio.pt --type value --fen "rnbqkbnr/pppppppp/8/8/4P3/8/PPPP1PPP/RNBQKBNR b KQkq e3 0 1"
 
   # Policy net
-  python .\scripts\run_model.py --checkpoint models/checkpoints/tiny_chess_policy_lab.pt  --type policy --fen "r1bqkbnr/pppp1ppp/2n5/4p3/4P3/5N2/PPPP1PPP/RNBQKB1R w KQkq - 2 3" --top-k 3
+  python scripts/run_model.py --checkpoint models/checkpoints/tiny_chess_policy_lab.pt  --type policy --fen "r1bqkbnr/pppp1ppp/2n5/4p3/4P3/5N2/PPPP1PPP/RNBQKB1R w KQkq - 2 3" --top-k 3
 
 """
 import argparse
@@ -19,12 +19,13 @@ from pathlib import Path
 import chess
 import torch
 
-# Make the package importable when running the script directly
-sys.path.insert(0, str(Path(__file__).parent.parent))
+# Runtime path hack (add the src dir) so direct execution works.
+# We keep clean package imports (no "src." in the import statements).
+sys.path.insert(0, str(Path(__file__).parent.parent / "src"))
 
-from src.tinymlinternship.datasets.featurizer import fen_to_tensor, get_legal_mask
-from src.tinymlinternship.models.policy import TinyPolicy
-from src.tinymlinternship.models.value import TinyValueMLP, UltraTinyValueMLP
+from tinymlinternship.datasets.featurizer import fen_to_tensor, get_legal_mask
+from tinymlinternship.models.policy import TinyPolicy
+from tinymlinternship.models.value import TinyValueMLP, UltraTinyValueMLP
 
 
 def load_model(checkpoint: Path, model_type: str) -> torch.nn.Module:

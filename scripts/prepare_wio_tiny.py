@@ -44,16 +44,16 @@ import torch
 import torch.nn as nn
 import torch.optim as optim
 
-# Project imports
+# Project imports (clean package names + runtime path hack for direct execution)
 sys.path.insert(0, str(Path(__file__).parent.parent / "src"))
-from src.tinymlinternship.config.settings import (
+from tinymlinternship.config.settings import (
     CHECKPOINTS_DIR,
     EXPORTED_DIR,
     ARDUINO_MODELS_DIR,
     RAW_DATA_DIR,
 )
-from src.tinymlinternship.models.value import TinyValueMLP, UltraTinyValueMLP
-from src.tinymlinternship.datasets.featurizer import fen_to_tensor
+from tinymlinternship.models.value import TinyValueMLP, UltraTinyValueMLP
+from tinymlinternship.datasets.featurizer import fen_to_tensor
 import chess
 
 

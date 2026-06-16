@@ -37,15 +37,15 @@ import torch
 import numpy as np
 from pathlib import Path
 
-# Ensure we can import the project package   (Note: removed /src at the end)
-sys.path.insert(0, str(Path(__file__).parent.parent))
+# Runtime path hack for direct execution (consistent style across scripts)
+sys.path.insert(0, str(Path(__file__).parent.parent / "src"))
 
-from src.tinymlinternship.config.settings import (
+from tinymlinternship.config.settings import (
     CHECKPOINTS_DIR,
     EXPORTED_DIR,
     ARDUINO_MODELS_DIR,
 )
-from src.tinymlinternship.models.policy import TinyPolicy
+from tinymlinternship.models.policy import TinyPolicy
 
 
 def ensure_dirs():
