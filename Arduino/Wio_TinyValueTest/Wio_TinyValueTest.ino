@@ -13,6 +13,7 @@
  * The model parameters are stored in "wio_weights.h"
  */
 #include "wio_weights.h"
+#include "fen_input.h"
 #include <math.h>
 
 float forward(const float* x) {
@@ -45,7 +46,8 @@ void setup() {
   Serial.begin(115200);
   while (!Serial);
 
-  float input[768] = {0};   // test input (all zeros for now)
+  // Real 768-element input for the sample FEN is provided by fen_input.h (PROGMEM array named "input").
+  // Previously used all-zeros test vector.
   float val = forward(input);
 
   Serial.print("Inferred value (test input): ");
