@@ -120,6 +120,15 @@ Meeting all'ufficio del prof. Zennaro
 
 ## 15-21 Giugno
 
+- Wio Terminal value net verification: hand-written forward pass for UltraTinyValueMLP with real FEN input (generated via `scripts/fen_to_c_array.py`) now runs on device.
+  - Sketch: `Arduino/Wio_TinyValueTest/Wio_TinyValueTest.ino` (includes `wio_weights.h` + `fen_input.h`, TFT_eSPI LCD using same pattern as Life example).
+  - Output on both Serial (115200) and 2.4" LCD (320x240): "Inferred value: -0.056165"
+  - Matches PC: `py -3.12 scripts/run_model.py ...` → -0.0562 (within float precision).
+  - Parity confirmed. LCD + Serial I/O working.
+- Int8 quantization experiment (using prepare_wio_tiny pipeline + wio_int8_weights.h): same 2.16M evals/s as float32 (naive int8 + dequant scales gives no speedup on FPU SAMD51, as expected), but ~4x lower weight memory. Display now includes "Evals/s: 2.16M" and weights filename. See daily note 2026-06-16.md for full log.
+
+---
+
 
 
 ---

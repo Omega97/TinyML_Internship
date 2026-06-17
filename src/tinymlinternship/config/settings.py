@@ -17,6 +17,7 @@ EXPORTED_DIR = MODELS_DIR / "exported"
 # Arduino / hardware deployment outputs
 ARDUINO_DIR = MODELS_DIR / "arduino"
 ARDUINO_MODELS_DIR = ARDUINO_DIR / "models"
+WIO_SKETCH_DIR = PROJECT_ROOT / "Arduino" / "Wio_TinyValueTest"
 
 # Example specific files
 LICHESS_CSV = RAW_DATA_DIR / "games.csv"

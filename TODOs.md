@@ -11,6 +11,9 @@
 - [x] Arduino project HUB: what is it and how it works
 - [x] Arduino IDE
 - [x] pacchetto chiamato **Seeed SAMD Boards**
+- [ ] **Make a script to generate model structure and parameters**
+- [ ] **Modify the .mio to import the model correctly**
+- [ ] integer **Lookup Table (LUT)** vs 
 - [ ] Guardare video per imparare Arduino 
 - [ ] Tutorial on how to load model on *Wio terminal*
 - [ ] Reddit projects: explore for interesting projects

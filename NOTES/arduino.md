@@ -19,6 +19,10 @@
 
 ---
 
+https://wiki.seeedstudio.com/Wio-Terminal-Getting-Started/
+
+---
+
 Arduino IDE
 1. Boards Manager: Ctrl + Shift + B
 2. Search for "Wio Terminal".
