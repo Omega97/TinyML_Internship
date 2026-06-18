@@ -81,6 +81,20 @@ def create_tiny_value(
     return model, model_name
 
 
+class SmallValueMLP(TinyValueMLP):
+    """768 → 64 → 32 → 1   (~51k params)"""
+
+    def __init__(self, input_size: int = 768):
+        super().__init__(input_size=input_size, hidden1=64, hidden2=32)
+
+
+class MediumValueMLP(TinyValueMLP):
+    """768 → 128 → 64 → 1   (~104k params, 2× small)"""
+
+    def __init__(self, input_size: int = 768):
+        super().__init__(input_size=input_size, hidden1=128, hidden2=64)
+
+
 # Even more aggressive ultra-tiny variant (for maximum headroom on 192 KB RAM)
 class UltraTinyValueMLP(nn.Module):
     """768 → 16 → 8 → 1   (~12.5k params)"""

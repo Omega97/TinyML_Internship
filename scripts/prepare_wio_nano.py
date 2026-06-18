@@ -1,22 +1,22 @@
 #!/usr/bin/env python3
 """
-Wio Terminal — TinyValueMLP (768→32→16→1) → int8 C header for Arduino.
+Wio Terminal — UltraTinyValueMLP (768→16→8→1) → int8 C header for Arduino.
 
-Produces wio_int8_weights_tiny.h in Arduino/Wio_TinyValueTest/ with FC*_IN/OUT_DIM
+Produces wio_int8_weights_nano.h in Arduino/Wio_TinyValueTest/ with FC*_IN/OUT_DIM
 macros, int8 weight/bias arrays, and per-tensor scales. The sketch rebuilds the MLP
 from scratch in forward(); set WEIGHTS_FILE to this header in Wio_TinyValueTest.ino.
 
 Also saves: models/checkpoints/<name>.pt and models/exported/<name>_int8.bin
 
-
 Usage (from project root):
 
-  py -3.12 scripts/prepare_wio_tiny.py
+  py -3.12 scripts/prepare_wio_nano.py
 
-  py -3.12 scripts/prepare_wio_tiny.py --name tiny_value_wio_tiny_int8
+  py -3.12 scripts/prepare_wio_nano.py --name tiny_value_wio_nano_int8
 
-  py -3.12 scripts/prepare_wio_tiny.py --train --epochs 2 --max-games 600
+  py -3.12 scripts/prepare_wio_nano.py --train --epochs 2 --max-games 600
 
+For the larger tiny model (768→32→16→1), use scripts/prepare_wio_tiny.py instead.
 """
 
 import argparse
@@ -29,7 +29,7 @@ sys.path.insert(0, str(Path(__file__).parent))
 import torch
 
 from tinymlinternship.config.settings import CHECKPOINTS_DIR, WIO_SKETCH_DIR
-from tinymlinternship.models.value import TinyValueMLP
+from tinymlinternship.models.value import UltraTinyValueMLP
 from wio_int8_common import (
     ensure_dirs,
     export_compact_blob,
@@ -38,14 +38,14 @@ from wio_int8_common import (
     run_training_if_requested,
 )
 
-HEADER_NAME = "wio_int8_weights_tiny.h"
-HEADER_GUARD = "WIO_INT8_WEIGHTS_TINY_H"
-DEFAULT_CKPT_NAME = "tiny_value_wio_tiny_int8"
+HEADER_NAME = "wio_int8_weights_nano.h"
+HEADER_GUARD = "WIO_INT8_WEIGHTS_NANO_H"
+DEFAULT_CKPT_NAME = "tiny_value_wio_nano_int8"
 
 
 def main():
     parser = argparse.ArgumentParser(
-        description="Prepare TinyValueMLP (768→32→16→1) int8 header for Wio Terminal"
+        description="Prepare UltraTinyValueMLP (768→16→8→1) int8 header for Wio Terminal"
     )
     parser.add_argument("--train", action="store_true", help="Run quick outcome-based training")
     parser.add_argument("--max-games", type=int, default=600, help="Games to sample for training")
@@ -56,8 +56,8 @@ def main():
     ensure_dirs()
     WIO_SKETCH_DIR.mkdir(parents=True, exist_ok=True)
 
-    model = TinyValueMLP(hidden1=32, hidden2=16).eval()
-    print("Using TinyValueMLP (768→32→16→1)")
+    model = UltraTinyValueMLP().eval()
+    print("Using UltraTinyValueMLP (768→16→8→1)")
 
     total_params = sum(p.numel() for p in model.parameters())
     print(f"Parameters: {total_params:,}  (int8 ≈ {total_params/1024:.1f} KB)")
