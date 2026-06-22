@@ -6,7 +6,8 @@
 - [x] **Make a script to generate model structure and parameters**
 - [x] **Modify the .mio to import the model correctly**
 - [x] performance report excel
-- [ ] improve performance of the NN ()
+- [x] Fix calling time metric
+- [ ] improve performance of the NN 
 - [ ] integer **Lookup Table (LUT)** vs on-the-fly float conversion
 - [ ] Reddit projects: explore for interesting projects
 - [ ] Provare il metodo dei non-linear probes per vedere se un grosso modello è in grado di ricostruire lo stato del gioco (per scacchi) 🤖
