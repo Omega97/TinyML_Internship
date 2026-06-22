@@ -95,6 +95,20 @@ class MediumValueMLP(TinyValueMLP):
         super().__init__(input_size=input_size, hidden1=128, hidden2=64)
 
 
+class BigValueMLP(TinyValueMLP):
+    """768 → 256 → 64 → 1   (~213k params)"""
+
+    def __init__(self, input_size: int = 768):
+        super().__init__(input_size=input_size, hidden1=256, hidden2=64)
+
+
+class HugeValueMLP(TinyValueMLP):
+    """768 → 512 → 64 → 1   (~427k params, ~96% of 512 KB flash budget)"""
+
+    def __init__(self, input_size: int = 768):
+        super().__init__(input_size=input_size, hidden1=512, hidden2=64)
+
+
 # Even more aggressive ultra-tiny variant (for maximum headroom on 192 KB RAM)
 class UltraTinyValueMLP(nn.Module):
     """768 → 16 → 8 → 1   (~12.5k params)"""
