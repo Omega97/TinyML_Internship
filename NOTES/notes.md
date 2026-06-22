@@ -2,6 +2,14 @@
 
 Central hub for all project notes and references.
 
+---
+
+## Commands
+
+- [Commands.md](Commands.md) — Useful commands to run in the project
+
+---
+
 ## Hardware
 
 - [hardware.md](hardware.md) — Power measurement with OTII, Edge Impulse, MLSysBook AI Kits, Xiao (Seeed Studio) setup.
