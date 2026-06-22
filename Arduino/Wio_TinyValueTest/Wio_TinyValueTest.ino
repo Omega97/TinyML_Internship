@@ -16,8 +16,10 @@
 // Swap the active line to switch models (header must exist in this folder).
 // #define WEIGHTS_FILE "wio_int8_weights_nano.h"     // 768→16→8→1   (~12.5k params)
 // #define WEIGHTS_FILE "wio_int8_weights_tiny.h"     // 768→32→16→1  (~25k params)
-// #define WEIGHTS_FILE "wio_int8_weights_small.h"    // 768→64→32→1   (~51k params)
-#define WEIGHTS_FILE "wio_int8_weights_medium.h"   // 768→128→64→1 (~104k params)
+#define WEIGHTS_FILE "wio_int8_weights_small.h"    // 768→64→32→1   (~51k params)
+// #define WEIGHTS_FILE "wio_int8_weights_medium.h"   // 768→128→64→1 (~104k params)
+// #define WEIGHTS_FILE "wio_int8_weights_big.h"
+// #define WEIGHTS_FILE "wio_int8_weights_huge.h"
 
 #include WEIGHTS_FILE
 #include "fen_input.h"
@@ -28,6 +30,9 @@
 #include <SPI.h>
 
 TFT_eSPI tft = TFT_eSPI();
+
+// Prevents the compiler from eliminating forward() in the stress loop (-Os dead-code removal).
+static volatile float forwardSink = 0.0f;
 
 // Int8 quantized forward pass (weights from the file named by WEIGHTS_FILE, scales applied on-the-fly)
 // Input x is float 0/1 (from fen_input.h). We treat input_scale = 1.0
@@ -132,41 +137,61 @@ void setup() {
   tft.print(val, 6);
 }
 
+// EMA smoothing: 0 = show raw per-interval rate, 0.85 = gentle smoothing
+static const float kEmaDecay = 0.8f;
+
 void loop() {
-  // Stress test: forward as fast as possible, report average evals/sec every 1s
-  float val = forward(input);
-  
-  static unsigned long evals = 0;       // Changed to unsigned long for overflow protection
-  static unsigned long startTime = 0;
+  // Stress test: one real forward pass per iteration; report every 1s
+  forwardSink = forward(input);
+
+  static unsigned long evals = 0;
+  static unsigned long evalsAtLastReport = 0;
   static unsigned long lastReport = 0;
-  
-  if (!startTime) {
-    startTime = millis();
-    lastReport = startTime;
-  }
-  
+  static float smoothedEvalsPerSec = 0.0f;
+  static bool hasSmoothed = false;
+  static bool skipWarmupInterval = true;  // discard first 1s window (often inflated)
+
   evals++;
   unsigned long now = millis();
-  
+
+  if (!lastReport) {
+    lastReport = now;
+    evalsAtLastReport = 0;
+  }
+
   if (now - lastReport >= 1000) {
-    // Calculate total evals divided by total elapsed time in seconds
-    float elapsedSeconds = (now - startTime) / 1000.0f;
-    float avg_evals_per_sec = (elapsedSeconds > 0) ? (evals / elapsedSeconds) : 0;
-    float million_evals = avg_evals_per_sec / 1000000.0f;
-    
-    // Serial output
-    Serial.print("Avg Evals/s: ");
-    Serial.print(million_evals, 2);
-    Serial.println("M");
+    unsigned long dtMs = now - lastReport;
+    unsigned long deltaEvals = evals - evalsAtLastReport;
+    float instantRate = (dtMs > 0)
+      ? (1000.0f * (float)deltaEvals / (float)dtMs)
+      : 0.0f;
 
-    // TFT display update
-    tft.fillRect(110, 60, 200, 16, TFT_BLACK);
-    tft.setCursor(10, 60);
-    tft.print("Avg Evals/s: ");
-    tft.print(million_evals, 4);
-    tft.println("M");
+    if (skipWarmupInterval) {
+      // Seed EMA from first full interval but don't display yet
+      smoothedEvalsPerSec = instantRate;
+      hasSmoothed = true;
+      skipWarmupInterval = false;
+    } else {
+      if (!hasSmoothed) {
+        smoothedEvalsPerSec = instantRate;
+        hasSmoothed = true;
+      } else {
+        smoothedEvalsPerSec = kEmaDecay * smoothedEvalsPerSec
+                            + (1.0f - kEmaDecay) * instantRate;
+      }
 
-    //lastReport = now; // Including time for display
-    lastReport = millis(); // Excluding time for display
+      Serial.print("Avg Evals/s: ");
+      Serial.print(smoothedEvalsPerSec, 2);
+      Serial.println("K");
+
+      tft.fillRect(110, 60, 200, 16, TFT_BLACK);
+      tft.setCursor(10, 60);
+      tft.print("Avg Evals/s: ");
+      tft.print(smoothedEvalsPerSec, 2);
+      tft.println("K");
+    }
+
+    evalsAtLastReport = evals;
+    lastReport = now;
   }
 }
