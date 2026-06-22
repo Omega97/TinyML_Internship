@@ -11,9 +11,9 @@ float Int8ValueNet::evaluate(const float* x) const {
   for (int i = 0; i < FC1_OUT_DIM; i++) {
     int32_t acc = 0;
     for (int j = 0; j < FC1_IN_DIM; j++) {
-      int8_t wq = pgm_read_byte(&fc1_w[i * FC1_IN_DIM + j]);
-      int8_t xq = (x[j] > 0.5f ? 1 : 0);
-      acc += (int32_t)wq * xq;
+      if (x[j] > 0.5f) {
+        acc += (int32_t)(int8_t)pgm_read_byte(&fc1_w[i * FC1_IN_DIM + j]);
+      }
     }
     float sum = (float)acc * fc1_w_scale * input_scale;
     int8_t bq = pgm_read_byte(&fc1_b[i]);
