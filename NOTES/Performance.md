@@ -1,20 +1,30 @@
 
 ## Value function on Wio Terminal
 
-
-|        | used storage <br>space <br>(bytes) | space% | performance<br>(1e6 evals / s) |
-| ------ | ---------------------------------- | ------ | ------------------------------ |
-| nano   | 74312                              | 14%    | 2.16                           |
-| tiny   | 87016                              | 17%    | 2.16                           |
-| small  | 113192                             | 22%    | 2.16                           |
-| medium |                                    | 33%    | 2.16                           |
-
-*Note: Maximum is 507904 bytes.*
+*Updated 2026-06-24 — honest benchmark (volatile sink, interval EMA, sparse L1).*
 
 
-Observations: 
+| name   | architecture   | latency (ms) | evals/s | storage (bytes) | space% |
+| ------ | -------------- | ------------ | ------- | --------------- | ------ |
+| nano   | 768→16→8→1     | 1.4          | ~714    | 74312           | 14%    |
+| tiny   | 768→32→16→1    | 2.8          | ~357    | 87016           | 17%    |
+| small  | 768→64→32→1    | 5.8          | ~172    | 113192          | 22%    |
+| medium | 768→128→64→1   | 11.4         | ~88     | 168632          | 33%    |
+| big    | 768→256→64→1   | 22.6         | ~44     | 275320          | 54%    |
+| huge   | 768→512→64→1   | 45.0         | ~22     | 488568          | 96%    |
+
+*Note: Maximum internal flash is 507904 bytes. Latency measured on-device (Wio Terminal, starting FEN).*
+
+### Hw–sw synergy (2026-06-24)
+
+- Latency scales **~2× per model tier** (1.4 → 2.8 → 5.8 → 11.4 → 22.6 → 45.0 ms). Throughput is no longer flat — benchmark now measures real `evaluate()` calls.
+- **Dominant cost:** `pgm_read_byte` from PROGMEM (flash bus stalls). Wider layers → more weight fetches → slower evals. FPU is rarely the limit.
+- **Sparse L1 helps:** L1 skips reads where `x[j] == 0` (~32 active squares). L2/L3 still read every weight regardless of activation — likely the next win for medium+ models.
+- **Memory:** Footprint scales linearly with params (~60 KB sketch overhead). Huge fits at ~96% flash.
+
+### Observations (historical)
+
 - Memory scales linearly with model size, with an overhead of about 60kB
-- The bottlenecks are the memory bandwidth and loop overhead.
 - The biggest model we can run is approximately `768→512→64→1`
 
 - **The Bottleneck:** Every time your code executes `pgm_read_byte(&fc1_w[...])`, the CPU has to wait for the Flash controller to fetch that byte. This takes several clock cycles.
