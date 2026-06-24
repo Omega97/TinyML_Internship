@@ -62,12 +62,10 @@ void WioBoard::showInferredValue(float val) {
 
 void WioBoard::showEvalsPerSec(float evalsPerSec) {
   Serial.print("Avg Evals/s: ");
-  Serial.print(evalsPerSec, 2);
-  Serial.println("K");
+  Serial.println(evalsPerSec, 2);
 
   tft.fillRect(110, 60, 200, 16, TFT_BLACK);
   tft.setCursor(10, 60);
   tft.print("Avg Evals/s: ");
-  tft.print(evalsPerSec, 2);
-  tft.println("K");
+  tft.println(evalsPerSec, 2);
 }
