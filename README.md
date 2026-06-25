@@ -1,12 +1,19 @@
 
-# Report del Progetto
-**Progetto di Tirocinio all'ICTP**
+# DSAI Internship - Chess AI on TinyML
 
-> Dettagli progetto: [PROJECT.md](PROJECT.md)
 
-> Note progetto: [NOTES/notes.md](NOTES/notes.md)
+> *I am developing a pipeline to quantize and prune a chess AI on small hardware, *
+
+- [About me](https://omega97.github.io/)
+- [Thesis repo](https://github.com/Omega97/world-models-thesis)
+- [Internship repo](https://github.com/Omega97/TinyML_Internship)
+- Dettagli progetto: [PROJECT.md](PROJECT.md)
+- Note progetto: [NOTES/notes.md](NOTES/notes.md)
 
 ---
+
+# Report del Progetto
+**Progetto di Tirocinio all'ICTP**
 
 ## 22 Aprile
 
@@ -92,7 +99,7 @@ Meeting all'ufficio del prof. Zennaro
 
 ## 8-14 Giugno
 
-- 12/6 (9:30 - ) - Prima esperienza il lab [export pipeline](export_pipeline.md)
+- 12/6 - **Prima esperienza il lab** -  [export pipeline](export_pipeline.md)
  - Docs: [export_pipeline.md](export_pipeline.md), [PRIVATE/private-notes.md](PRIVATE/private-notes.md) (PRIVATE/ index + #core)
  - Software: ONNX, TorchScript
  - Hardware: Wio Terminal
@@ -120,16 +127,34 @@ Meeting all'ufficio del prof. Zennaro
 
 ## 15-21 Giugno
 
+- **Wio Terminal - Game of Life demo works!** Optimized the default demo.
 - Wio Terminal value net verification: hand-written forward pass for UltraTinyValueMLP with real FEN input (generated via `scripts/fen_to_c_array.py`) now runs on device.
   - Sketch: `Arduino/Wio_TinyValueTest/Wio_TinyValueTest.ino` (includes `wio_weights.h` + `fen_input.h`, TFT_eSPI LCD using same pattern as Life example).
   - Output on both Serial (115200) and 2.4" LCD (320x240): "Inferred value: -0.056165"
   - Matches PC: `py -3.12 scripts/run_model.py ...` → -0.0562 (within float precision).
   - Parity confirmed. LCD + Serial I/O working.
-- Int8 quantization experiment (using prepare_wio_tiny pipeline + wio_int8_weights.h): same 2.16M evals/s as float32 (naive int8 + dequant scales gives no speedup on FPU SAMD51, as expected), but ~4x lower weight memory. Display now includes "Evals/s: 2.16M" and weights filename. See daily note 2026-06-16.md for full log.
+- Int8 quantization experiment (using prepare_wio_tiny pipeline + wio_int8_weights.h): same 2.16M evals/s as float32 (naive int8 + dequant scales gives no speedup on FPU SAMD51, as expected), but ~4x lower weight memory. Display now includes "Evals/s: 2.16M" and weights filename. See daily note 2026-06-16.md for full log. We are probably not actually running the network.
+
+#### Repo work
+- Input helper: [fen_to_c_array.py](scripts/fen_to_c_array.py) → `Arduino/Wio_TinyValueTest/fen_input.h`
+- Model: [UltraTinyValueMLP](src/tinymlinternship/models/value.py) (`768→32→16→1`)
+- Export: [generate_wio_weights.py](scripts/generate_wio_weights.py) (float32 `wio_weights.h`), [prepare_wio_tiny.py](scripts/prepare_wio_tiny.py) (int8 `wio_int8_weights_tiny.h`)
+- PC parity: [run_model.py](scripts/run_model.py)
+- Device sketch: [Arduino/Wio_TinyValueTest/Wio_TinyValueTest.ino](Arduino/Wio_TinyValueTest/Wio_TinyValueTest.ino) (hand-written forward pass, TFT + Serial)
 
 ---
 
+## 22-28 Giugno
 
+- **Measuring memory and time to run the NNs correctly!** Extended the Wio value-net performance matrix to **big** (`768→256→64→1`) and **huge** (`768→512→64→1`); full nano→huge sweep now fits on device (huge at ~96% flash).
+- **Benchmark honesty fix:** the flat ~2.01M evals/s across all models was a measurement artifact — `-Os` dead-code elimination removed `forward()` from `loop()`. Fixed with `volatile forwardSink`, interval-based EMA rate, and 1s warm-up discard; throughput now scales with model size (~2× latency per tier: nano 1.4 ms → huge 45 ms).
+- **Sketch refactor:** split `Wio_TinyValueTest` into `config.h`, `Int8ValueNet`, `WioBoard`, `Benchmark`; weights included once in `Int8ValueNet.cpp` (fixes 3× PROGMEM duplication that overflowed huge). Sparse L1 skips `pgm_read_byte` on empty board squares.
+- **24/6 lab session:** optimized forward pass (~15% faster overall; nano 1.8→1.4 ms/call); removed misleading `K` display suffix; updated [NOTES/Performance.md](NOTES/Performance.md) with honest latency/evals/s table and hw–sw synergy notes (flash bus stalls dominate, not FPU). See daily notes [2026-06-22.md](NOTES/Daily-notes/2026-06-22.md), [2026-06-24.md](2026-06-24.md).
+
+#### Repo work
+- Models: [BigValueMLP / HugeValueMLP](src/tinymlinternship/models/value.py) (nano→huge family)
+- Export scripts: [prepare_wio_big.py](scripts/prepare_wio_big.py), [prepare_wio_huge.py](scripts/prepare_wio_huge.py), [count_model_params.py](scripts/count_model_params.py)
+- Device sketch: [Arduino/Wio_TinyValueTest/](Arduino/Wio_TinyValueTest/) (modular int8 forward + benchmark)
 
 ---
 
