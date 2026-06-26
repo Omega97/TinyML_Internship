@@ -231,9 +231,157 @@ def export_structured_c_header(
     header_path.write_text("\n".join(lines))
 
 
+def _build_csr(q_weight: torch.Tensor) -> Tuple[List[int], List[int], List[int]]:
+    """Row-major int8 weight matrix → CSR (row_ptr, col_idx, values)."""
+    out_dim, in_dim = q_weight.shape
+    row_ptr: List[int] = [0]
+    col_idx: List[int] = []
+    vals: List[int] = []
+    for i in range(out_dim):
+        for j in range(in_dim):
+            v = int(q_weight[i, j].item())
+            if v != 0:
+                col_idx.append(j)
+                vals.append(v)
+        row_ptr.append(len(col_idx))
+    return row_ptr, col_idx, vals
+
+
+def export_sparse_csr_c_header(
+    model: nn.Module,
+    q_sd: dict,
+    scales: dict,
+    header_path: Path,
+    header_guard: str,
+    sparsity: float,
+) -> None:
+    """Export int8 weights in CSR form for flash-efficient sparse inference."""
+    sd = model.state_dict()
+    weight_keys = [k for k in sd.keys() if "weight" in k]
+    bias_keys = [k for k in sd.keys() if "bias" in k]
+
+    if len(weight_keys) != 3 or len(bias_keys) != 3:
+        raise ValueError(f"Expected a 3-layer MLP architecture, found {len(weight_keys)} layers.")
+
+    fc1_out, fc1_in = sd[weight_keys[0]].shape
+    fc2_out, fc2_in = sd[weight_keys[1]].shape
+    fc3_out, fc3_in = sd[weight_keys[2]].shape
+
+    def format_int8_array(c_name: str, data: List[int]) -> str:
+        array_lines = []
+        for i in range(0, len(data), 16):
+            chunk = data[i : i + 16]
+            array_lines.append("  " + ", ".join(str(x) for x in chunk))
+        return f"const int8_t {c_name}[] PROGMEM = {{\n" + ",\n".join(array_lines) + "\n};"
+
+    def format_u16_array(c_name: str, data: List[int]) -> str:
+        array_lines = []
+        for i in range(0, len(data), 12):
+            chunk = data[i : i + 12]
+            array_lines.append("  " + ", ".join(str(x) for x in chunk))
+        return f"const uint16_t {c_name}[] PROGMEM = {{\n" + ",\n".join(array_lines) + "\n};"
+
+    def format_bias_array(c_name: str, tensor: torch.Tensor) -> str:
+        flat_data = tensor.cpu().flatten().tolist()
+        array_lines = []
+        for i in range(0, len(flat_data), 16):
+            chunk = flat_data[i : i + 16]
+            array_lines.append("  " + ", ".join(str(x) for x in chunk))
+        return f"const int8_t {c_name}[] PROGMEM = {{\n" + ",\n".join(array_lines) + "\n};"
+
+    lines = [
+        f"// Auto-generated sparse CSR int8 weights (sparsity={sparsity:.0%})",
+        f"#ifndef {header_guard}",
+        f"#define {header_guard}",
+        "",
+        "#include <avr/pgmspace.h>",
+        "#include <stdint.h>",
+        "",
+        "#define SPARSE_WEIGHTS 1",
+        "",
+        "// Network Architecture Dimensions",
+        f"#define FC1_IN_DIM    {fc1_in}",
+        f"#define FC1_OUT_DIM   {fc1_out}",
+        "",
+        f"#define FC2_IN_DIM    {fc2_in}",
+        f"#define FC2_OUT_DIM   {fc2_out}",
+        "",
+        f"#define FC3_IN_DIM    {fc3_in}",
+        f"#define FC3_OUT_DIM   {fc3_out}",
+        "",
+        "// CSR weight tensors (row_ptr, col_idx, val per layer)",
+    ]
+
+    layer_specs = [
+        ("fc1", weight_keys[0], bias_keys[0]),
+        ("fc2", weight_keys[1], bias_keys[1]),
+        ("fc3", weight_keys[2], bias_keys[2]),
+    ]
+
+    for prefix, w_key, b_key in layer_specs:
+        row_ptr, col_idx, vals = _build_csr(q_sd[w_key])
+        lines.append(f"// --- {prefix} ---")
+        lines.append(f"#define {prefix.upper()}_W_NNZ {len(vals)}")
+        lines.append(format_u16_array(f"{prefix}_w_row_ptr", row_ptr))
+        lines.append(format_u16_array(f"{prefix}_w_col_idx", col_idx))
+        lines.append(format_int8_array(f"{prefix}_w_val", vals))
+        lines.append(f"const float {prefix}_w_scale = {scales[w_key]:.18f}f;")
+        lines.append("")
+        lines.append(format_bias_array(f"{prefix}_b", q_sd[b_key]))
+        lines.append(f"const float {prefix}_b_scale = {scales[b_key]:.18f}f;")
+        lines.append("")
+
+    lines.append("const float input_scale = 1.0f;")
+    lines.append("")
+    lines.append(f"#endif // {header_guard}")
+
+    header_path.write_text("\n".join(lines))
+
+
 def run_training_if_requested(model: nn.Module, train: bool, max_games: int, epochs: int) -> None:
     if not train:
         return
     csv_path = RAW_DATA_DIR / "games.csv"
     examples = load_training_positions(csv_path, max_games=max_games)
     train_value_net(model, examples, epochs=epochs)
+
+
+def apply_weight_sparsity(
+    state_dict: dict,
+    sparsity: float = 0.8,
+) -> Tuple[dict, dict]:
+    """
+    Magnitude pruning on weight tensors.
+
+    sparsity=0.8 means 80% of weight values are set to zero (20% remain non-zero).
+    Biases are left untouched.
+
+    Returns (pruned_state_dict, stats).
+    """
+    if not 0.0 <= sparsity < 1.0:
+        raise ValueError(f"sparsity must be in [0, 1), got {sparsity}")
+
+    pruned = {k: v.clone() for k, v in state_dict.items()}
+    weight_keys = [k for k in state_dict if "weight" in k]
+    if not weight_keys:
+        return pruned, {"sparsity_target": sparsity, "sparsity_actual": 0.0, "zeroed": 0, "total_weights": 0}
+
+    all_abs = torch.cat([pruned[k].abs().flatten() for k in weight_keys])
+    total = all_abs.numel()
+    n_zero = int(sparsity * total)
+    if n_zero > 0:
+        threshold = torch.kthvalue(all_abs, n_zero).values.item()
+        for key in weight_keys:
+            mask = pruned[key].abs() >= threshold
+            pruned[key] = pruned[key] * mask.to(pruned[key].dtype)
+
+    nonzero = sum((pruned[k] != 0).sum().item() for k in weight_keys)
+    actual_sparsity = 1.0 - (nonzero / total) if total else 0.0
+    stats = {
+        "sparsity_target": sparsity,
+        "sparsity_actual": actual_sparsity,
+        "nonzero_weights": nonzero,
+        "total_weights": total,
+        "zeroed": total - nonzero,
+    }
+    return pruned, stats

@@ -60,12 +60,19 @@ void WioBoard::showInferredValue(float val) {
   tft.print(val, 6);
 }
 
-void WioBoard::showEvalsPerSec(float evalsPerSec) {
+void WioBoard::showBenchmarkStats(float evalsPerSec, float latencyMs) {
   Serial.print("Avg Evals/s: ");
-  Serial.println(evalsPerSec, 2);
+  Serial.print(evalsPerSec, 2);
+  Serial.print("  Latency: ");
+  Serial.print(latencyMs, 2);
+  Serial.println(" ms");
 
-  tft.fillRect(110, 60, 200, 16, TFT_BLACK);
+  tft.fillRect(10, 60, 300, 32, TFT_BLACK);
   tft.setCursor(10, 60);
-  tft.print("Avg Evals/s: ");
+  tft.print("Evals/s: ");
   tft.println(evalsPerSec, 2);
+  tft.setCursor(10, 76);
+  tft.print("Latency: ");
+  tft.print(latencyMs, 2);
+  tft.println(" ms");
 }

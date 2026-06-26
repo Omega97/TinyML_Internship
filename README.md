@@ -154,7 +154,7 @@ Meeting all'ufficio del prof. Zennaro
 #### Repo work
 - Models: [BigValueMLP / HugeValueMLP](src/tinymlinternship/models/value.py) (nano→huge family)
 - Export scripts: [prepare_wio_big.py](scripts/prepare_wio_big.py), [prepare_wio_huge.py](scripts/prepare_wio_huge.py), [count_model_params.py](scripts/count_model_params.py)
-- Device sketch: [Arduino/Wio_TinyValueTest/](Arduino/Wio_TinyValueTest/) (modular int8 forward + benchmark)
+- Device sketch: `Arduino/Wio_TinyValueTest/` (modular int8 forward + benchmark)
 
 ---
 

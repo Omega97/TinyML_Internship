@@ -10,10 +10,11 @@
  * Generated headers (run from project root):
  *   wio_int8_weights_nano.h   ←  py -3.12 scripts/prepare_wio_nano.py
  *   wio_int8_weights_tiny.h   ←  py -3.12 scripts/prepare_wio_tiny.py
- *   wio_intc:\Users\monfalcone\PycharmProjects\TinyMLInternship\Arduino\Wio_TinyValueTest\Wio_TinyValueTest.ino8_weights_small.h  ←  py -3.12 scripts/prepare_wio_small.py
+ *   wio_int8_weights_small.h  ←  py -3.12 scripts/prepare_wio_small.py
  *   wio_int8_weights_medium.h ←  py -3.12 scripts/prepare_wio_medium.py
  *   wio_int8_weights_big.h    ←  py -3.12 scripts/prepare_wio_big.py
  *   wio_int8_weights_huge.h   ←  py -3.12 scripts/prepare_wio_huge.py
+ *   wio_int8_weights_sparse80.h ← py -3.12 scripts/prepare_wio_sparse.py --model small --train
  *   fen_input.h               ←  py -3.12 scripts/fen_to_c_array.py "FEN" --output Arduino/Wio_TinyValueTest/fen_input.h
  *
  * Upload: Board = Seeed Wio Terminal, Port = your COM port, Serial = 115200.
@@ -37,8 +38,16 @@ void setup() {
                       Int8ValueNet::weightAt(1),
                       Int8ValueNet::weightAt(2));
 
+  unsigned long t0 = micros();
   float val = net.evaluate(input);
+  float bootLatencyMs = (micros() - t0) / 1000.0f;
   board.showInferredValue(val);
+
+  Serial.print("Single-call latency (setup): ");
+  Serial.print(bootLatencyMs, 2);
+  Serial.println(" ms");
+  Serial.print("g_evalCalls after setup: ");
+  Serial.println(g_evalCalls);
 }
 
 void loop() {
