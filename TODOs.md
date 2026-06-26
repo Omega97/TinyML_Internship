@@ -1,48 +1,124 @@
+# Project Checkpoint Map
 
-## TODOs
-
-- [x] Tutorial on how to load model on *Wio terminal*
-- [x] pacchetto chiamato **Seeed SAMD Boards**
-- [x] **Make a script to generate model structure and parameters**
-- [x] **Modify the .mio to import the model correctly**
-- [x] performance report excel
-- [x] Fix calling time metric
-- [ ] improve performance of the NN 
-- [ ] integer **Lookup Table (LUT)** vs on-the-fly float conversion
-- [ ] Reddit projects: explore for interesting projects
-- [ ] Provare il metodo dei non-linear probes per vedere se un grosso modello è in grado di ricostruire lo stato del gioco (per scacchi) 🤖
-- [ ] Thesis on Explainable tiny chess and World Models (TODO find name opposite of Magnus, which means big) Can models also build an internal board?
-- [ ] **Data Pipeline**: to refine and decide (preprocessing, final dataset)
-- [ ] Review Papers on state of the art about compressing chess engine into small chip
-- [ ] Chess esp32: check what is it
-- [ ] Provare a trainare un mini bot di scacchi 🤖
-- [ ] competing paradigms for machine intelligence: what is this about?
-- [ ] ICGA: what is it
-- [ ] chessprogramming.org Discord
-- [ ] r/chessprogramming
-- [ ] World models to compress state info and facilitate training? 🌍
-
+*TinyML Chess — compressing a value network onto the Wio Terminal (SAMD51). Last updated: 2026-06-26.*
 
 ---
 
-#todo fix .ino
+## Preparing the repo
 
-### 1. 🚀 Massive Speed Optimization (Sparse Layer 1)
-*   **The Change:** In Layer 1, instead of multiplying every weight by the input (most of which are `0.0f`), the code now checks `if (x[j] > 0.5f)` and only adds the weight if a piece is actually present on that square.
-*   **The Impact:** Since a chess board only has ~32 pieces out of 768 possible features, this skips ~95% of the multiplications in the first layer. This significantly boosts your **Evals/sec** beyond the previous 2.16M limit.
+- [x] Basic repo structure (`src/`, `scripts/`, `tests/`, `examples/`)
+- [x] Data download pipeline — `scripts/download_data.py`
+- [x] Dataset tests — `tests/test_data.py`
+- [x] Example game runner — `examples/example_game.py`
+- [x] FEN utilities and featurizer — `examples/example_fen.py`, `src/tinymlinternship/datasets/featurizer.py`
+- [x] Policy inference tests — `tests/test_policy_inference.py`
+- [x] Model definitions — `TinyValueMLP` / `UltraTinyValueMLP` family in `src/tinymlinternship/models/value.py`
+- [x] PC inference runner — `scripts/run_model.py`
+- [x] Project docs — `PROJECT.md`, `README.md`, `NOTES/`
 
-### 2. 🧠 Accuracy Restoration (Fixed Binarization Bug)
-*   **The Change:** Remove the `(h1[j] > 0.5f ? 1 : 0)` logic that was forcing hidden activations to be only `0` or `1`. The new code keeps activations as `float` between layers.
-*   **The Impact:** Your neural network now preserves the "magnitude" of its thoughts. Previously, it was essentially making random coin-flip decisions; now it can accurately evaluate complex positional advantages.
+---
 
-### 3. 🛡️ Critical Sign Bug Fix
-*   **The Change:** Add explicit casting to `(int8_t)` before converting weights to `float` (e.g., `(float)((int8_t)pgm_read_byte(...))`).
-*   **The Impact:** `pgm_read_byte` returns an unsigned value (0–255). Without this cast, a negative weight like `-5` was being read as `251`, completely breaking the math. The model now correctly uses negative weights for penalizing bad positions.
+## Familiarizing with hardware
 
-### 4. 📐 Dynamic Architecture Support
-*   **The Change:** Replace hardcoded loop limits (like `j < 768`) with macros defined in your header files (`FC1_IN_DIM`, `FC1_OUT_DIM`, etc.).
-*   **The Impact:** You can now switch between **Nano**, **Tiny**, **Small**, and **Medium** models just by changing one `#define` line at the top of the file. The C++ code automatically adapts to the new layer sizes without manual editing.
+- [x] Wio Terminal connected and flashed (`Blink.ino`)
+- [x] Arduino IDE + **Seeed SAMD Boards** package installed
+- [x] Tutorial on loading a model on the *Wio Terminal*
+- [x] Game of Life demo optimized and running on device
+- [x] TFT + Serial I/O working (2.4" LCD, 115200 baud)
+- [x] Documented hardware limits — 120 MHz CPU, 192 KB RAM, ~500 KB flash ([NOTES/Performance.md](NOTES/Performance.md))
 
-### 5. 📊 Real-Time Health Monitoring
-*   **The Change:** Add a `freeRam()` function and integrated it into the LCD/Serial output.
-*   **The Impact:** You can now see exactly how much RAM is left while the stress test runs. This is crucial for the next step (adding a Negamax search), as you need to ensure the recursion stack doesn't cause a memory overflow.
+---
+
+## Export & deployment pipeline
+
+- [x] End-to-end export chain documented — [export_pipeline.md](export_pipeline.md)
+- [x] PyTorch → TorchScript → C header pipeline — `scripts/prepare_for_arduino.py`, `scripts/bin_to_c_header.py`
+- [x] Wio-specific int8 export scripts — `prepare_wio_{nano,tiny,small,medium,big,huge}.py`
+- [x] **Script to generate model structure and parameters** — `scripts/generate_wio_weights.py`, `scripts/wio_int8_common.py`
+- [x] FEN → C array helper — `scripts/fen_to_c_array.py`
+- [x] **Modify the .mio to import the model correctly**
+- [x] Model size sweep on device — nano → huge (`768→16→8→1` through `768→512→64→1`)
+- [x] Huge model fits at ~96% flash (488 KB weights + ~60 KB sketch overhead)
+
+---
+
+## First inference on device
+
+- [x] Hand-written forward pass for `UltraTinyValueMLP` on Wio
+- [x] PC ↔ device parity confirmed (FEN input → same inferred value within float precision)
+- [x] Int8 quantization path — ~4× lower weight memory vs float32
+- [x] Fixed critical **sign bug** — cast `pgm_read_byte` to `(int8_t)` before float conversion (negative weights were read as 251)
+- [x] **Accuracy restoration** — removed hidden-layer binarization `(h > 0.5f ? 1 : 0)`; activations stay `float` between layers
+- [x] **Dynamic architecture support** — layer dims driven by macros (`FC1_IN_DIM`, `FC1_OUT_DIM`, …) instead of hardcoded `768`
+
+---
+
+## First benchmarks
+
+- [x] Run random network of **maximum size** (huge: `768→512→64→1`) on device
+- [x] Performance benchmark — full nano→huge latency sweep ([NOTES/Performance.md](NOTES/Performance.md))
+  - nano **1.4 ms** · tiny **2.8 ms** · small **5.8 ms** · medium **11.4 ms** · big **22.6 ms** · huge **45.0 ms**
+  - Latency scales ~2× per tier; bottleneck is `pgm_read_byte` flash bus stalls, not FPU
+- [x] **Benchmark honesty fix** — flat ~2.01M evals/s was a `-Os` dead-code artifact (`forward()` elided from `loop()`). Fixed with `volatile forwardSink`, interval EMA, 1s warm-up discard
+- [x] Fix calling-time metric — throughput now reflects real `evaluate()` calls
+- [x] Removed misleading `K` suffix from evals/s display
+- [x] Performance report — Excel table in `PRIVATE/performance.xlsx`
+- [x] **Real-time health monitoring** — `freeRam()` integrated into LCD/Serial output
+- [x] Integer **LUT vs on-the-fly float** conversion experiment (no speedup on FPU SAMD51, as expected)
+
+---
+
+## Performance optimization
+
+- [x] Sketch refactor — modular `config.h`, `Int8ValueNet`, `WioBoard`, `Benchmark` (weights included once; fixes 3× PROGMEM duplication)
+- [x] **Sparse Layer 1** — skip `pgm_read_byte` when `x[j] == 0` (~32 active squares / 768 features → ~95% fewer L1 multiplications)
+- [x] Optimized forward pass — huge **53 ms → 45 ms** (~15% faster); nano **1.8 ms → 1.4 ms** (~22% faster)
+- [ ] Sparse L2/L3 guards (skip reads on zero activations)
+- [ ] Memory-hierarchy tweak — stage hottest weight block (e.g. full L1) from PROGMEM into RAM at boot
+- [ ] Profile display overhead — benchmark with Serial/TFT updates disabled
+- [ ] Further improve NN inference throughput
+
+---
+
+## Training & data
+
+- [ ] **Data pipeline** — refine preprocessing and decide on final dataset (Kaggle `games.csv` downloaded; no pretrained chess model in repo yet)
+- [ ] Train a mini chess bot on existing CSV, then re-export int8 header for Wio
+- [ ] Distillation / pruning from a larger teacher model
+- [ ] Elo testing against a known-strength baseline
+
+---
+
+## Search & full engine
+
+- [ ] Add shallow Negamax search on top of value net
+- [ ] Model search overhead as `overhead + cost/node × nodes`
+- [ ] Input system (board state capture) and output system (move selection / display)
+- [ ] Power profiling with OTII
+
+---
+
+## Research & community
+
+- [ ] Thesis — *Explainable tiny chess and World Models* (working title opposite of Magnus = "big"). Can models build an internal board?
+- [ ] Non-linear probes — can a large model reconstruct game state from latent vectors? 🤖
+- [ ] World models to compress state info and facilitate training? 🌍
+- [ ] Review papers on compressing chess engines onto small chips
+- [ ] Chess ESP32 — check what it is
+- [ ] Reddit projects — explore interesting tiny-chess work
+- [ ] Competing paradigms for machine intelligence — what is this about?
+- [ ] ICGA — what is it?
+- [ ] Join chessprogramming.org Discord
+- [ ] Explore r/chessprogramming
+
+---
+
+## Key takeaways so far
+
+| Insight | Detail |
+| ------- | ------ |
+| Flash is the bottleneck | `pgm_read_byte` stalls dominate; wider layers → more fetches → slower evals |
+| Sparse input helps L1 | ~32 pieces on board skips most of the first layer |
+| Measurement matters | Compiler can silently remove inference; always verify with `objdump` / volatile sink |
+| Quantization saves space, not time | Int8 weights are ~4× smaller but FPU dequant path is still the hot loop |
+| Max deployable model | `768→512→64→1` at ~96% flash; **45 ms/eval** after optimizations |
