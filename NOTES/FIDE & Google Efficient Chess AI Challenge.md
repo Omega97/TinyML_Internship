@@ -85,6 +85,8 @@ Led by Andrew Grant (the author of Chess.com's ==Torch== engine), this team heav
 
 ### 5th Place: `A` by Rafbill
 
+> *Not super insightful.*
+
 [Rafbill](https://www.kaggle.com/competitions/fide-google-efficiency-chess-ai-challenge/writeups/a-my-solution-5th-place) maximized raw execution velocity and structural safety by stripping away the traditional features of a monolithic engine and engineering a hyper-optimized, standalone solution from the ground up.
 
 - **Ditching Stockfish/Cfish Heritage:** Unlike most top solutions that modified Cfish or older Stockfish versions, Rafbill engineered an exceptionally streamlined evaluation pipeline engineered purely for single-core CPU execution speed.
@@ -96,6 +98,8 @@ Led by Andrew Grant (the author of Chess.com's ==Torch== engine), this team heav
 
 ### 7th Place: `Noggenfogger` by Marko Rupnik
 
+> Different network based on the nature of the position
+
 [Marko Rupnik](https://www.kaggle.com/competitions/fide-google-efficiency-chess-ai-challenge/discussion/566888) successfully bridged the gap between HCE footprint and NNUE performance by conditioning his network parameters on immediate tactical constraints rather than sprawling piece-square combinations.
 
 - **Conditional Activation Architecture:** The solution deployed a unique, specialized quantized network footprint utilizing an `int8` weight configuration scaled explicitly by positional context, such as tracking active check states (`inCheck`) and tactical piece exchanges (`or-capture`).
@@ -106,6 +110,8 @@ Led by Andrew Grant (the author of Chess.com's ==Torch== engine), this team heav
 
 
 ### 9th Place: `Cfish + Simple SPSA` by ymg_aq
+
+> *Cfish + SPSA, less interesting.*
 
 The [9th place](https://www.kaggle.com/competitions/fide-google-efficiency-chess-ai-challenge/writeups/ymg-aq-9th-place-solution-cfish-simple-spsa) entry proved that traditional Hand-Crafted Evaluation (HCE), when combined with an aggressive automated parameter-tuning suite, can comfortably out-search heavier neural alternatives on constrained hardware.
 

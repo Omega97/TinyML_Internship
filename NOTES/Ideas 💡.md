@@ -1,17 +1,20 @@
 
 ## Ideas
 
-- AlphaZero-style Dual head (policy + value net, all in one)? Maybe too heavy...
+- AlphaZero-style Dual head (policy + value net, all in one)? 
+	- Maybe too heavy...
     
 - **NNUE** - connect the NN with small pre-computed patterns to reduce network complexity. Standard: dual-perspective, single hidden layer NNUE with 768 inputs
     
+- maintain two separate accumulators with vertically flipped perspectives (see NNUE)
+    
+- no Hand-Crafted Evaluation (HCE) 
+    
+- **C** instead of C++ (si può fare senza problemi) Cfish: stockfish but in C. Probably a must. Most competitors used Cfish to great success.
+    
 - i transformer possono risultare più **compatti** perché spesso usano i parametri in modo più efficiente rispetto ad alternative dense o molto profonde, specialmente quando il compito ha struttura forte e ripetitiva come gli scacchi
     
-- **C** instead of C++ (si può fare senza problemi)
-    
 - Accumulators, lazy loading: When a piece moves from `e2` to `e4`, the engine simply takes the cached hidden layer state, subtracts the weights for the piece on `e2`, and adds the weights for the piece on `e4`
-    
-- maintain two separate accumulators with vertically flipped perspectives (see NNUE)
     
 - Horizontal King Mirroring: When the friendly king moves across the vertical centerline, the network perspective flips horizontally (This trick safely reduced the number of active king inputs by half, maximizing structural compressibility.)
     
@@ -24,12 +27,20 @@
 - Leela Chess Zero data: high-quality games
     
 - **Dynamic Output Buckets:** Implement distinct output buckets selected dynamically based on the game state's piece count. This allows the network to specialize its evaluation between dense middlegames and sparse endgames.
-  My twist: 8 buckets;
-  $$\text{Bucket ID} = \text{int} \left( \frac{34 - \text{piece\_count}}{4} \right)$$
-  (and hard-coded draw with 2 pieces)
-    
-- Cfish: stockfish but in C
-    
+  
+  My twist: Each bucket contains a similar number of board positions from the dataset.
+
+| Bucket ID | piece count |
+| --------- | ----------- |
+| 0         | 2-12        |
+| 1         | 13-17       |
+| 2         | 18-21       |
+| 3         | 22-24       |
+| 4         | 25-27       |
+| 5         | 28-29       |
+| 6         | 30-31       |
+| 7         | 32          |
+
 - Pruning: eliminate weights corresponding to useless inputs (like pawns on ranks 1-8). 704 feature inputs (pruning impossible states) 
     
 - SPSA for hyperparameter optimization?
@@ -39,3 +50,8 @@
 - Quantize the NNUE networks
     
 - Search: stripped-down, lightning-fast alpha-beta search with aggressive Late Move Reductions (LMR) and Null Move Pruning (NMP) calibrated specifically to compensate for the smaller network's lower evaluation fidelity.
+    
+- MOE: Different network based on the nature of the position? (king under attack, imminent high-value piece capture)
+	  Note: switching heads may reduce accumulator efficacy, but as long as the number of pieces goes always down you have to switch heads unfrequently
+	
+- `O3` speed optimizations??

@@ -73,6 +73,10 @@
 - [x] Sketch refactor — modular `config.h`, `Int8ValueNet`, `WioBoard`, `Benchmark` (weights included once; fixes 3× PROGMEM duplication)
 - [x] **Sparse Layer 1** — skip `pgm_read_byte` when `x[j] == 0` (~32 active squares / 768 features → ~95% fewer L1 multiplications)
 - [x] Optimized forward pass — huge **53 ms → 45 ms** (~15% faster); nano **1.8 ms → 1.4 ms** (~22% faster)
+- [ ] Find a Policy / Value online and try to run it with a library (TinyTorch)
+- [ ] Make the model run on the PC
+- [ ] Performance estimation pipeline
+- [ ] Pruning on the model - test performance
 - [ ] Sparse L2/L3 guards (skip reads on zero activations)
 - [ ] Memory-hierarchy tweak — stage hottest weight block (e.g. full L1) from PROGMEM into RAM at boot
 - [ ] Profile display overhead — benchmark with Serial/TFT updates disabled
