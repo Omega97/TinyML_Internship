@@ -156,11 +156,11 @@ For developers working on similar resource-constrained environments (like microc
 > 💡 **The 5 MiB RAM Gradient:** Top competitors discovered that search efficiency has a tight trade-off curve with memory usage. To maximize the Transposition Table (TT) size within 5 MiB, everything else had to be gutted:
 > 
 > - **TT Truncation:** Transposition tables were slashed down to 512 KiB – 1 MiB (compared to gigabytes in desktop environments).
->     
+>   
 > - **History Merging:** Countermove and continuation history table dimensions were flattened. Instead of indexing by individual piece instances across the grid, tables were shrunk by indexing strictly by generic _piece types_.
->     
+>   
 > - **Hash Table Slicing:** Pawn and Material hash tables were scaled down to just 1024 slots.
->     
+>   
 
 |**Optimization Vector**|**Hand-Crafted Evaluation (HCE) Approach**|**NNUE Neural Network Approach**|
 |---|---|---|
