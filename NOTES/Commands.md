@@ -200,8 +200,8 @@ py -3.12 -m pytest tests/test_policy_inference.py -v
 3. **Tools → Port →** your COM port
 4. Open `Arduino/Wio_TinyValueTest/Wio_TinyValueTest.ino` → Verify → Upload
 
-More setup notes: [arduino.md](arduino.md).
+More setup notes: [arduino.md](Arduino.md).
 
 ---
 
-[← Back to Notes index](notes.md)
+[← Back to Notes index](_notes.md)

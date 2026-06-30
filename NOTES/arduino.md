@@ -40,4 +40,4 @@ File > Examples > Seeed_Arduino_LCD > "320 x 240" > ...
 
 ---
 
-[← Back to Notes index](NOTES/notes.md)
+[← Back to Notes index](_notes.md)

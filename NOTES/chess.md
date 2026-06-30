@@ -4,21 +4,9 @@
 
 ### NNUE
 
-[NNUE](https://www.chessprogramming.org/NNUE) (Efficiently Updatable Neural Network) is 
-a neural network architecture specifically designed for board game engines running on CPUs. 
-Originally invented for Shogi by Yu Nasu in 2018 and later popularized in chess by Stockfish 
-in 2020, NNUE revolutionized traditional alpha-beta engines by replacing hand-crafted 
-evaluation functions with a compact neural network while maintaining extremely high speed.
+See the dedicated note: [NNUE.md](NNUE.md) — architecture, incremental updates, quantization, and relevance to the Wio project.
 
-[Basic NNUE](https://www.chessprogramming.org/NNUE#Basic_NNUE): The most basic form 
-of an NNUE network consists of three layers: an input layer of length 768 
-(768 = 6 pieces x 2 colors x 64 squares), one hidden layer of arbitrary size, and 
-an output layer consisting of one neuron, representing the evaluation of the position. 
-A NNUE network also commonly consists of two perspectives. That is, two hidden layers 
-representing both sides are concatenated into a single hidden layer of twice the length, 
-before being forwarded to the output layer. 
-
-Read also: [NNUE Stockfish](https://official-stockfish.github.io/docs/nnue-pytorch-wiki/docs/nnue.html)
+Quick summary: [NNUE](https://www.chessprogramming.org/NNUE) (Efficiently Updatable Neural Network) replaces hand-crafted evaluation in alpha-beta engines with a compact net that updates incrementally via add/sub on sparse 768-feature inputs. Stockfish adopted it in 2020.
 
 ---
 
@@ -56,4 +44,4 @@ $$
 
 ---
 
-[← Back to Notes index](NOTES/notes.md)
+[← Back to Notes index](_notes.md)

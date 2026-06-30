@@ -7,8 +7,10 @@
 - [About me](https://omega97.github.io/)
 - [Thesis repo](https://github.com/Omega97/world-models-thesis)
 - [Internship repo](https://github.com/Omega97/TinyML_Internship)
+- Modelli online: [NOTES/Models.md](NOTES/Models.md)
+- Kaggle challenge: [FIDE & Google Efficient Chess AI Challenge](NOTES/FIDE%20%26%20Google%20Efficient%20Chess%20AI%20Challenge.md)
 - Dettagli progetto: [PROJECT.md](PROJECT.md)
-- Note progetto: [NOTES/notes.md](NOTES/notes.md)
+- Note progetto: [NOTES/notes.md](_notes.md)
 
 ---
 
@@ -48,7 +50,7 @@ Meeting all'ufficio del prof. Zennaro
 - Model Compression
 - Knowledge Distillation
 
-(See [NOTES/notes.md](NOTES/notes.md) for details.)
+(See [NOTES/notes.md](_notes.md) for details.)
 
 ---
 
@@ -61,7 +63,7 @@ Meeting all'ufficio del prof. Zennaro
 - Power Measurement with OTII
 - MLSysBook AI Kits
 
-(See [NOTES/notes.md](NOTES/notes.md) for details.)
+(See [NOTES/notes.md](_notes.md) for details.)
 
 #### Repo work
 - basic repo structure
@@ -76,7 +78,7 @@ Meeting all'ufficio del prof. Zennaro
 - Value functions
 - Policy functions
 
-(See [NOTES/notes.md](NOTES/notes.md) for chess/hardware/software notes; [PROJECT.md](PROJECT.md) for model details.)
+(See [NOTES/notes.md](_notes.md) for chess/hardware/software notes; [PROJECT.md](PROJECT.md) for model details.)
 
 #### Repo work
 - [example_fen.py](examples/example_fen.py)
@@ -146,15 +148,30 @@ Meeting all'ufficio del prof. Zennaro
 
 ## 22-28 Giugno
 
+- **Ricerca modelli su Hugging Face** — esplorati checkpoint e architetture open-source per scacchi (AlphaZero-style CNN, ResNet, transformer, NNUE) per capire dimensioni, input encoding e policy/value head rispetto ai limiti Wio.
 - **Measuring memory and time to run the NNs correctly!** Extended the Wio value-net performance matrix to **big** (`768→256→64→1`) and **huge** (`768→512→64→1`); full nano→huge sweep now fits on device (huge at ~96% flash).
 - **Benchmark honesty fix:** the flat ~2.01M evals/s across all models was a measurement artifact — `-Os` dead-code elimination removed `forward()` from `loop()`. Fixed with `volatile forwardSink`, interval-based EMA rate, and 1s warm-up discard; throughput now scales with model size (~2× latency per tier: nano 1.4 ms → huge 45 ms).
 - **Sketch refactor:** split `Wio_TinyValueTest` into `config.h`, `Int8ValueNet`, `WioBoard`, `Benchmark`; weights included once in `Int8ValueNet.cpp` (fixes 3× PROGMEM duplication that overflowed huge). Sparse L1 skips `pgm_read_byte` on empty board squares.
-- **24/6 lab session:** optimized forward pass (~15% faster overall; nano 1.8→1.4 ms/call); removed misleading `K` display suffix; updated [NOTES/Performance.md](NOTES/Performance.md) with honest latency/evals/s table and hw–sw synergy notes (flash bus stalls dominate, not FPU). See daily notes [2026-06-22.md](NOTES/Daily-notes/2026-06-22.md), [2026-06-24.md](2026-06-24.md).
+- **24/6 lab session:** optimized forward pass (~15% faster overall; nano 1.8→1.4 ms/call); removed misleading `K` display suffix; updated [NOTES/Performance.md](NOTES/Performance.md) with honest latency/evals/s table and hw–sw synergy notes (flash bus stalls dominate, not FPU). See daily notes [2026-06-22.md](2026-06-22.md), [2026-06-24.md](2026-06-24.md).
 
 #### Repo work
 - Models: [BigValueMLP / HugeValueMLP](src/tinymlinternship/models/value.py) (nano→huge family)
 - Export scripts: [prepare_wio_big.py](scripts/prepare_wio_big.py), [prepare_wio_huge.py](scripts/prepare_wio_huge.py), [count_model_params.py](scripts/count_model_params.py)
 - Device sketch: `Arduino/Wio_TinyValueTest/` (modular int8 forward + benchmark)
+
+---
+
+## 29 Giugno - 5 Luglio
+
+- **Catalogo modelli** — consolidata la ricerca HF in [NOTES/Models.md](NOTES/Models.md): confronto per famiglia (Dense/Conv, ResNet, Transformer, NNUE, Lc0 edge) con parametri, file size e fattibilità su Wio. Conclusione: i modelli HF (8–100M params) sono fuori budget; NNUE e dual-head custom restano le direzioni più promettenti.
+- **Transformer compatto** — definita in [NOTES/chess transformer.md](NOTES/chess%20transformer.md) un'architettura policy+value a **~210K parametri** (input `24×8×8`, 2 blocchi transformer, policy 2048 + value tanh) — ~165× più piccola di ChessBot (34.7M), potenzialmente deployabile in int8 su Wio (~210 KB flash).
+- **FIDE & Google Challenge** — analizzate in [NOTES/FIDE & Google Efficient Chess AI Challenge.md](NOTES/FIDE%20%26%20Google%20Efficient%20Chess%20AI%20Challenge.md) le soluzioni top sotto vincoli estremi (5 MiB RAM, binario ≤ 64 KiB): micro-NNUE con king mirroring e geometric pruning (1° Cfish, 45 KB Approvers), quantizzazione int8, trade-off TT vs rete. Tattiche riutilizzabili: zero weights su stati impossibili, SPSA tuning (+30 Elo senza cambiare architettura).
+- **Sintesi** — confronto Wio vs challenge vs transformer custom; prossimi passi: dual-head sul family nano→huge, prototipo transformer ~210K, geometric pruning, valutazione NNUE incrementale. Daily note: [2026-06-29.md](2026-06-29.md).
+- Nome progetto: 
+	- **S**mall **A**rtificial **R**AM-restricted **D**eep **I**ntelligent **N**eural **E**ngine
+
+#### Repo work
+- Notes: [NOTES/Models.md](NOTES/Models.md), [NOTES/chess transformer.md](NOTES/chess%20transformer.md), [NOTES/FIDE & Google Efficient Chess AI Challenge.md](NOTES/FIDE%20%26%20Google%20Efficient%20Chess%20AI%20Challenge.md)
 
 ---
 

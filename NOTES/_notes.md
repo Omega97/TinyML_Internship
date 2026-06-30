@@ -13,7 +13,7 @@ Central hub for all project notes and references.
 ## Hardware
 
 - [hardware.md](hardware.md) — Power measurement with OTII, Edge Impulse, MLSysBook AI Kits, Xiao (Seeed Studio) setup.
-- [arduino.md](arduino.md) — Arduino Project Hub and related learning videos.
+- [arduino.md](Arduino.md) — Arduino Project Hub and related learning videos.
 
 ## Software & TinyML Frameworks
 
@@ -21,7 +21,8 @@ Central hub for all project notes and references.
 
 ## Chess Domain
 
-- [chess.md](chess.md) — NNUE (Efficiently Updatable Neural Networks), FEN notation, pawn promotion handling for policy heads.
+- [NNUE.md](NNUE.md) — Efficiently Updatable Neural Network evaluation: architecture, incremental updates, quantization, advanced techniques.
+- [chess.md](chess.md) — FEN notation, pawn promotion handling for policy heads.
 
 ---
 
