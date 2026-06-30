@@ -8,6 +8,7 @@
 - [Thesis repo](https://github.com/Omega97/world-models-thesis)
 - [Internship repo](https://github.com/Omega97/TinyML_Internship)
 - Modelli online: [NOTES/Models.md](NOTES/Models.md)
+- Engine blueprint: [NOTES/SARDINE 🐟.md](NOTES/SARDINE%20🐟.md) · [design options](NOTES/SARDINE%20design%20options.md)
 - Kaggle challenge: [FIDE & Google Efficient Chess AI Challenge](NOTES/FIDE%20%26%20Google%20Efficient%20Chess%20AI%20Challenge.md)
 - Dettagli progetto: [PROJECT.md](PROJECT.md)
 - Note progetto: [NOTES/notes.md](_notes.md)
@@ -164,14 +165,20 @@ Meeting all'ufficio del prof. Zennaro
 ## 29 Giugno - 5 Luglio
 
 - **Catalogo modelli** — consolidata la ricerca HF in [NOTES/Models.md](NOTES/Models.md): confronto per famiglia (Dense/Conv, ResNet, Transformer, NNUE, Lc0 edge) con parametri, file size e fattibilità su Wio. Conclusione: i modelli HF (8–100M params) sono fuori budget; NNUE e dual-head custom restano le direzioni più promettenti.
-- **Transformer compatto** — definita in [NOTES/chess transformer.md](NOTES/chess%20transformer.md) un'architettura policy+value a **~210K parametri** (input `24×8×8`, 2 blocchi transformer, policy 2048 + value tanh) — ~165× più piccola di ChessBot (34.7M), potenzialmente deployabile in int8 su Wio (~210 KB flash).
-- **FIDE & Google Challenge** — analizzate in [NOTES/FIDE & Google Efficient Chess AI Challenge.md](NOTES/FIDE%20%26%20Google%20Efficient%20Chess%20AI%20Challenge.md) le soluzioni top sotto vincoli estremi (5 MiB RAM, binario ≤ 64 KiB): micro-NNUE con king mirroring e geometric pruning (1° Cfish, 45 KB Approvers), quantizzazione int8, trade-off TT vs rete. Tattiche riutilizzabili: zero weights su stati impossibili, SPSA tuning (+30 Elo senza cambiare architettura).
-- **Sintesi** — confronto Wio vs challenge vs transformer custom; prossimi passi: dual-head sul family nano→huge, prototipo transformer ~210K, geometric pruning, valutazione NNUE incrementale. Daily note: [2026-06-29.md](2026-06-29.md).
-- Nome progetto: 
-	- **S**mall **A**rtificial **R**AM-restricted **D**eep **I**ntelligent **N**eural **E**ngine
+- **Transformer compatto** — definita in [NOTES/chess transformer.md](NOTES/chess%20transformer.md) un'architettura policy+value a **~210K parametri** (input `24×8×8`, 2 blocchi transformer, policy 2048 + value tanh) — ~165× più piccola di ChessBot (34.7M).
+- **FIDE & Google Challenge** — analizzate le soluzioni top sotto vincoli estremi (5 MiB RAM, binario ≤ 64 KiB): micro-NNUE, king mirroring, geometric pruning, SPSA tuning. Note: [NOTES/FIDE & Google Efficient Chess AI Challenge.md](NOTES/FIDE%20%26%20Google%20Efficient%20Chess%20AI%20Challenge.md).
+- **NNUE deep-dive** — nota dedicata su architettura, aggiornamenti incrementali e quantizzazione: [NOTES/NNUE.md](NOTES/NNUE.md).
+- **Analisi dataset** — distribuzione piece-count su 1k e 10k partite Lichess (`piece_count_distribution.xlsx`, `piece_count_distribution_10k.xlsx`); usata per progettare i bucket bilanciati del training.
+- **SARDINE blueprint** — decisioni bloccate in [NOTES/SARDINE 🐟.md](NOTES/SARDINE%20🐟.md); catalogo opzioni in [SARDINE design options.md](NOTES/SARDINE%20design%20options.md). Nome: **S**mall **A**rtificial **R**AM-restricted **D**eep **I**ntelligent **N**eural **E**ngine.
+  - Eval: bucketed micro NNUE `768→16→1` (8 output buckets per piece count)
+  - Runtime: C puro (Cfish-style); search alpha-beta con TT-dominant in RAM
+  - Training: Lc0 + bucket-stratified resampling; nnue-pytorch + SPSA
+  - Target: **≥ 2000 Elo**, mossa pronta in **~1 s**
+  - Daily notes: [2026-06-29.md](2026-06-29.md), [2026-06-30.md](2026-06-30.md)
 
 #### Repo work
-- Notes: [NOTES/Models.md](NOTES/Models.md), [NOTES/chess transformer.md](NOTES/chess%20transformer.md), [NOTES/FIDE & Google Efficient Chess AI Challenge.md](NOTES/FIDE%20%26%20Google%20Efficient%20Chess%20AI%20Challenge.md)
+- Notes: [NOTES/Models.md](NOTES/Models.md), [NOTES/chess transformer.md](NOTES/chess%20transformer.md), [NOTES/NNUE.md](NOTES/NNUE.md), [NOTES/Ideas 💡.md](NOTES/Ideas%20💡.md), [NOTES/SARDINE 🐟.md](NOTES/SARDINE%20🐟.md), [NOTES/FIDE & Google Efficient Chess AI Challenge.md](NOTES/FIDE%20%26%20Google%20Efficient%20Chess%20AI%20Challenge.md)
+- Data analysis: [scripts/plot_piece_count_distribution.py](scripts/plot_piece_count_distribution.py) → `piece_count_distribution.xlsx`, `piece_count_distribution_10k.xlsx`
 
 ---
 
