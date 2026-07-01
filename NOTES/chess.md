@@ -44,4 +44,18 @@ $$
 
 ---
 
+## UCI
+
+Il protocollo **UCI** (Universal Chess Interface) è uno standard di comunicazione aperto che consente ai motori scacchistici (come [Stockfish](https://official-stockfish.github.io/docs/stockfish-wiki/UCI-&-Commands.html)) di dialogare con interfacce grafiche (GUI). [1](https://it.wikipedia.org/wiki/Universal_Chess_Interface)
+
+Le interfacce grafiche fungono da controllore e mantengono lo stato del gioco, mentre il motore si occupa esclusivamente di calcolare le mosse tramite istruzioni testuali . [1](https://www.chessprogramming.org/UCI)
+
+---
+
+## Stack Surfing
+
+Invece di avere una profondità di ricerca fissa, il codice controlla a runtime quanta memoria Stack è rimasta libera nel microcontrollore; se c'è spazio, spinge l'albero di ricerca un "ply" (semi-mossa) più in profondità.
+
+---
+
 [← Back to Notes index](_notes.md)

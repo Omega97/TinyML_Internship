@@ -99,7 +99,7 @@ Piece-count distribution from 10k Lichess games (`piece_count_distribution_10k.x
 | ------- | ---------------------------------- | ----------------------------------------------------------------------------------------------------------------- | --------------------------------------------------------- |
 | **B-A** | **None**                           | Single output layer                                                                                               | Simplest; no bucket selection overhead                    |
 | **B-B** | **FIDE linear**                    | `bucket = (piece_count − 2) / 4` → 8 buckets                                                                      | Proven (Approvers 2nd); uneven position counts per bucket |
-| **B-C** | **Balanced buckets (Ideas twist)** | Equalized training mass per bucket:<br>0: 2–12, 1: 13–17, 2: 18–21, 3: 22–24, 4: 25–27, 5: 28–29, 6: 30–31, 7: 32 | Better coverage of rare endgames                          |
+| **B-C** | **Balanced buckets + queen-split** *(selected)* | 0: $p<12$; 1–2: $p\in[13,21]$ no/with queen; 3–4: $p\in[22,27]$ no/with queen; 5–6: $p\in[28,31]$ no/with queen; 7: $p=32$. Equalized training mass (**D-D**); games ≥ 16 moves. Ablation vs pure piece-count planned. | Queen presence conditions eval in ways piece count alone misses |
 | **B-D** | **MOE tactical**                   | Separate heads for `inCheck`, capture-or-promotion                                                                | nagiss / Noggenfogger style; complicates accumulators     |
 
 **Selection note:** B-C needs dataset stratification during training; B-B is easier to implement.
@@ -286,20 +286,20 @@ Short bundles if you want a starting point before mixing options:
 
 | Component                | Selected                    | Notes                                                                                                                                                                                    |
 | ------------------------ | --------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| Runtime (§1)             | **R-A**                     | Pure C engine core (Cfish-style). TFT/Serial glue can stay minimal C++ only if Arduino toolchain requires it → see R-C fallback.                                                         |
+| Runtime (§1)             | **R-A** (phased)            | C core after C++ search prototype on PC. Minimal C++ for TFT/Serial glue on-device.                                                                                                        |
 | Features (§2)            | **F-B**                     | Pruned 704. HalfKP (**F-C**) deferred — only worth it after incremental NNUE works.                                                                                                      |
-| Evaluation (§3)          | **E-E (E-C)**               | Bucketed micro NNUE `768→16→1` + 8 output sets. Not **E-F** (tactical MoE) — piece-count specialization is already **B-C**.                                                              |
-| Output buckets (§4)      | **B-C**                     | Balanced training buckets (Ideas twist). Requires **D-D** stratification.                                                                                                                |
-| Policy (§5)              | **P-A**                     | Search-only for v1. Upgrade to **P-B** once history tables are in.                                                                                                                       |
+| Evaluation (§3)          | **E-E (E-C)**               | Bucketed micro NNUE `768→16→1` + 8 output sets; **shared accumulator** across experts. No autoencoder warm-start v1. Not **E-F**.                                                         |
+| Output buckets (§4)      | **B-C**                     | Queen-split balanced buckets; ablation vs pure piece-count for confirmation. No extra axes (king side, pairs, inCheck) in v1.                                                             |
+| Policy (§5)              | **P-A** → v2 head           | Search-only v1. v2 policy head off shared accumulator after Elo gate. Upgrade to **P-B** when history tables land.                                                                       |
 | Incremental updates (§6) | **U-B** → **U-C**           | Add/sub first; add lazy updates when TT cutoffs matter. **U-D** optional with copy-make.                                                                                                 |
 | Geometric opts (§7)      | **K-A, K-B, K-C**           | Mirroring + zero impossible weights + magnitude pruning.                                                                                                                                 |
-| Quantization (§8)        | **Q-A**                     | int8 + int16 accumulators + CReLU — native NNUE path. **Q-D** (tanh LUT) fits MLP eval, not NNUE accumulators.                                                                           |
+| Quantization (§8)        | **Q-A** → **Q-B?**          | int8 weights, int16 biases/accumulators, CReLU v1. Per-tensor scale from post-training histogram. SCReLU if Elo plateaus.                                                                 |
 | Search (§9)              | **S-B** → **S-C** → **S-D** | Quiescence first, then LMR+NMP, then iterative deepening once TT is stable.                                                                                                              |
 | Flash budget (§10)       | **M-F2**                    | ~10% flash for weights; majority of code budget for search + tables.                                                                                                                     |
-| RAM budget (§10)         | **M-R1**                    | TT-dominant (128–160 KB). Pairs with **S-D** and **P-B** later.                                                                                                                          |
+| RAM budget (§10)         | **M-R1**                    | TT-dominant (128–160 KB). Packed entries ~10–12 B → ~13–16K slots. Format prototyped on PC in build step 2.                                                                              |
 | Move ordering (§11)      | **O-A** → **O-B**           | MVV-LVA + captures for v1; killer moves when search depth > 4.                                                                                                                           |
-| Training data (§12)      | **D-B + D-D**               | Lc0 primary; bucket-stratified resampling for **B-C**. **D-C** (Stockfish) optional augment if labels need boost.                                                                        |
-| Training pipeline (§13)  | **T-B** + **T-D**           | nnue-pytorch for net; SPSA post-hoc for search/heuristic tuning.                                                                                                                         |
+| Training data (§12)      | **D-B + D-D**               | Lc0 primary; games **≥ 16 moves** (same as distribution analysis); bucket-stratified resampling. **D-C** optional augment.                                                               |
+| Training pipeline (§13)  | **T-B** + **T-D**           | nnue-pytorch v1 (not Grapheus); calibrated PTQ; measure fp32→int8 gap before QAT. SPSA for search tuning.                                                                                  |
 | I/O (§14)                | **I-B**                     | TFT + Serial; hardcoded FEN input for now (no **I-C** UI yet).                                                                                                                           |
 | Preset (optional)        | —                           | Custom hybrid: FIDE memory (**M-R1**) + micro NNUE (**E-E**) + v1 search ladder (**P-A**, **S-B**). Closest preset: **Sardine NNUE**, but with **R-A** and **M-R1** instead of **M-R2**. |
 
@@ -312,13 +312,26 @@ Short bundles if you want a starting point before mixing options:
 | **Target Elo / opponent?** | Kaggle FIDE bots (~5 MiB RAM) topped out around **2500 Elo**. Target for SARDINE: **≥ 2000 Elo**. |
 | **Time control on Wio?** | No hard cap, but the best move should be ready within **~1 second**. |
 | **MCTS (P-E) viable at 120 MHz?** | **Yes** — value-net inference is **1–50 ms** on-device, so MCTS is feasible. v1 still uses alpha-beta (**P-A**) for simplicity; MCTS is a v2 option once eval + search baseline works. |
-| **Dual-head vs separate nets?** | **Separate nets** — NNUE for evaluation + a distinct net to guide search (move ordering / policy hints). |
+| **Dual-head vs separate nets?** | **Separate nets** — NNUE for eval; v2 policy head branches off **shared accumulator** (not a second feature transform). |
+| **Port to C (R-A)?** | **After** first playable search in C++ on PC (debugger, perft, sanitizers). |
+| **Shared accumulator for all experts?** | **Yes** — Stockfish-style; bucket selects output head only. |
+| **int8 weights + int16 biases?** | **Yes**. Scales from post-training weight histogram, not fixed ±4. |
+| **Bucket scheme validation?** | Keep queen-split; ablation vs pure piece-count via eval MSE on SF-labeled set. |
+| **More bucketing axes v1?** | **No** — defer to v1.x/v2; `inCheck` most promising first (8→16 buckets). |
+| **Autoencoder warm-start?** | **Skip v1.** |
+| **Games ≥ 16 moves in training?** | **Yes** — consistent with distribution analysis. |
+| **SCReLU vs CReLU?** | **CReLU v1**; SCReLU if Elo plateaus — clip before square (int16), int32 MAC. |
+| **Grapheus for QAT?** | **Skip v1** — nnue-pytorch + calibrated PTQ first; revisit only if int8 gap threatens Elo gate. |
+| **Queen-split ablation?** | Per-bucket eval MSE (not pooled); playing-strength test only if per-bucket results contradictory. |
+| **TT pack format?** | Decide via Wio nodes/sec + depth in ~1 s (10 B vs 16 B), not hit-rate alone. |
 
 ---
 
 ## Open Questions
 
-- [ ] Port to C (**R-A**) before or after first playable search in C++?
+- [ ] Per-bucket ablation MSE thresholds — decisive vs ambiguous (see [SARDINE 🐟.md](SARDINE%20🐟.md))
+- [ ] TT 10 B vs 16 B benchmark on Wio hardware
+- [ ] PTQ acceptance criterion before SCReLU/QAT escalation
 
 ---
 

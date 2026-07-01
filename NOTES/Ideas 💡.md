@@ -55,3 +55,43 @@
 	  Note: switching heads may reduce accumulator efficacy, but as long as the number of pieces goes always down you have to switch heads unfrequently
 	
 - `O3` speed optimizations??
+
+---
+
+## See Also
+
+### "Dog" (NNUE su ESP32)
+
+Questa è probabilmente la scoperta più rilevante per te. Uno sviluppatore (Folkert van Heusden) ha creato **Dog**, un motore scacchistico progettato specificamente per girare su un microcontrollore ESP32.
+
+- **Cosa lo rende speciale:** A differenza dei motori classici, _Dog implementa effettivamente una rete neurale NNUE_ a bordo del microcontrollore, oltre a un book di aperture. L'autore ha dovuto far entrare tutto (inclusa la Transposition Table) nei limitati 320 KB di RAM dell'ESP32.
+    
+- **Performance:** Su PC raggiunge circa 2400 Elo, mentre limitato dall'hardware dell'ESP32 gioca con una forza stimata di poco inferiore (intorno ai 2000+ Elo).
+    
+- **Perché ti è utile:** Dimostra che il tuo obiettivo (un TinyML per scacchi su un chip con ~200KB di RAM) è assolutamente fattibile e competitivo. L'autore lo ha anche interfacciato in modalità UCI per farlo giocare online su Lichess direttamente dal chip.
+    
+
+### "MicroChess"
+
+Se la sfida di Kaggle imponeva un limite di 5 MB di RAM, questo progetto su GitHub porta il concetto di "vincolo" alla follia.
+
+- **Cosa lo rende speciale:** È un motore scritto in C/C++ in grado di girare con **meno di 2 KB di RAM** e 32 KB di memoria Flash (pensato per gli Arduino Uno/Nano più piccoli).
+    
+- **Tecniche:** Ovviamente non usa reti neurali, ma implementa regole complete (inclusi en passant, arrocco, promozione) e usa una tecnica geniale chiamata _Stack Surfing_. Invece di avere una profondità di ricerca fissa, il codice controlla a runtime quanta memoria Stack è rimasta libera nel microcontrollore; se c'è spazio, spinge l'albero di ricerca un "ply" (semimossa) più in profondità.
+    
+- **Perché ti è utile:** È il benchmark definitivo per capire come scrivere codice C _bare-metal_ super efficiente. Se vuoi implementare l'Alpha-Beta sul Wio Terminal senza sprecare byte, il codice sorgente di MicroChess è un'enciclopedia dell'ottimizzazione.
+    
+
+###  "ESP32 Chess Engine" (di Sergey Urusov)
+
+Questo progetto è un'evoluzione di un vecchio motore per Arduino Mega, riscritto per sfruttare i microcontrollori moderni.
+
+- **Cosa lo rende speciale:** Non usa Bitboards e non usa reti neurali, ma sfrutta pesantemente le euristiche classiche che discutevamo ieri: _Null Move Pruning_, _Killer Heuristic_, _Futility Pruning_ e _Lazy Evaluation_.
+    
+- **Performance:** Riesce a valutare circa **20.000 nodi al secondo (20 kNps)** sull'ESP32, risolvendo la quasi totalità dei test tattici "Win At Chess" (WAC) in meno di 1 minuto, raggiungendo i 2023 Elo (stimati su Elometer).
+    
+- **Perché ti è utile:** Nel tuo stress-test, hai calcolato 2.16 milioni di _forward passes_ al secondo per la sola rete neurale. Confrontando i tuoi numeri con i 20.000 nodi al secondo di Urusov (che includono l'overhead della generazione mosse e della tree search), puoi iniziare a fare delle stime matematiche su quanti nodi effettivi riuscirà a esplorare il tuo Wio Terminal una volta unito il tuo Mixture of Experts all'algoritmo di ricerca.
+    
+
+---
+

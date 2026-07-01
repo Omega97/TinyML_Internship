@@ -14,9 +14,7 @@ Chess engine for the **Wio Terminal** — neural evaluation + alpha-beta search,
 
 ## Mission
 
-Playable chess bot on-device: no cloud, no GPU. v1 uses search + NNUE eval; separate policy net deferred.
-
-**Non-goals (v1):** human-like play, Stockfish parity, photo/voice input.
+Playable chess bot on a tiny device: no cloud, no GPU, extreme optimization and efficiency. 
 
 ---
 
@@ -29,22 +27,24 @@ Playable chess bot on-device: no cloud, no GPU. v1 uses search + NNUE eval; sepa
 | **MCTS** | Feasible on-device (1–50 ms/eval); **v2 only** — v1 uses alpha-beta |
 | **Nets** | **Separate nets** — NNUE for eval; distinct policy head deferred until after v1 Elo gate |
 
+**Node budget reference:** Urusov's ESP32 engine (~20 kNps, heuristics-only, ~2023 Elo) sets a baseline for search throughput without NNUE. SARDINE's reachable depth in ~1 s depends on measured eval latency + move-gen overhead on Wio — model empirically once the search skeleton exists (see Open Questions).
+
 ---
-	
+
 ## Build Pipeline
 
 ```mermaid
 flowchart TD
-    A["Step 1 — Feature encoder<br/>PC + device parity"] --> B["Step 2 — Search skeleton in C++ on PC<br/>perft · eval hooks · TT format benchmark"]
-    B --> C["Step 3 — Train bucketed NNUE<br/>Lc0 data · bucket-stratified sampling · games ≥ 16<br/>→ calibrated int8 export"]
-    C --> D["Step 4 — Queen-split ablation<br/>per-bucket eval MSE vs piece-count baseline"]
-    D --> E["Step 5 — Incremental accumulators<br/>on device"]
-    E --> F["Step 6 — Port search + NNUE to C"]
-    F --> G["Step 7 — Full search stack + tuning<br/>LMR · null-move · iterative deepening · SPSA"]
-    G --> H{"Step 8 — Elo gate<br/>≥ 2000?"}
+    A["Feature encoder<br/>PC + device parity"] --> B["Search skeleton in C++ on PC<br/>perft · eval hooks · TT format benchmark"]
+    B --> C["Train bucketed NNUE<br/>Lc0 data · bucket-stratified sampling · games ≥ 16<br/>→ calibrated int8 export"]
+    C --> D["Queen-split ablation<br/>per-bucket eval MSE vs piece-count baseline"]
+    D --> E["Incremental accumulators<br/>on device"]
+    E --> F["Port search + NNUE to C<br/>benchmark -O3 vs -Os"]
+    F --> G["Full search stack + tuning<br/>quiescence · futility · LMR · null-move ·<br/>lazy eval · iterative deepening · SPSA"]
+    G --> H{"Elo gate<br/>≥ 2000?"}
     H -- "No" --> I["Iterate:<br/>SCReLU · quantization-aware training ·<br/>TT format · bucket scheme"]
     I --> G
-    H -- "Yes" --> J["Step 9 — v2 scope<br/>Policy guidance head · SCReLU if needed ·<br/>Grapheus/QAT if post-training quant gap too large"]
+    H -- "Yes" --> J["v2 scope<br/>minimal UCI polish · policy head ·<br/>SCReLU / QAT / transformer only if needed"]
 
     style H fill:#f9d,stroke:#333,stroke-width:2px
     style J fill:#bfb,stroke:#333,stroke-width:2px
@@ -56,9 +56,9 @@ flowchart TD
 
 ```mermaid
 flowchart TD
-    FEN["FEN position"] --> FEAT["Pruned 704 features<br/>(zero impossible pawn ranks +<br/>mirrored king coordinates)"]
+    FEN["FEN position"] --> FEAT["Pruned 716 features<br/>(zero impossible pawn ranks +<br/>mirrored king coordinates)"]
 
-    FEAT --> ACC["Shared Accumulator<br/>768 → 16, dual-perspective<br/>int8 weights / int16 accumulators<br/>CReLU (SCReLU fallback) <br/> + Incremental Accumulator Update"]
+    FEAT --> ACC["Shared Accumulator<br/>716 → 16, dual-perspective<br/>int8 weights / int16 accumulators<br/>CReLU · lazy add/sub updates"]
 
     ACC --> BUCKET{"Bucket selector<br/>piece count + queen presence"}
 
@@ -68,10 +68,10 @@ flowchart TD
 
     E0 & E1 & E7 --> OUT["Scalar eval score<br/>(16 → 1 per expert)"]
 
-    OUT --> SEARCH["Alpha-beta + quiescence<br/>LMR / null-move / iterative deepening"]
+    OUT --> SEARCH["Alpha-beta + quiescence<br/>futility · LMR · null-move ·<br/>lazy eval · iterative deepening"]
     SEARCH <--> TT[("TT: 128–160 KB<br/>MVV-LVA move ordering")]
     SEARCH --> BEST["Best move"]
-    BEST --> IO["TFT + Serial output"]
+    BEST --> IO["TFT + Serial<br/>minimal UCI for testing"]
 
     style ACC fill:#bbf,stroke:#333,stroke-width:2px
     style BUCKET fill:#fdb,stroke:#333,stroke-width:2px
@@ -89,44 +89,60 @@ Pure **C** engine core (Cfish-style) is the target, but **port after** the first
 
 Rationale: debugging alpha-beta, quiescence, and TT interactions is far faster with a PC toolchain (debugger, sanitizers, perft/eval unit tests) than on Wio hardware. Minimal C++ remains acceptable for TFT/Serial glue on-device.
 
+**Compiler flags:** once the C port lands (build step 6), benchmark `-O3` vs `-Os` on Wio — a free recompile experiment; no decision needed upfront. FIDE 9th place gained significant speed from `-O3` after gutting unused features.
+
+**MicroChess bare-metal patterns:** skip — not worth diverging from a standard alpha-beta skeleton for v1.
+
 ---
 
 ### Input features
 
-**Pruned 704** features: zero impossible pawn ranks + mirrored king coordinates. HalfKP deferred.
+**Pruned 716** features: zero impossible pawn ranks + mirrored king coordinates. HalfKP deferred.
+
+Input structure:
+
+$$6 \times 2 \times 64 - 2\times16 - 32 + 4 + 8 = 716$$
+
+- $6\times2\times64 = 716$ (piece types × colors × squares)
+- $-2\times16 = -32$ (pawn rank pruning: 2 colors × 16 illegal squares)
+- $-32$ (king mirroring: one king plane 64→32)
+- $+4$ (castling rights)
+- $+8$ (en passant file)
+
+**Separate pattern tables:** skip for v1. Geometric zeros (impossible pawn ranks, king mirroring, magnitude pruning) already capture the cheapest compression wins; a handcrafted pattern cache adds flash complexity for uncertain gain until the Elo gap is measured.
 
 ---
 
 ### Evaluation
 
-**Bucketed micro NNUE:** `768 → 16 → 1`, dual-perspective, **8 output weight sets** (experts) selected by position bucket.
+**Bucketed micro NNUE:** `716 → 16 → 1`, dual-perspective, **8 output weight sets** (experts) selected by position bucket.
 
 **Shared accumulator:** all experts share the same first hidden layer. The accumulator depends only on board features, not on which output bucket is active — compute it once per position, then route to the correct output head. Matches Stockfish-style bucketed NNUE; incremental add/sub updates stay bucket-agnostic.
 
 **Autoencoder warm-start:** skip for v1.
 
+**Tactical MoE (`inCheck`, capture threat):** defer to v1.x/v2. Bucket switches are already infrequent along a typical game (piece count mostly decreases), so the current 8-bucket scheme is not leaving large gains on the table — no urgency to add tactical heads earlier.
+
 ---
 
 ### Output buckets
 
-Balanced training buckets with **queen-split** in middlegame/opening bands:
+Balanced training buckets (based on number of pieces $p$, kings included) with **queen-split** in middlegame/opening bands:
 
-| Bucket | Condition | Phase |
-|--------|-----------|-------|
-| 0 | $p < 12$ | endgame |
-| 1 | $p \in [13,21]$, no queen | late middlegame |
-| 2 | $p \in [13,21]$, queen present | late middlegame |
-| 3 | $p \in [22,27]$, no queen | middlegame |
-| 4 | $p \in [22,27]$, queen present | middlegame |
-| 5 | $p \in [28,31]$, no queen | opening |
-| 6 | $p \in [28,31]$, queen present | opening |
-| 7 | $p = 32$ | early opening |
+| Bucket | Condition                      | Phase           |
+| ------ | ------------------------------ | --------------- |
+| 0      | $p < 12$                       | endgame         |
+| 1      | $p \in [13,21]$, no queen      | late middlegame |
+| 2      | $p \in [13,21]$, queen present | late middlegame |
+| 3      | $p \in [22,27]$, no queen      | middlegame      |
+| 4      | $p \in [22,27]$, queen present | middlegame      |
+| 5      | $p \in [28,31]$, no queen      | opening         |
+| 6      | $p \in [28,31]$, queen present | opening         |
+| 7      | $p = 32$                       | early opening   |
 
 Queen presence is high-leverage in buckets 1–4. Buckets 0 and 7 barely need the split.
 
-**Ablation plan:** train queen-split vs pure piece-count buckets once pipeline exists. Compare **per-bucket eval MSE** on a Stockfish-labeled validation set (stratified like training) — not pooled MSE alone, which could hide bucket-level regressions. Escalate to playing-strength tests only if per-bucket results are ambiguous or contradictory; uniform improvement or regression across buckets is decisive enough to skip the expensive test.
-
-**Future axes (v1.x/v2):** no king side, bishop/rook pair, or tactical flags in v1. `inCheck` is the first candidate (8 → 16 buckets) if an axis is added later.
+**Ablation plan:** train queen-split vs pure piece-count buckets once pipeline exists. Compare **per-bucket eval MSE** on a Stockfish-labeled validation set (stratified like training) — not pooled MSE alone. Escalate to playing-strength tests only if per-bucket results are ambiguous or contradictory.
 
 Informed by `piece_count_distribution_10k.xlsx` (games ≥ 16 moves). Training uses bucket-stratified resampling.
 
@@ -134,17 +150,22 @@ Informed by `piece_count_distribution_10k.xlsx` (games ≥ 16 moves). Training u
 
 ### Policy (v1)
 
-**Search-only** for v1. Add killer-move and countermove history heuristics once tables are in.
+**Search-only** for v1. Add killer-move once tables are in.
 
 **Policy guidance net (v2):** defer until after v1 Elo gate. Lightweight head off the **shared accumulator** (16 → move-ranking); watch per-node latency against the ~1 s budget.
 
+**Compact transformer fallback:** the ~210K design in [chess transformer.md](chess%20transformer.md) stays in reserve — evaluate only if the lightweight policy head underperforms post-gate. Too heavy for per-node move ordering to pursue in parallel; last resort, not a parallel track.
+
+***Killer moves** are a complementary heuristic for non-capture moves. The idea: if a particular quiet move (not a capture) caused a beta cutoff (i.e., it was so strong the search stopped exploring further alternatives at that depth) in one branch of the tree, it's often also a strong move in sibling branches at the same depth — even though the board position is slightly different. Chess tactics are often tied to squares and piece maneuvers rather than the exact position, so a move like "knight jumps to a strong central square" that worked well once tends to work well again nearby in the tree.*
+
 ---
 
-### Incremental updates
+### Incremental updates & lazy evaluation
 
 1. **Add/sub** accumulator updates on each move (shared layer — bucket-independent)
-2. **Lazy updates** when TT cutoffs make eval skippable
-3. Copy-make + fused add/sub optional later
+2. **Lazy accumulator updates** — defer refresh until eval is actually needed (TT cutoffs skip work)
+3. **Lazy evaluation** — skip full NNUE forward when a beta cutoff is already provable from a prior ply score; implement **together** with lazy accumulator updates (same "skip work when cutoff makes it moot" principle)
+4. Copy-make + fused add/sub optional later
 
 ---
 
@@ -167,15 +188,9 @@ Informed by `piece_count_distribution_10k.xlsx` (games ≥ 16 moves). Training u
 
 **Scale calibration:** train fp32 first, histogram post-training weights, set per-tensor scales onto $[-127, 127]$ with minimal clipping.
 
-**SCReLU fallback** — first upgrade if CReLU plateaus below ≥2000 Elo:
+**SCReLU fallback** — first upgrade if CReLU plateaus below ≥2000 Elo: clip before square (int16), multiply-accumulate in int32.
 
-1. **Clip** int16 accumulator to quantized activation range (e.g. $[0, 127]$) **before** squaring — load-bearing; unclipped $32767^2$ overflows even int32.
-2. **Square** in **int16** (max $127^2 = 16{,}129$ fits).
-3. **Multiply-accumulate** with int8 weights in **int32** (product up to ~2M; sum across terms needs int32 accumulation).
-
-Mirrors Stockfish SCReLU practice: moderate width after square, promote before weighted sum.
-
-**Grapheus / quantization-aware training:** skip for v1. Stay on **nnue-pytorch** + calibrated post-training quantization. Measure fp32→int8 accuracy gap after first training run; only investigate Grapheus or in-pipeline QAT if gap threatens the Elo gate.
+**Grapheus / quantization-aware training:** skip for v1. Stay on **nnue-pytorch** + calibrated post-training quantization; investigate QAT only if the fp32→int8 gap threatens the Elo gate.
 
 ---
 
@@ -184,8 +199,13 @@ Mirrors Stockfish SCReLU practice: moderate width after square, promote before w
 Phased rollout:
 
 1. Alpha-beta + **quiescence**
-2. **Late-move reduction + null-move pruning**
-3. **Iterative deepening** once TT is stable
+2. **Futility pruning** + **late-move reduction** + **null-move pruning** (futility is cheap, well-proven at this speed class — include in v1, not deferred)
+3. **Lazy evaluation** (paired with lazy accumulator updates)
+4. **Iterative deepening** once TT is stable
+
+**Stack surfing (MicroChess-style dynamic depth):** rejected for v1. With TT already claiming 128–160 KB of 192 KB RAM, probing free stack at runtime to extend depth is too risky alongside accumulators and search stack.
+
+**Fixed depth / iterative deepening** within the ~1 s budget replaces dynamic stack-based depth.
 
 ---
 
@@ -193,8 +213,12 @@ Phased rollout:
 
 | Resource | Philosophy | Allocation |
 |----------|------------|------------|
-| **Flash** | Balanced | ~10% weights; rest search code + tables |
+| **Flash** | Balanced | ~10% weights; rest search code + tables; **no opening book v1** |
 | **RAM** | TT-dominant | TT **128–160 KB**; accumulators + stack ~16 KB; scratch ~16 KB |
+
+**Opening book:** defer until after Elo gate. Dog ships one, but flash is better spent on search + NNUE for v1.
+
+**Dog (ESP32) reference:** Dog fits NNUE + TT + book in ~320 KB RAM at ~2000+ Elo on-device — proof the target is feasible. RAM layout study still useful (see Open Questions) but TT-dominant plan stands.
 
 #### Transposition table
 
@@ -207,13 +231,15 @@ Design entry format first; slot count follows from 128–160 KB budget. Prototyp
 | Tight pack | ~10 B | ~13,100 | More entries; unaligned loads on SAMD51 cost extra shift/merge per probe |
 | Byte-aligned | 16 B | ~8,200 | Fewer entries; faster probes |
 
-**Decision metric:** wall-clock **nodes/sec** and **depth reached in ~1 s** on Wio at both formats — not hit-rate alone. Millions of probes per move compound per-probe CPU cost; the format with better hit-rate can still lose on net search depth.
+**Decision metric:** wall-clock **nodes/sec** and **depth reached in ~1 s** on Wio — not hit-rate alone.
 
 ---
 
 ### Move ordering
 
 **MVV-LVA + captures** for v1; **killer moves** when search depth > 4.
+
+***Move ordering** is about the order in which a chess engine tries moves at each node in the search tree — not which moves are legal, but which ones get examined first. This matters enormously because of alpha-beta pruning: alpha-beta can skip whole branches of the search tree once it proves a move is "good enough" that the opponent would never let you reach it, but how much it can skip depends entirely on whether the best moves get searched early. If you search the best move first, alpha-beta prunes aggressively and the search is fast. If you search it last, you've wasted time fully exploring worse alternatives before finding it, and pruning barely helps. Good move ordering can be the difference between searching a few thousand nodes and a few million to reach the same depth.*
 
 ---
 
@@ -236,44 +262,10 @@ Design entry format first; slot count follows from 128–160 KB budget. Prototyp
 
 ### I/O
 
-**TFT + Serial**; hardcoded FEN input for now.
+**TFT + Serial** for on-device display and debug output.
+
+**Minimal UCI over Serial:** yes — required for standardized Elo testing against the ≥2000 gate. Full UCI spec not needed; implement enough of the protocol for engine-vs-engine tools (cutechess-cli, etc.). Hardcoded FEN remains fine for early bring-up; UCI lands before or during Elo gate testing.
+
+*TFT = Thin-Film Transistor LCD on the Wio Terminal (2.4" onboard screen).*
 
 ---
-
-## Open Questions
-
-### Validation & quantization (current pipeline)
-
-- [ ] **Per-bucket ablation thresholds** — what MSE delta (per bucket or aggregate) counts as "decisive" vs "ambiguous" enough to warrant playing-strength tests?
-- [ ] **TT format on Wio** — run the 10 B vs 16 B benchmark once the PC search skeleton can drive realistic node counts on hardware.
-- [ ] **PTQ acceptance criterion** — maximum allowable fp32→int8 eval error (or Elo proxy) before escalating to SCReLU or quantization-aware training?
-
-### Features & optimizations (from [Ideas 💡.md](Ideas%20💡.md) See Also)
-
-Inspired by **Dog** (NNUE on ESP32, ~320 KB RAM, ~2000+ Elo on-device):
-
-- [ ] **Dog RAM budget study** — how does Dog split flash/RAM between NNUE weights, TT, and book? Can we adopt a similar layout on Wio (~192 KB RAM, ~500 KB flash) without sacrificing our TT-dominant plan?
-- [ ] **UCI over Serial** — expose SARDINE as a UCI engine on the Wio (like Dog on Lichess) for Elo testing against standard opponents, instead of hardcoded FEN only?
-- [ ] **Opening book** — Dog ships a book alongside NNUE; is a minimal embedded book worth the flash cost for v1, or defer until post–Elo gate?
-
-Inspired by **MicroChess** (<2 KB RAM, stack surfing):
-
-- [ ] **Stack surfing for search depth** — instead of a fixed max ply, grow depth until free stack/RAM hits a safety threshold (dynamic depth within the ~1 s budget). Applicable on Wio with 192 KB RAM, or too risky next to TT + accumulators?
-- [ ] **Bare-metal C patterns** — which MicroChess techniques (move generation, board representation, stack discipline) are worth porting into the C search core beyond what a standard alpha-beta skeleton provides?
-
-Inspired by **ESP32 Chess Engine** (Urusov, ~20 kNps heuristics-only, ~2023 Elo):
-
-- [ ] **Node budget model** — at measured Wio eval latency (ms/node) + move-gen overhead, how many nodes fit in ~1 s? Compare against Urusov's 20 kNps baseline to estimate reachable depth with our NNUE eval vs his pure HCE.
-- [ ] **Futility pruning** — Urusov relies on it heavily; add to our search stack alongside LMR/NMP, or skip for v1 to keep the skeleton simple?
-- [ ] **Lazy evaluation** — skip full NNUE eval when a cutoff is already provable from a previous ply's score; pairs naturally with lazy accumulator updates — worth implementing together?
-
-From general Ideas not yet in the locked pipeline:
-
-- [ ] **NNUE + pre-computed patterns** — combine the neural net with small handcrafted pattern tables (linrock-style geometric zeros go partway; is a separate pattern cache worth flash)?
-- [ ] **Tactical MoE axis** — Ideas note that bucket switches are rare if piece count mostly decreases; should `inCheck` / capture-threat heads be revisited earlier than v2 given infrequent switching cost?
-- [ ] **Compiler `-O3` on device** — Ideas flag speed optimizations; trade flash size vs nodes/sec on SAMD51 once the C port exists (FIDE 9th place used `-O3` + UPX after gutting features)?
-- [ ] **Compact transformer as guidance net** — if the v2 policy head off the shared accumulator underperforms, is the ~210K transformer design ([chess transformer.md](chess%20transformer.md)) a fallback, or too heavy for per-node move ordering?
-
----
-
-[← Design options](SARDINE%20design%20options.md) · [← Notes index](_notes.md)
