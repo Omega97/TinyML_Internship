@@ -38,7 +38,8 @@ import numpy as np
 from pathlib import Path
 
 # Runtime path hack for direct execution (consistent style across scripts)
-sys.path.insert(0, str(Path(__file__).parent.parent / "src"))
+sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+import bootstrap  # noqa: E402, F401
 
 from tinymlinternship.config.settings import (
     CHECKPOINTS_DIR,

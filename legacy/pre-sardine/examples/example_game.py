@@ -1,6 +1,12 @@
 """
 Minimal script to display moves from a specific game in the Lichess dataset.
 """
+import sys
+from pathlib import Path
+
+sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+import bootstrap  # noqa: E402, F401
+
 import chess
 import pandas as pd
 from tinymlinternship.config.settings import LICHESS_CSV

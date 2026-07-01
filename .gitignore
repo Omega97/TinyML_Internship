@@ -4,7 +4,8 @@ terminals/
 # Data
 data/raw/
 data/processed/
-models/
+/models/
+/legacy/pre-sardine/models/
 
 *.csv
 *.pgn
@@ -12,8 +13,10 @@ models/
 *.h
 
 # Models
-models/checkpoints/
-models/exported/
+/models/checkpoints/
+/models/exported/
+/legacy/pre-sardine/models/checkpoints/
+/legacy/pre-sardine/models/exported/
 *.pt
 *.tflite
 *.onnx

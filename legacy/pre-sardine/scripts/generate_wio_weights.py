@@ -21,7 +21,8 @@ from pathlib import Path
 
 # Make the package importable when running the script directly
 # (consistent with run_model.py, run_pipeline.py, etc.)
-sys.path.insert(0, str(Path(__file__).parent.parent / "src"))
+sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+import bootstrap  # noqa: E402, F401
 
 import torch
 

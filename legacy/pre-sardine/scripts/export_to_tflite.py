@@ -10,7 +10,8 @@ import sys
 from pathlib import Path
 
 # Runtime path hack (consistent style)
-sys.path.insert(0, str(Path(__file__).parent.parent / "src"))
+sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+import bootstrap  # noqa: E402, F401
 
 import onnx
 from onnx_tf.backend import prepare

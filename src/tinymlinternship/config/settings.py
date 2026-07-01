@@ -9,15 +9,17 @@ DATA_DIR = PROJECT_ROOT / "data"
 RAW_DATA_DIR = DATA_DIR / "raw"
 PROCESSED_DATA_DIR = DATA_DIR / "processed"
 
-# Model paths
-MODELS_DIR = PROJECT_ROOT / "models"
-CHECKPOINTS_DIR = MODELS_DIR / "checkpoints"
-EXPORTED_DIR = MODELS_DIR / "exported"
+# SARDINE pipeline artifacts (active)
+SARDINE_MODELS_DIR = PROJECT_ROOT / "models"
 
-# Arduino / hardware deployment outputs
-ARDUINO_DIR = MODELS_DIR / "arduino"
+# Pre-SARDINE archive (legacy export pipeline)
+LEGACY_DIR = PROJECT_ROOT / "legacy" / "pre-sardine"
+LEGACY_MODELS_DIR = LEGACY_DIR / "models"
+CHECKPOINTS_DIR = LEGACY_MODELS_DIR / "checkpoints"
+EXPORTED_DIR = LEGACY_MODELS_DIR / "exported"
+ARDUINO_DIR = LEGACY_MODELS_DIR / "arduino"
 ARDUINO_MODELS_DIR = ARDUINO_DIR / "models"
-WIO_SKETCH_DIR = PROJECT_ROOT / "Arduino" / "Wio_TinyValueTest"
+WIO_SKETCH_DIR = LEGACY_DIR / "Arduino" / "Wio_TinyValueTest"
 
 # Example specific files
 LICHESS_CSV = RAW_DATA_DIR / "games.csv"

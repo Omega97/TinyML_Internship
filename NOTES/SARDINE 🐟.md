@@ -131,7 +131,7 @@ Balanced training buckets (based on number of pieces $p$, kings included) with *
 
 | Bucket | Condition                      | Phase           |
 | ------ | ------------------------------ | --------------- |
-| 0      | $p < 12$                       | endgame         |
+| 0      | $p \le 12$                     | endgame         |
 | 1      | $p \in [13,21]$, no queen      | late middlegame |
 | 2      | $p \in [13,21]$, queen present | late middlegame |
 | 3      | $p \in [22,27]$, no queen      | middlegame      |

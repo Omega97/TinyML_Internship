@@ -12,6 +12,25 @@
 - Kaggle challenge: [FIDE & Google Efficient Chess AI Challenge](NOTES/FIDE%20%26%20Google%20Efficient%20Chess%20AI%20Challenge.md)
 - Dettagli progetto: [PROJECT.md](PROJECT.md)
 - Note progetto: [NOTES/notes.md](_notes.md)
+- Pre-SARDINE archive: [legacy/pre-sardine/](legacy/pre-sardine/)
+
+---
+
+## SARDINE pipeline (active)
+
+**SARDINE** — *Small Artificial RAM-restricted Deep Intelligent Neural Engine* — is a Wio Terminal chess engine targeting **≥ 2000 Elo** and **~1 s/move**, under **192 KB RAM** and **~500 KB flash**. Full spec: [NOTES/SARDINE 🐟.md](NOTES/SARDINE%20🐟.md).
+
+| Piece | Choice |
+|-------|--------|
+| **Eval** | Bucketed micro NNUE: pruned **716** features → **16** hidden → **1** scalar; **8 experts** (piece-count + queen-split buckets); shared int8 accumulator |
+| **Search (v1)** | Alpha-beta + quiescence, futility, LMR, null-move, lazy eval, iterative deepening; MVV-LVA + killers |
+| **Runtime** | C engine core on device (after PC bring-up in C++); TFT + Serial; minimal UCI for Elo testing |
+| **Training** | Lc0 games (≥ 16 moves), bucket-stratified sampling; **nnue-pytorch** + calibrated int8 export; SPSA for search tuning |
+| **RAM** | TT-dominant (**128–160 KB**); accumulators + stack ~16 KB |
+
+**Build order:** feature encoder (PC + device parity) → search skeleton + TT benchmark on PC → train bucketed NNUE → queen-split ablation → incremental accumulators → C port → full search stack + tuning → **Elo gate**.
+
+Active repo layout: `src/tinymlinternship/` (new engine code), `scripts/download_data.py` + `plot_piece_count_distribution.py`. Old value-net export pipeline → `legacy/pre-sardine/`.
 
 ---
 
@@ -169,16 +188,13 @@ Meeting all'ufficio del prof. Zennaro
 - **FIDE & Google Challenge** — analizzate le soluzioni top sotto vincoli estremi (5 MiB RAM, binario ≤ 64 KiB): micro-NNUE, king mirroring, geometric pruning, SPSA tuning. Note: [NOTES/FIDE & Google Efficient Chess AI Challenge.md](NOTES/FIDE%20%26%20Google%20Efficient%20Chess%20AI%20Challenge.md).
 - **NNUE deep-dive** — nota dedicata su architettura, aggiornamenti incrementali e quantizzazione: [NOTES/NNUE.md](NOTES/NNUE.md).
 - **Analisi dataset** — distribuzione piece-count su 1k e 10k partite Lichess (`piece_count_distribution.xlsx`, `piece_count_distribution_10k.xlsx`); usata per progettare i bucket bilanciati del training.
-- **SARDINE blueprint** — decisioni bloccate in [NOTES/SARDINE 🐟.md](NOTES/SARDINE%20🐟.md); catalogo opzioni in [SARDINE design options.md](NOTES/SARDINE%20design%20options.md). Nome: **S**mall **A**rtificial **R**AM-restricted **D**eep **I**ntelligent **N**eural **E**ngine.
-  - Eval: bucketed micro NNUE `768→16→1` (8 output buckets per piece count)
-  - Runtime: C puro (Cfish-style); search alpha-beta con TT-dominant in RAM
-  - Training: Lc0 + bucket-stratified resampling; nnue-pytorch + SPSA
-  - Target: **≥ 2000 Elo**, mossa pronta in **~1 s**
-  - Daily notes: [2026-06-29.md](2026-06-29.md), [2026-06-30.md](2026-06-30.md)
+- **SARDINE blueprint** — decisioni bloccate in [NOTES/SARDINE 🐟.md](NOTES/SARDINE%20🐟.md); catalogo opzioni in [SARDINE design options.md](NOTES/SARDINE%20design%20options.md). Vedi sezione [SARDINE pipeline (active)](#sardine-pipeline-active) sopra.
+- **1 Luglio** — avvio pipeline SARDINE: pre-SARDINE (value MLP export, Wio int8 benchmark, policy net) archiviato in `legacy/pre-sardine/`; tree attivo ridotto a `src/tinymlinternship/` + script dati. Daily note: [2026-07-01.md](2026-07-01.md).
 
 #### Repo work
 - Notes: [NOTES/Models.md](NOTES/Models.md), [NOTES/chess transformer.md](NOTES/chess%20transformer.md), [NOTES/NNUE.md](NOTES/NNUE.md), [NOTES/Ideas 💡.md](NOTES/Ideas%20💡.md), [NOTES/SARDINE 🐟.md](NOTES/SARDINE%20🐟.md), [NOTES/FIDE & Google Efficient Chess AI Challenge.md](NOTES/FIDE%20%26%20Google%20Efficient%20Chess%20AI%20Challenge.md)
 - Data analysis: [scripts/plot_piece_count_distribution.py](scripts/plot_piece_count_distribution.py) → `piece_count_distribution.xlsx`, `piece_count_distribution_10k.xlsx`
+- Archive: [legacy/pre-sardine/](legacy/pre-sardine/) (export pipeline, `Wio_TinyValueTest`, checkpoints)
 
 ---
 

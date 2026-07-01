@@ -35,8 +35,8 @@ from typing import Optional
 import chess
 
 # Make local imports work when running the script directly
-ROOT = Path(__file__).parent.parent
-sys.path.insert(0, str(ROOT))
+sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+import bootstrap  # noqa: E402, F401
 
 # Import inference helpers from the sibling module (now possible after the path insert above)
 from run_model import load_model, run_value_model, run_policy_model

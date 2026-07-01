@@ -1,12 +1,18 @@
 #!/usr/bin/env python3
-import time
-import torch
 import sys
+import time
 from pathlib import Path
-sys.path.insert(0, str(Path('src').resolve()))
+
+import torch
+
+sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+import bootstrap  # noqa: E402, F401
+
+from tinymlinternship.config.settings import CHECKPOINTS_DIR
 from tinymlinternship.models.value import UltraTinyValueMLP
+
 model = UltraTinyValueMLP()
-model.load_state_dict(torch.load('models/checkpoints/tiny_value_wio.pt', map_location='cpu'))
+model.load_state_dict(torch.load(CHECKPOINTS_DIR / "tiny_value_wio.pt", map_location="cpu"))
 model.eval()
 x = torch.randn(1, 768)
 N = 1000000
