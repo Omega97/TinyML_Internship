@@ -49,6 +49,7 @@ src_paths = ["src"]
 minversion = "7.0"
 addopts = "-ra --tb=short"
 testpaths = ["tests"]
+pythonpath = ["src"]
 
 [tool.mypy]
 python_version = "3.9"

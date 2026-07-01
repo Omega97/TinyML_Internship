@@ -186,9 +186,17 @@ py -3.12 scripts/generate_wio_weights.py --checkpoint models/checkpoints/my_tiny
 
 ## Tests
 
+**SARDINE (active):** see [SARDINE commands.md](SARDINE%20commands.md).
+
 ```bash
-py -3.12 -m pytest
-py -3.12 -m pytest tests/test_policy_inference.py -v
+py -3.12 -m pytest tests/test_features.py -v
+py -3.12 -m pytest -v
+```
+
+**Legacy policy inference:**
+
+```bash
+py -3.12 -m pytest legacy/pre-sardine/tests/test_policy_inference.py -v
 ```
 
 ---

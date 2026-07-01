@@ -6,7 +6,8 @@ Central hub for all project notes and references.
 
 ## Commands
 
-- [Commands.md](Commands.md) — Useful commands to run in the project
+- [Commands.md](Commands.md) — Useful commands to run in the project (legacy export pipeline)
+- [SARDINE commands.md](SARDINE%20commands.md) — Tests and console snippets for the active SARDINE pipeline
 
 ---
 

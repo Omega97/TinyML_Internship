@@ -1,9 +1,5 @@
 # SARDINE
 
-```
-Small Artificial RAM-restricted Deep Intelligent Neural Engine
-```
-
 ![SARDINE logo](../images/SARDINE-logo-dark-small.png)
 
 Chess engine for the **Wio Terminal** — neural evaluation + alpha-beta search, maximizing **Elo per byte** under 192 KB RAM / ~500 KB flash.
@@ -127,7 +123,7 @@ $$6 \times 2 \times 64 - 2\times16 - 32 + 4 + 8 = 716$$
 
 ### Output buckets
 
-Balanced training buckets (based on number of pieces $p$, kings included) with **queen-split** in middlegame/opening bands:
+Balanced training buckets (based on number of pieces $p$, kings included) with **queen-split** (for now) in middlegame/opening bands:
 
 | Bucket | Condition                      | Phase           |
 | ------ | ------------------------------ | --------------- |
