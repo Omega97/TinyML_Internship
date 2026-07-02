@@ -1,4 +1,3 @@
-# SARDINE
 
 ![SARDINE logo](../images/SARDINE-logo-dark-small.png)
 
@@ -18,12 +17,28 @@ Chess engine for the **Wio Terminal** — neural evaluation + alpha-beta search,
 
 | Parameter     | Decision                                                                                 |
 | ------------- | ---------------------------------------------------------------------------------------- |
-| **Elo**       | ≥ **2000** (reference: FIDE Kaggle bots ~2500 Elo at 5 MiB RAM)                          |
+| **Elo**       | **~ 1700** (gate minimo; se superiamo, meglio)                                          |
 | **Move time** | Best move within **~1 s**                                                                |
 | **MCTS**      | Feasible on-device (1–50 ms/eval); **v2 only** — v1 uses alpha-beta                      |
 | **Nets**      | **Separate nets** — NNUE for eval; distinct policy head deferred until after v1 Elo gate |
 
-**Node budget reference:** Urusov's ESP32 engine (~20 kNps, heuristics-only, ~2023 Elo) sets a baseline for search throughput without NNUE. SARDINE's reachable depth in ~1 s depends on measured eval latency + move-gen overhead on Wio — model empirically once the search skeleton exists (see Open Questions).
+**Node budget reference:** Urusov's ESP32 engine (~20 kNps, heuristics-only, ~2023 Elo) sets a baseline for search throughput without NNUE. SARDINE's reachable depth in ~1 s depends on measured eval latency + move-gen overhead on Wio — model empirically once the search skeleton exists.
+
+---
+
+## Repo status (2026-07-02)
+
+Riferimento onesto rispetto al blueprint (vedi anche [ai-feed.md](../ai-feed.md)):
+
+| Area | Stato |
+|------|--------|
+| **Feature encoder (step 1)** | In corso — `src/tinymlinternship/features/`: 716 sparse, dual-perspective, bucket router; test su PC |
+| **Search + TT** | Non iniziato — prossimo: skeleton C++ su PC (`engine/`) |
+| **NNUE training** | Non iniziato — serve subset Lc0 + nnue-pytorch |
+| **Wio runtime** | Solo legacy value-MLP in `legacy/pre-sardine/`; nuovo engine non ancora portato |
+| **Dati** | Kaggle `games.csv` (~100 MB) per test; **Lc0 non ancora nel repo** |
+
+Il percorso attivo è `src/` + `scripts/download_data.py` / `plot_piece_count_distribution.py`. Tutto il vecchio export MLP → `legacy/pre-sardine/`.
 
 ---
 
@@ -37,7 +52,7 @@ flowchart TD
     D --> E["Incremental accumulators<br/>on device"]
     E --> F["Port search + NNUE to C<br/>benchmark -O3 vs -Os"]
     F --> G["Full search stack + tuning<br/>quiescence · futility · LMR · null-move ·<br/>lazy eval · iterative deepening · SPSA"]
-    G --> H{"Elo gate<br/>≥ 2000?"}
+    G --> H{"Elo gate<br/>≥ 1700?"}
     H -- "No" --> I["Iterate:<br/>SCReLU · quantization-aware training ·<br/>TT format · bucket scheme"]
     I --> G
     H -- "Yes" --> J["v2 scope<br/>minimal UCI polish · policy head ·<br/>SCReLU / QAT / transformer only if needed"]
@@ -99,11 +114,12 @@ Input structure:
 
 $$6 \times 2 \times 64 - 2\times16 - 32 + 4 + 8 = 716$$
 
-- $6\times2\times64 = 716$ (piece types × colors × squares)
-- $-2\times16 = -32$ (pawn rank pruning: 2 colors × 16 illegal squares)
-- $-32$ (king mirroring: one king plane 64→32)
-- $+4$ (castling rights)
-- $+8$ (en passant file)
+- $768$ raw piece-square (6 types × 2 colors × 64 squares)
+- $-32$ pawn ranks 1/8 omitted from index map
+- $-32$ perspective-king plane compressed 64→32 (enemy king keeps full 64-square resolution)
+- $+4$ castling rights · $+8$ en passant file
+
+Implementazione: `index_map.py`, `encoder.py`, `mirror.py`, `bucket.py` — test: `tests/test_features.py`.
 
 **Separate pattern tables:** skip for v1. Geometric zeros (impossible pawn ranks, king mirroring, magnitude pruning) already capture the cheapest compression wins; a handcrafted pattern cache adds flash complexity for uncertain gain until the Elo gap is measured.
 
@@ -184,7 +200,7 @@ Informed by `piece_count_distribution_10k.xlsx` (games ≥ 16 moves). Training u
 
 **Scale calibration:** train fp32 first, histogram post-training weights, set per-tensor scales onto $[-127, 127]$ with minimal clipping.
 
-**SCReLU fallback** — first upgrade if CReLU plateaus below ≥2000 Elo: clip before square (int16), multiply-accumulate in int32.
+**SCReLU fallback** — first upgrade if CReLU plateaus below ≥1700 Elo: clip before square (int16), multiply-accumulate in int32.
 
 **Grapheus / quantization-aware training:** skip for v1. Stay on **nnue-pytorch** + calibrated post-training quantization; investigate QAT only if the fp32→int8 gap threatens the Elo gate.
 
@@ -212,9 +228,11 @@ Phased rollout:
 | **Flash** | Balanced | ~10% weights; rest search code + tables; **no opening book v1** |
 | **RAM** | TT-dominant | TT **128–160 KB**; accumulators + stack ~16 KB; scratch ~16 KB |
 
+**RAM risk:** 192 KB − 160 KB TT ≈ 32 KB margine — **TFT_eSPI buffer (~30 KB)** può consumare quasi tutto. Per partite reali: TFT off durante search, Serial/UCI per debug; TFT solo bring-up.
+
 **Opening book:** defer until after Elo gate. Dog ships one, but flash is better spent on search + NNUE for v1.
 
-**Dog (ESP32) reference:** Dog fits NNUE + TT + book in ~320 KB RAM at ~2000+ Elo on-device — proof the target is feasible. RAM layout study still useful (see Open Questions) but TT-dominant plan stands.
+**Dog (ESP32) reference:** Dog fits NNUE + TT + book in ~320 KB RAM at ~1700+ Elo on-device — proof the target is feasible. RAM layout study still useful (see Open Questions) but TT-dominant plan stands.
 
 #### Transposition table
 
@@ -241,10 +259,19 @@ Design entry format first; slot count follows from 128–160 KB budget. Prototyp
 
 ### Training data
 
-- Primary: **Lc0** high-quality games
-- **Games ≥ 16 moves** (consistent with distribution analysis)
-- **Bucket-stratified** resampling (queen-split rules)
-- Stockfish self-play labels optional augment
+**Primary (v1): subset Lc0 — target ~1–2 GB in repo**, non il corpus completo (centinaia di GB).
+
+| Fonte | Ruolo | Note |
+|-------|--------|------|
+| **Lc0 training games** | Addestramento principale | Scaricare subset filtrato (es. partite forti, formato training-data / `.bin` Lc0); obiettivo **~1–2 GB** locale — sufficiente per prima NNUE bucketed |
+| **Stockfish labels** | Target eval (centipawn) | Self-play o analisi SF su posizioni campionate dal subset Lc0 |
+| **Kaggle `games.csv`** | Smoke test / statistiche | Già via `scripts/download_data.py`; **non** per training NNUE (partite deboli, label outcome) |
+| **Filtro** | Games **≥ 16 mosse** | Allineato a `piece_count_distribution_10k.xlsx` |
+| **Resampling** | Bucket-stratified | Queen-split (`bucket_id()`); vedi tabella Output buckets |
+
+**Prossimo script:** `scripts/download_lc0.py` (o equivalente) — download incrementale, checksum, path sotto `data/raw/lc0/`. Valutare mirror ufficiali Lc0 / subset pre-processati della community prima di scaricare TB interi.
+
+**Etichette:** nnue-pytorch si aspetta eval in centipawn da engine forte (Stockfish su subset Lc0 è l’opzione pragmatica se non si hanno le eval Lc0 native nel dump).
 
 ---
 
@@ -260,8 +287,23 @@ Design entry format first; slot count follows from 128–160 KB budget. Prototyp
 
 **TFT + Serial** for on-device display and debug output.
 
-**Minimal UCI over Serial:** yes — required for standardized Elo testing against the ≥2000 gate. Full UCI spec not needed; implement enough of the protocol for engine-vs-engine tools (cutechess-cli, etc.). Hardcoded FEN remains fine for early bring-up; UCI lands before or during Elo gate testing.
+**Minimal UCI over Serial:** yes — required for standardized Elo testing against the ≥1700 gate. Full UCI spec not needed; implement enough of the protocol for engine-vs-engine tools (cutechess-cli, etc.). Hardcoded FEN remains fine for early bring-up; UCI lands before or during Elo gate testing.
 
 *TFT = Thin-Film Transistor LCD on the Wio Terminal (2.4" onboard screen).*
+
+---
+
+## Near-term roadmap (allineato al repo)
+
+Ordine consigliato dopo la review [ai-feed.md](../ai-feed.md):
+
+1. **Chiudere step 1** — golden FEN test, gate encoder 716 + bucket
+2. **Search skeleton PC** — alpha-beta + quiescence, perft, eval hook (score costante), benchmark nodi/s
+3. **Dati** — scaricare **~1–2 GB** subset Lc0; preprocessing verso nnue-pytorch
+4. **Train bucketed NNUE** — shared accumulator 716→16, 8 teste; CReLU + int8 export
+5. **TT + search tuning** — formato entry, MVV-LVA, iterative deepening, SPSA
+6. **Port Wio** — solo dopo parity PC; incremental accumulators; TFT opzionale in gioco
+
+**Non fare ora:** policy head, MCTS, opening book, QAT — dopo gate **≥ 1700 Elo**.
 
 ---
