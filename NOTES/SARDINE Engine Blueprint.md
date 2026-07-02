@@ -17,7 +17,7 @@ Chess engine for the **Wio Terminal** — neural evaluation + alpha-beta search,
 
 | Parameter     | Decision                                                                                 |
 | ------------- | ---------------------------------------------------------------------------------------- |
-| **Elo**       | **~ 1700** (gate minimo; se superiamo, meglio)                                          |
+| **Elo**       | **~ 1700** (gate minimo; se superiamo, meglio)                                           |
 | **Move time** | Best move within **~1 s**                                                                |
 | **MCTS**      | Feasible on-device (1–50 ms/eval); **v2 only** — v1 uses alpha-beta                      |
 | **Nets**      | **Separate nets** — NNUE for eval; distinct policy head deferred until after v1 Elo gate |
@@ -65,30 +65,49 @@ flowchart TD
 
 ## MoE + NNUE Architecture
 
+
 ```mermaid
 flowchart TD
-    FEN["FEN position"] --> FEAT["Pruned 716 features<br/>(zero impossible pawn ranks +<br/>mirrored king coordinates)"]
+    subgraph A_row["Feature encoding"]
+        A1["Own-side features<br/>716-dim, own king mirrored"]
+        A2["Opponent-side features<br/>716-dim, board mirrored for opp"]
+    end
 
-    FEAT --> ACC["Shared Accumulator<br/>716 → 16, dual-perspective<br/>int8 weights / int16 accumulators<br/>CReLU · lazy add/sub updates"]
+    B["Shared sparse FFNN <br/>(white POV)<br/>716 → 16<br/>same weights, called twice"]
 
-    ACC --> BUCKET{"Bucket selector<br/>piece count + queen presence"}
+    subgraph C_row["Accumulators"]
+        C1["My accumulator<br/>16 values, own POV"]
+        C2["Opponent accumulator<br/>16 values, their POV"]
+    end
 
-    BUCKET -->|"p < 12"| E0["Expert 0<br/>endgame"]
-    BUCKET -->|"..."| E1["..."]
-    BUCKET -->|"p = 32"| E7["Expert 7<br/>early opening"]
+    D["Concatenate<br/>own ‖ opponent → 32-dim"]
+    E{"Bucket Router<br/>routes to 1 of 8 experts"}
+    F["Selected NNUE expert head<br/>32 → 1"]
+    G["Eval score in [-1,+1]"]
 
-    E0 & E1 & E7 --> OUT["Scalar eval score<br/>(16 → 1 per expert)"]
+    A1 --> B
+    A2 --> B
+    B --> C1
+    B --> C2
+    C1 --> D
+    C2 --> D
+    D --> E
+    E --> F
+    F --> G
 
-    OUT --> SEARCH["Alpha-beta + quiescence<br/>futility · LMR · null-move ·<br/>lazy eval · iterative deepening"]
-    SEARCH <--> TT[("TT: 128–160 KB<br/>MVV-LVA move ordering")]
-    SEARCH --> BEST["Best move"]
-    BEST --> IO["TFT + Serial<br/>minimal UCI for testing"]
-
-    style ACC fill:#bbf,stroke:#333,stroke-width:2px
-    style BUCKET fill:#fdb,stroke:#333,stroke-width:2px
+    style A1 fill:#e6f1fb,stroke:#185fa5,stroke-width:1px
+    style C1 fill:#e6f1fb,stroke:#185fa5,stroke-width:1px
+    style A2 fill:#e1f5ee,stroke:#0f6e56,stroke-width:1px
+    style C2 fill:#e1f5ee,stroke:#0f6e56,stroke-width:1px
+    style B fill:#eeedfe,stroke:#534ab7,stroke-width:1px
+    style D fill:#eeedfe,stroke:#534ab7,stroke-width:1px
+    style E fill:#eeedfe,stroke:#534ab7,stroke-width:1px
+    style F fill:#eeedfe,stroke:#534ab7,stroke-width:1px
+    style G fill:#f1efe8,stroke:#5f5e5a,stroke-width:1px
 ```
 
-The accumulator (blue) is computed once per position and shared across all 8 experts — only the output head selected by the bucket router (orange) changes. Incremental add/sub updates on the accumulator are bucket-agnostic.
+
+The accumulator (green) is computed once per position and shared across all 8 experts — only the output head selected by the bucket router (orange) changes. Incremental add/sub updates on the accumulator are bucket-agnostic.
 
 ---
 
@@ -125,9 +144,59 @@ Implementazione: `index_map.py`, `encoder.py`, `mirror.py`, `bucket.py` — test
 
 ---
 
+### NNUE Architecture
+
+```mermaid
+flowchart TD
+    subgraph INPUT["📥 INPUT LAYER"]
+        X["716 sparse features<br/>(piece-square + castling + en passant)"]
+    end
+
+    subgraph ACC["⚡ SHARED ACCUMULATOR L1 (same weights, called twice)"]
+        W["Weights: 716 × 16<br/>dtype: int8<br/>update: lazy add/sub"]
+        A1["Own-POV accumulator<br/>16 × int16"]
+        A2["Opponent-POV accumulator<br/>16 × int16"]
+        C1["CReLU: clamp 0..127<br/>own POV, int8[16]"]
+        C2["CReLU: clamp 0..127<br/>opp POV, int8[16]"]
+        W --> A1 --> C1
+        W --> A2 --> C2
+    end
+
+    subgraph CONCAT["🔗 DUAL PERSPECTIVE"]
+        D["Concat: 16 + 16 = 32<br/>(own POV + opponent POV,<br/>by side to move)"]
+    end
+
+    subgraph EXPERT["🧠 EXPERT HEAD (selected bucket)"]
+        E["Weights: 32 × 1<br/>dtype: int8"]
+        MAC["Multiply-accumulate<br/>dtype: int32"]
+        E --> MAC
+    end
+
+    subgraph OUT["📊 EVALUATION"]
+        Y["Scalar eval score<br/>(side to move perspective)"]
+    end
+
+    X -->|"own-side features"| W
+    X -->|"opponent-side features"| W
+    C1 --> D
+    C2 --> D
+    D --> EXPERT
+    MAC --> Y
+
+    style INPUT fill:#e8f4f8,stroke:#2196F3,stroke-width:2px
+    style ACC fill:#e8f5e9,stroke:#4CAF50,stroke-width:2px
+    style CONCAT fill:#fff3e0,stroke:#FF9800,stroke-width:2px
+    style EXPERT fill:#ede7f6,stroke:#673AB7,stroke-width:2px
+    style OUT fill:#e0f2f1,stroke:#009688,stroke-width:2px
+```
+
+---
+
 ### Evaluation
 
 **Bucketed micro NNUE:** `716 → 16 → 1`, dual-perspective, **8 output weight sets** (experts) selected by position bucket.
+
+**Activations:** **CReLU** on the shared hidden layer (716 → 16); **tanh** on the final scalar output (16 → 1 per expert). The tanh is never computed at runtime — apply a **precomputed lookup table** indexed by the clipped int16 dot-product, mapping to a fixed-range centipawn score. LUT lives in flash (~1–2 KB for 256–512 entries); training in `nnue-pytorch` uses tanh so export matches inference.
 
 **Shared accumulator:** all experts share the same first hidden layer. The accumulator depends only on board features, not on which output bucket is active — compute it once per position, then route to the correct output head. Matches Stockfish-style bucketed NNUE; incremental add/sub updates stay bucket-agnostic.
 
@@ -196,11 +265,14 @@ Informed by `piece_count_distribution_10k.xlsx` (games ≥ 16 moves). Training u
 | Weights | **int8** |
 | Biases | **int16** |
 | Accumulators | **int16** |
-| Activation | **CReLU** (v1) |
+| Hidden activation | **CReLU** (v1) |
+| Output activation | **tanh** — **LUT** at inference (no runtime `tanh`) |
 
 **Scale calibration:** train fp32 first, histogram post-training weights, set per-tensor scales onto $[-127, 127]$ with minimal clipping.
 
-**SCReLU fallback** — first upgrade if CReLU plateaus below ≥1700 Elo: clip before square (int16), multiply-accumulate in int32.
+**Tanh LUT:** after int16 output-head dot-product, clip to LUT index range, fetch centipawn score from table. Generate LUT offline from training scale + desired eval range; verify fp32 tanh vs LUT max error on validation set before Wio export.
+
+**SCReLU fallback** — first upgrade if hidden CReLU plateaus below ≥1700 Elo: clip before square (int16), multiply-accumulate in int32 (avoid overflow). Output tanh + LUT unchanged.
 
 **Grapheus / quantization-aware training:** skip for v1. Stay on **nnue-pytorch** + calibrated post-training quantization; investigate QAT only if the fp32→int8 gap threatens the Elo gate.
 
@@ -278,6 +350,7 @@ Design entry format first; slot count follows from 128–160 KB budget. Prototyp
 ### Training pipeline
 
 - **nnue-pytorch** for v1 network training (not Grapheus)
+- Hidden **CReLU** + output **tanh** in the training graph; emit tanh LUT alongside int8 weights at export
 - Calibrated post-training int8 export; measure fp32→int8 gap before considering QAT
 - **SPSA** post-hoc for search/heuristic tuning
 
@@ -300,7 +373,7 @@ Ordine consigliato dopo la review [ai-feed.md](../ai-feed.md):
 1. **Chiudere step 1** — golden FEN test, gate encoder 716 + bucket
 2. **Search skeleton PC** — alpha-beta + quiescence, perft, eval hook (score costante), benchmark nodi/s
 3. **Dati** — scaricare **~1–2 GB** subset Lc0; preprocessing verso nnue-pytorch
-4. **Train bucketed NNUE** — shared accumulator 716→16, 8 teste; CReLU + int8 export
+4. **Train bucketed NNUE** — shared accumulator 716→16, 8 teste; hidden CReLU, output tanh; int8 export + tanh LUT
 5. **TT + search tuning** — formato entry, MVV-LVA, iterative deepening, SPSA
 6. **Port Wio** — solo dopo parity PC; incremental accumulators; TFT opzionale in gioco
 
