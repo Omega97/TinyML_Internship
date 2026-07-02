@@ -4,7 +4,7 @@ Quick snippets to run **active** SARDINE code (feature encoder, tests). Run from
 
 **Convention:** `py -3.12` on Windows (`python3` on Linux/macOS).
 
-Spec: [SARDINE 🐟.md](SARDINE%20🐟.md) · Legacy export pipeline: [legacy/pre-sardine/](../legacy/pre-sardine/)
+Spec: [SARDINE.md](SARDINE%20Engine%20Blueprint.md) · Legacy export pipeline: [legacy/pre-sardine/](../legacy/pre-sardine/)
 
 ---
 
@@ -21,7 +21,7 @@ py -3.12 -m pip install -e ".[dev]"
 
 ## Tests — feature encoder (`tests/test_features.py`)
 
-13 tests: index map (716 dims), king mirroring, `encode_perspective`, `encode_dual`, `bucket_id`.
+29 tests: index map (716 dims), king mirroring, `encode_perspective`, `encode_dual`, `bucket_id`, golden FEN snapshots.
 
 ### Option A — pytest (recommended)
 
