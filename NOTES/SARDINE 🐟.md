@@ -4,24 +4,24 @@
 
 Chess engine for the **Wio Terminal** — neural evaluation + alpha-beta search, maximizing **Elo per byte** under 192 KB RAM / ~500 KB flash.
 
-*Locked 2026-06-30. Alternative designs considered: [SARDINE design options.md](SARDINE%20design%20options.md).*
+*Alternative designs considered: [SARDINE design options.md](SARDINE%20design%20options.md).*
 
 ---
 
 ## Mission
 
-Playable chess bot on a tiny device: no cloud, no GPU, extreme optimization and efficiency. 
+> Playable chess bot on a tiny device: no cloud, no GPU. Extreme optimization and efficiency. 
 
 ---
 
 ## Targets
 
-| Parameter | Decision |
-|-----------|----------|
-| **Elo** | ≥ **2000** (reference: FIDE Kaggle bots ~2500 Elo at 5 MiB RAM) |
-| **Move time** | Best move within **~1 s** |
-| **MCTS** | Feasible on-device (1–50 ms/eval); **v2 only** — v1 uses alpha-beta |
-| **Nets** | **Separate nets** — NNUE for eval; distinct policy head deferred until after v1 Elo gate |
+| Parameter     | Decision                                                                                 |
+| ------------- | ---------------------------------------------------------------------------------------- |
+| **Elo**       | ≥ **2000** (reference: FIDE Kaggle bots ~2500 Elo at 5 MiB RAM)                          |
+| **Move time** | Best move within **~1 s**                                                                |
+| **MCTS**      | Feasible on-device (1–50 ms/eval); **v2 only** — v1 uses alpha-beta                      |
+| **Nets**      | **Separate nets** — NNUE for eval; distinct policy head deferred until after v1 Elo gate |
 
 **Node budget reference:** Urusov's ESP32 engine (~20 kNps, heuristics-only, ~2023 Elo) sets a baseline for search throughput without NNUE. SARDINE's reachable depth in ~1 s depends on measured eval latency + move-gen overhead on Wio — model empirically once the search skeleton exists (see Open Questions).
 
