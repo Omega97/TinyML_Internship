@@ -22,7 +22,7 @@ Central hub for all project notes and references.
 
 ## Chess Domain
 
-- [SARDINE 🐟.md](SARDINE%20🐟.md) — Locked engine design decisions.
+- [SARDINE.md](SARDINE%20Engine%20Blueprint.md) — Engine blueprint (target ~1700 Elo, pipeline, dati Lc0)
 - [SARDINE design options.md](SARDINE%20design%20options.md) — Full component option catalog.
 - [Ideas 💡.md](Ideas%20💡.md) — Raw design ideas feeding into SARDINE.
 - [NNUE.md](NNUE.md) — Efficiently Updatable Neural Network evaluation: architecture, incremental updates, quantization, advanced techniques.
