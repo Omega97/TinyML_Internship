@@ -8,7 +8,7 @@
 - [Thesis repo](https://github.com/Omega97/world-models-thesis)
 - [Internship repo](https://github.com/Omega97/TinyML_Internship)
 - Modelli online: [NOTES/Models.md](NOTES/Models.md)
-- Engine blueprint: [NOTES/SARDINE 🐟.md](NOTES/SARDINE%20🐟.md) · [design options](NOTES/SARDINE%20design%20options.md)
+- Engine blueprint: [NOTES/SARDINE Engine Blueprint.md](NOTES/SARDINE%20Engine%20Blueprint.md) · [design options](NOTES/SARDINE%20design%20options.md)
 - Kaggle challenge: [FIDE & Google Efficient Chess AI Challenge](NOTES/FIDE%20%26%20Google%20Efficient%20Chess%20AI%20Challenge.md)
 - Dettagli progetto: [PROJECT.md](PROJECT.md)
 - Note progetto: [NOTES/notes.md](_notes.md)
@@ -18,19 +18,30 @@
 
 ## SARDINE pipeline (active)
 
-**SARDINE** — *Small Artificial RAM-restricted Deep Intelligent Neural Engine* — is a Wio Terminal chess engine targeting **≥ 2000 Elo** and **~1 s/move**, under **192 KB RAM** and **~500 KB flash**. Full spec: [NOTES/SARDINE 🐟.md](NOTES/SARDINE%20🐟.md).
+**SARDINE** — *Small Artificial RAM-restricted Deep Intelligent Neural Engine* — is a Wio Terminal chess engine targeting **~1700 Elo** and **~1 s/move**, under **192 KB RAM** and **~500 KB flash**. Full spec: [NOTES/SARDINE Engine Blueprint.md](NOTES/SARDINE%20Engine%20Blueprint.md).
 
 | Piece | Choice |
 |-------|--------|
-| **Eval** | Bucketed micro NNUE: pruned **716** features → **16** hidden → **1** scalar; **8 experts** (piece-count + queen-split buckets); shared int8 accumulator |
+| **Eval (target)** | Bucketed micro NNUE: shared **716 → 16** (dual POV) → concat **32** → expert **32 → 1** (×8 buckets); CReLU hidden, **tanh LUT** output; int8 weights |
+| **Eval (now)** | **v0.1 bring-up:** hand-crafted eval (HCE) — placeholder until NNUE is trained |
 | **Search (v1)** | Alpha-beta + quiescence, futility, LMR, null-move, lazy eval, iterative deepening; MVV-LVA + killers |
-| **Runtime** | C engine core on device (after PC bring-up in C++); TFT + Serial; minimal UCI for Elo testing |
-| **Training** | Lc0 games (≥ 16 moves), bucket-stratified sampling; **nnue-pytorch** + calibrated int8 export; SPSA for search tuning |
+| **Search (now)** | **v0.1:** 1-ply lookahead over all legal moves (`search_best_move`) |
+| **Runtime** | C engine core on device (after PC bring-up); TFT + Serial; minimal UCI for Elo testing |
+| **Training** | Lc0 subset (~1–2 GB), bucket-stratified sampling; **nnue-pytorch** + int8 export; SPSA for search tuning |
 | **RAM** | TT-dominant (**128–160 KB**); accumulators + stack ~16 KB |
 
-**Build order:** feature encoder (PC + device parity) → search skeleton + TT benchmark on PC → train bucketed NNUE → queen-split ablation → incremental accumulators → C port → full search stack + tuning → **Elo gate**.
+**Build order:** feature encoder ✅ → engine bring-up (HCE) ✅ → search skeleton + TT on PC → train bucketed NNUE → incremental accumulators → C port → full search + **Elo gate ≥ 1700**.
 
-Active repo layout: `src/tinymlinternship/` (new engine code), `scripts/download_data.py` + `plot_piece_count_distribution.py`. Old value-net export pipeline → `legacy/pre-sardine/`.
+**Active code:** `src/tinymlinternship/features/` (716 encoder), `src/tinymlinternship/engine/` (v0.1), `src/tinymlinternship/visualization/` (pygame + GIF). Scripts: `run_engine.py`, `record_engine_game.py`, `download_data.py`. Legacy value-net → `legacy/pre-sardine/`.
+
+**Replay a self-play game as GIF** (writes `images/sardine_game.gif`):
+
+```bash
+pip install -e ".[viz]"
+py -3.12 scripts/record_engine_game.py
+```
+
+See [NOTES/Commands.md](NOTES/Commands.md) for all commands.
 
 ---
 
@@ -188,11 +199,15 @@ Meeting all'ufficio del prof. Zennaro
 - **FIDE & Google Challenge** — analizzate le soluzioni top sotto vincoli estremi (5 MiB RAM, binario ≤ 64 KiB): micro-NNUE, king mirroring, geometric pruning, SPSA tuning. Note: [NOTES/FIDE & Google Efficient Chess AI Challenge.md](NOTES/FIDE%20%26%20Google%20Efficient%20Chess%20AI%20Challenge.md).
 - **NNUE deep-dive** — nota dedicata su architettura, aggiornamenti incrementali e quantizzazione: [NOTES/NNUE.md](NOTES/NNUE.md).
 - **Analisi dataset** — distribuzione piece-count su 1k e 10k partite Lichess (`piece_count_distribution.xlsx`, `piece_count_distribution_10k.xlsx`); usata per progettare i bucket bilanciati del training.
-- **SARDINE blueprint** — decisioni bloccate in [NOTES/SARDINE 🐟.md](NOTES/SARDINE%20🐟.md); catalogo opzioni in [SARDINE design options.md](NOTES/SARDINE%20design%20options.md). Vedi sezione [SARDINE pipeline (active)](#sardine-pipeline-active) sopra.
-- **1 Luglio** — avvio pipeline SARDINE: pre-SARDINE (value MLP export, Wio int8 benchmark, policy net) archiviato in `legacy/pre-sardine/`; tree attivo ridotto a `src/tinymlinternship/` + script dati. Daily note: [2026-07-01.md](2026-07-01.md).
+- **SARDINE blueprint** — decisioni in [NOTES/SARDINE Engine Blueprint.md](NOTES/SARDINE%20Engine%20Blueprint.md); catalogo opzioni in [SARDINE design options.md](NOTES/SARDINE%20design%20options.md). Vedi sezione [SARDINE pipeline (active)](#sardine-pipeline-active) sopra.
+- **1 Luglio** — avvio pipeline SARDINE: pre-SARDINE archiviato in `legacy/pre-sardine/`; encoder 716 in `src/tinymlinternship/features/`. Daily note: [2026-07-01.md](2026-07-01.md).
+- **2 Luglio** — step 1 chiuso (golden FEN, 29 test); **engine v0.1** (HCE + 1-ply search); self-play registrato in **`sardine_game.gif`** via pygame + gifpgn. Daily note: [2026-07-02.md](2026-07-02.md).
 
 #### Repo work
-- Notes: [NOTES/Models.md](NOTES/Models.md), [NOTES/chess transformer.md](NOTES/chess%20transformer.md), [NOTES/NNUE.md](NOTES/NNUE.md), [NOTES/Ideas 💡.md](NOTES/Ideas%20💡.md), [NOTES/SARDINE 🐟.md](NOTES/SARDINE%20🐟.md), [NOTES/FIDE & Google Efficient Chess AI Challenge.md](NOTES/FIDE%20%26%20Google%20Efficient%20Chess%20AI%20Challenge.md)
+- Features: `src/tinymlinternship/features/` — 716 encoder, bucket router, 29 tests
+- Engine: `src/tinymlinternship/engine/` — HCE + `search_best_move` (v0.1)
+- Visualization: `src/tinymlinternship/visualization/` + [scripts/record_engine_game.py](scripts/record_engine_game.py) → `sardine_game.gif`
+- Notes: [NOTES/Models.md](NOTES/Models.md), [NOTES/chess transformer.md](NOTES/chess%20transformer.md), [NOTES/NNUE.md](NOTES/NNUE.md), [NOTES/SARDINE Engine Blueprint.md](NOTES/SARDINE%20Engine%20Blueprint.md), [NOTES/FIDE & Google Efficient Chess AI Challenge.md](NOTES/FIDE%20%26%20Google%20Efficient%20Chess%20AI%20Challenge.md)
 - Data analysis: [scripts/plot_piece_count_distribution.py](scripts/plot_piece_count_distribution.py) → `piece_count_distribution.xlsx`, `piece_count_distribution_10k.xlsx`
 - Archive: [legacy/pre-sardine/](legacy/pre-sardine/) (export pipeline, `Wio_TinyValueTest`, checkpoints)
 

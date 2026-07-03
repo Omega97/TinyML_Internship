@@ -13,7 +13,7 @@ Stesso ordine del diagramma _Build Pipeline_ nel blueprint.
 - [x] Pruned **716** features (pawn prune, king mirror, castling, EP) — `index_map.py`, `encoder.py`, `mirror.py`
 - [x] Dual-perspective sparse input — `encode_dual()`
 - [x] Enemy-king full 64-square resolution (only the perspective king is mirror-compressed to 32 slots)
-- [ ] **Castling coordinate-frame fix** — `_append_castling_features` must read from the mirrored `view`, not the unmirrored `base`, or castling rights get computed in the wrong file-frame whenever a horizontal flip fires (same bug class as the EP fix already applied). Confirm this landed before trusting the "done" status on the row above.
+- [x] **Castling coordinate-frame fix** — rights from `base` + K/Q swap if mirrored (EP from `view`); golden startpos + `test_castling_*`
 - [x] 8-bucket router (piece count + queen-split), boundaries closed at **p ≤ 12** (no gap)
 - [x] Gate test (`tests/test_features.py`, golden FEN) — **29** tests
 - [ ] Encoder parity on **device** (C, with search) — step F
@@ -23,7 +23,9 @@ Stesso ordine del diagramma _Build Pipeline_ nel blueprint.
 ### B · Search skeleton on PC
 
 - [ ] perft
-- [ ] Eval hook (pluggable; HCE bring-up ok, NNUE later) — _partial: HCE v0.1, 1-ply only, no depth search yet_
+- [x] HCE eval bring-up — `evaluate_hce` (`tests/test_engine.py`)
+- [x] 1-ply search bring-up — `search_best_move` (not alpha-beta / depth)
+- [ ] Eval hook at depth-search nodes (NNUE swap-in later)
 - [ ] TT entry format prototype + PC benchmark
 - [ ] Alpha-beta (blueprint: C++ on PC first)
 - [ ] Nodes/s benchmark on PC
@@ -35,7 +37,7 @@ Stesso ordine del diagramma _Build Pipeline_ nel blueprint.
 
 Architecture: shared **716 → 16** (int8, dual call, **same weights applied twice** — own-POV + opponent-POV, concatenated by side-to-move, not by fixed color) → concat **32** → router → expert **32 → 1** × 8 · **CReLU** hidden **and output** (no tanh — tanh LUT was explicitly rejected earlier in favor of CReLU to avoid extra flash + int8-quantization complexity; correct this if it's still in the design anywhere downstream).
 
-- [ ] Lc0 subset **~1–2 GB** (`data/raw/lc0/`, `download_lc0.py`)
+- [x] Lc0 subset **~1–2 GB** (`data/raw/lc0/`, `scripts/download_lc0.py`)
 - [ ] Games **≥ 16** moves; bucket-stratified resampling
 - [ ] Stockfish centipawn labels
 - [ ] **nnue-pytorch** train (shared accumulator + 8 heads)
@@ -43,6 +45,7 @@ Architecture: shared **716 → 16** (int8, dual call, **same weights applied twi
 - [ ] Measure fp32→int8 eval-error gap — **decide acceptance threshold** (e.g. <5–10 centipawn avg delta) before treating PTQ as sufficient
 - [ ] Magnitude pruning ~80% post-training
 - [x] Kaggle `games.csv` smoke only (not NNUE training) — `scripts/download_data.py`
+- [x] Piece-count distribution for bucket design — `plot_piece_count_distribution.py`, `excel/piece_count_distribution_10k.xlsx`
 
 ---
 
@@ -82,14 +85,14 @@ Phased rollout dal blueprint (tutto v1, non rinviato salvo dove indicato):
 - [ ] **Iterative deepening** (TT stable)
 - [ ] TT **128–160 KB** — format decision: ~10 B tight pack vs 16 B byte-aligned entry, decided by wall-clock nodes/sec + depth reached on Wio, **not** hit-rate alone
 - [ ] Move ordering: **MVV-LVA** + **killer moves** (depth > 4)
-- [ ] Move ordering: resolve whether **countermove history** (mentioned under Policy) is actually in v1 scope — currently not integrated into the move-ordering plan above
+- [x] Countermove history — **out of v1** per blueprint (killers only at depth > 4)
 - [ ] **SPSA** search/heuristic tuning
 
 ---
 
 ### H · Elo gate
 
-- [ ] **≥ 1700 Elo** ⚠️ (see flag at top — confirm this isn't meant to be 2000) — e.g. cutechess-cli
+- [ ] **≥ 1700 Elo** (blueprint gate) — e.g. cutechess-cli
 - [ ] Minimal **UCI over Serial**
 - [ ] TFT **off** during search; Serial for debug
 
@@ -117,7 +120,7 @@ Phased rollout dal blueprint (tutto v1, non rinviato salvo dove indicato):
 
 ## Open questions / research (not blocking, but untracked otherwise)
 
-- [ ] Dog (ESP32) RAM budget study — how it splits flash/RAM across NNUE/TT/book; sanity-check only, doesn't override the TT-dominant plan
+- [x] Dog (ESP32) RAM budget study — feasibility reference in blueprint §Memory; TT-dominant plan unchanged
 - [ ] Compact-transformer fallback evaluation criteria — define what "underperforms" means for the v2 policy head before deciding to invoke this fallback
 
 ---

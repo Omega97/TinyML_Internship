@@ -25,6 +25,13 @@ dev = [
     "mypy",
     "ipykernel",           # for notebooks
 ]
+viz = [
+    "pygame",
+    "gifpgn",
+    "pillow",
+    "imageio",
+    "chess-gif",
+]
 
 [tool.setuptools.packages.find]
 where = ["src"]
