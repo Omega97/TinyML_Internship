@@ -17,7 +17,7 @@ from tinymlinternship.features.index_map import (
     is_valid_index,
     piece_square_index,
 )
-from tinymlinternship.features.mirror import perspective_board
+from tinymlinternship.features.mirror import needs_horizontal_mirror, perspective_board
 
 BoardLike = Union[str, chess.Board]
 
@@ -28,13 +28,28 @@ def _as_board(board: BoardLike) -> chess.Board:
     return board.copy()
 
 
-def _append_meta_features(board: chess.Board, out: set[int]) -> None:
-    for side in (chess.WHITE, chess.BLACK):
-        if board.has_kingside_castling_rights(side):
-            out.add(castling_index(side, is_kingside=True))
-        if board.has_queenside_castling_rights(side):
-            out.add(castling_index(side, is_kingside=False))
+def _append_castling_features(
+    base: chess.Board,
+    out: set[int],
+    *,
+    horizontally_mirrored: bool,
+) -> None:
+    """
+    Emit castling features in the same coordinate frame as the mirrored piece view.
 
+    ``chess.Board.has_kingside_castling_rights`` is unreliable on a flipped board
+    (king/rook geometry changes), so rights are read from ``base`` and kingside/
+    queenside labels are swapped when a horizontal mirror was applied.
+    """
+    for side in (chess.WHITE, chess.BLACK):
+        if base.has_kingside_castling_rights(side):
+            out.add(castling_index(side, is_kingside=not horizontally_mirrored))
+        if base.has_queenside_castling_rights(side):
+            out.add(castling_index(side, is_kingside=horizontally_mirrored))
+
+
+def _append_ep_feature(board: chess.Board, out: set[int]) -> None:
+    """EP is file-local — must match the same coordinate frame as piece squares."""
     if board.ep_square is not None:
         out.add(ep_file_index(chess.square_file(board.ep_square)))
 
@@ -44,7 +59,7 @@ def encode_perspective(board: BoardLike, perspective: chess.Color) -> list[int]:
     Return sorted active feature indices for one king perspective.
 
     Applies horizontal king mirroring for ``perspective`` before indexing pieces.
-    Castling and en-passant bits follow the mirrored board state.
+    Castling and en-passant both follow the mirrored view (same frame as pieces).
     """
     base = _as_board(board)
     view = perspective_board(base, perspective)
@@ -54,12 +69,16 @@ def encode_perspective(board: BoardLike, perspective: chess.Color) -> list[int]:
         piece = view.piece_at(square)
         if piece is None:
             continue
-        idx = piece_square_index(piece.color, piece.piece_type, square)
+        idx = piece_square_index(
+            piece.color, piece.piece_type, square, perspective=perspective
+        )
         if idx is not None:
             active.add(idx)
 
-    # Meta features use the unmirrored board (castling/EP are not king-mirror dependent).
-    _append_meta_features(base, active)
+    _append_castling_features(
+        base, active, horizontally_mirrored=needs_horizontal_mirror(base, perspective)
+    )
+    _append_ep_feature(view, active)
     return sorted(active)
 
 
