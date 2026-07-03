@@ -1,6 +1,7 @@
 
 # DSAI Internship - Chess AI on TinyML
 
+![SARDINE logo](../images/SARDINE-logo-dark-small.png)
 
 > *I am developing an end-to-end pipeline that optimizes a given chess engine based on specific hardware constraints. By applying compression techniques such as pruning and quantization, the framework aims to significantly reduce the model's footprint while preserving its original playing performance.*
 
