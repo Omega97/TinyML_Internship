@@ -1,6 +1,6 @@
 # SARDINE Blueprint — Progress
 
-_Checkpoint map vs NOTES/SARDINE Engine Blueprint.md only. Last updated: 2026-07-03._
+_Checkpoint map vs NOTES/SARDINE Engine Blueprint.md only. Last updated: 2026-07-03 (engine v0.3.0 — quiescence)._
 
 ---
 
@@ -22,12 +22,15 @@ Stesso ordine del diagramma _Build Pipeline_ nel blueprint.
 
 ### B · Search skeleton on PC
 
-- [ ] perft
+- [x] perft — `engine/perft.py`, `tests/test_perft.py` (d5 = 4 865 609)
 - [x] HCE eval bring-up — `evaluate_hce` (`tests/test_engine.py`)
-- [x] 1-ply search bring-up — `search_best_move` (not alpha-beta / depth)
+- [x] 1-ply search bring-up — `search_best_move` (= `search(..., depth=1)`)
+- [x] Alpha-beta — fixed-depth negamax (`search(board, depth)`), engine **v0.2**
+- [x] Capture quiescence — depth-0 leaves, MVV-LVA noisy moves, `quiescence=False` opt-out; engine **v0.3**
+- [x] MVV-LVA move ordering — main search + qsearch (killers: step G)
+- [ ] `record_engine_game.py --depth` + rigenerare `images/sardine_game.gif`
 - [ ] Eval hook at depth-search nodes (NNUE swap-in later)
 - [ ] TT entry format prototype + PC benchmark
-- [ ] Alpha-beta (blueprint: C++ on PC first)
 - [ ] Nodes/s benchmark on PC
 - [ ] Node-budget model vs Urusov ESP32 baseline (~20 kNps, heuristics-only) — estimate reachable depth once eval latency is measured
 
@@ -38,7 +41,7 @@ Stesso ordine del diagramma _Build Pipeline_ nel blueprint.
 Architecture: shared **716 → 16** (int8, dual call, **same weights applied twice** — own-POV + opponent-POV, concatenated by side-to-move, not by fixed color) → concat **32** → router → expert **32 → 1** × 8 · **CReLU** hidden **and output** (no tanh — tanh LUT was explicitly rejected earlier in favor of CReLU to avoid extra flash + int8-quantization complexity; correct this if it's still in the design anywhere downstream).
 
 - [x] Lc0 subset **~1–2 GB** (`data/raw/lc0/`, `scripts/download_lc0.py`)
-- [ ] Games **≥ 16** moves; bucket-stratified resampling
+- [x] Games **≥ 16** moves; bucket-stratified resampling — `lc0_preprocess.py`, `stats_lc0_processed.py`, `prepare_lc0_dataset.py` (ply≥32 global, bucket7≥8; gate stats prima di SF)
 - [ ] Stockfish centipawn labels
 - [ ] **nnue-pytorch** train (shared accumulator + 8 heads)
 - [ ] Calibrated **int8** export (histogram post-training weights, scale onto [-127,127])
@@ -79,12 +82,12 @@ Architecture: shared **716 → 16** (int8, dual call, **same weights applied twi
 
 Phased rollout dal blueprint (tutto v1, non rinviato salvo dove indicato):
 
-- [ ] Alpha-beta + **quiescence**
+- [x] Alpha-beta + **quiescence** (PC minima — catture/promozioni in foglia, `search.py` v0.3)
 - [ ] **Futility** + **LMR** + **null-move**
 - [ ] **Lazy evaluation** (paired with lazy accumulators)
 - [ ] **Iterative deepening** (TT stable)
 - [ ] TT **128–160 KB** — format decision: ~10 B tight pack vs 16 B byte-aligned entry, decided by wall-clock nodes/sec + depth reached on Wio, **not** hit-rate alone
-- [ ] Move ordering: **MVV-LVA** + **killer moves** (depth > 4)
+- [ ] Move ordering: **killer moves** (depth > 4) — MVV-LVA ✅ in main/qsearch
 - [x] Countermove history — **out of v1** per blueprint (killers only at depth > 4)
 - [ ] **SPSA** search/heuristic tuning
 

@@ -202,6 +202,7 @@ Meeting all'ufficio del prof. Zennaro
 - **SARDINE blueprint** — decisioni in [NOTES/SARDINE Engine Blueprint.md](NOTES/SARDINE%20Engine%20Blueprint.md); catalogo opzioni in [SARDINE design options.md](NOTES/SARDINE%20design%20options.md). Vedi sezione [SARDINE pipeline (active)](#sardine-pipeline-active) sopra.
 - **1 Luglio** — avvio pipeline SARDINE: pre-SARDINE archiviato in `legacy/pre-sardine/`; encoder 716 in `src/tinymlinternship/features/`. Daily note: [2026-07-01.md](2026-07-01.md).
 - **2 Luglio** — step 1 chiuso (golden FEN, 29 test); **engine v0.1** (HCE + 1-ply search); self-play registrato in **`sardine_game.gif`** via pygame + gifpgn. Daily note: [2026-07-02.md](2026-07-02.md).
+- **3 Luglio** — Lc0 subset scaricato (~1.15 GiB, 54k chunk); parser V6→FEN; pipeline preprocess (stats + pilot parquet 1k posizioni, no SF labels). Encoder/engine SARDINE invariati (HCE + 1-ply). Daily note: [2026-07-03.md](2026-07-03.md).
 
 #### Repo work
 - Features: `src/tinymlinternship/features/` — 716 encoder, bucket router, 29 tests
