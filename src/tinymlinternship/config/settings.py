@@ -23,6 +23,11 @@ WIO_SKETCH_DIR = LEGACY_DIR / "Arduino" / "Wio_TinyValueTest"
 
 # Example specific files
 LICHESS_CSV = RAW_DATA_DIR / "games.csv"
+LC0_RAW_DIR = RAW_DATA_DIR / "lc0"
+LC0_TARS_DIR = LC0_RAW_DIR / "tars"
+LC0_CHUNKS_DIR = LC0_RAW_DIR / "chunks"
+LC0_MANIFEST = LC0_RAW_DIR / "manifest.json"
+LC0_PROCESSED_DIR = PROCESSED_DATA_DIR / "lc0"
 
 # You can also make it environment-aware
 import os
