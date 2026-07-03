@@ -1,13 +1,17 @@
-"""SARDINE chess engine (v0.1 bring-up: HCE + 1-ply search)."""
+"""SARDINE chess engine (HCE + alpha-beta search)."""
 
 from tinymlinternship.engine.eval_hce import evaluate_hce
-from tinymlinternship.engine.search import SearchResult, search_best_move
+from tinymlinternship.engine.perft import perft
+from tinymlinternship.engine.search import EvalFn, SearchResult, search, search_best_move
 
-ENGINE_VERSION = "0.1.0"
+ENGINE_VERSION = "0.3.0"
 
 __all__ = [
     "ENGINE_VERSION",
+    "EvalFn",
     "SearchResult",
     "evaluate_hce",
+    "perft",
+    "search",
     "search_best_move",
 ]

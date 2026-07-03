@@ -24,8 +24,8 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument(
         "--output",
         type=Path,
-        default=Path(__file__).parent.parent / "sardine_game.gif",
-        help="Output GIF path (default: project root / sardine_game.gif)",
+        default=Path(__file__).parent.parent / "images" / "sardine_game.gif",
+        help="Output GIF path (default: images/sardine_game.gif)",
     )
     parser.add_argument("--max-plies", type=int, default=200, help="Max half-moves")
     parser.add_argument(

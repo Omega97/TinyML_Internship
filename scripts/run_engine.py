@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Run SARDINE engine v0.1 (HCE + 1-ply search) from the command line."""
+"""Run SARDINE engine (HCE + alpha-beta search) from the command line."""
 
 from __future__ import annotations
 
@@ -11,7 +11,7 @@ import chess
 
 sys.path.insert(0, str(Path(__file__).parent.parent / "src"))
 
-from tinymlinternship.engine import ENGINE_VERSION, search_best_move
+from tinymlinternship.engine import ENGINE_VERSION, search
 
 
 def _parse_moves(move_str: str) -> list[chess.Move]:
@@ -22,7 +22,8 @@ def _parse_moves(move_str: str) -> list[chess.Move]:
 
 
 def main(argv: list[str] | None = None) -> int:
-    parser = argparse.ArgumentParser(description="SARDINE engine v0.1 — HCE + 1-ply search")
+    parser = argparse.ArgumentParser(description="SARDINE engine — HCE + alpha-beta search")
+    parser.add_argument("--depth", type=int, default=1, help="Search depth in full moves (default: 1)")
     parser.add_argument(
         "--fen",
         default=chess.STARTING_FEN,
@@ -45,14 +46,16 @@ def main(argv: list[str] | None = None) -> int:
         for move in _parse_moves(args.moves.strip()):
             board.push(move)
 
-    result = search_best_move(board)
+    result = search(board, args.depth)
     if result is None:
         print("nomove")
         return 1
 
     side = "White" if board.turn == chess.WHITE else "Black"
     print(f"bestmove {result.move.uci()}")
-    print(f"info side {side} score cp {result.score} nodes {result.nodes}")
+    print(
+        f"info side {side} depth {result.depth} score cp {result.score} nodes {result.nodes}"
+    )
     return 0
 
 
