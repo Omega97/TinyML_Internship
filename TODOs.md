@@ -1,95 +1,123 @@
-# Project Checkpoint Map
+# SARDINE Blueprint — Progress
 
-*SARDINE — bucketed NNUE chess engine for the Wio Terminal (SAMD51). Last updated: 2026-07-02.*
-
-Blueprint: [NOTES/SARDINE Engine Blueprint.md](NOTES/SARDINE%20Engine%20Blueprint.md) · Gap tracker: [ai-feed.md](ai-feed.md)
-
-**Target:** ~**1700 Elo** in ~1 s/move · 192 KB RAM · ~500 KB flash · no cloud.
+_Checkpoint map vs NOTES/SARDINE Engine Blueprint.md only. Last updated: 2026-07-03._
 
 ---
 
-## Foundation (done)
+## Build pipeline
 
-Work from the pre-SARDINE phase — still valid as hardware and tooling baseline:
+Stesso ordine del diagramma _Build Pipeline_ nel blueprint.
 
-- [x] Wio bring-up — flash, TFT, Serial, SAMD51 limits ([NOTES/Performance.md](NOTES/Performance.md))
-- [x] Repo scaffold — `src/`, `scripts/`, `tests/`, `NOTES/`
-- [x] Kaggle `games.csv` smoke pipeline — `scripts/download_data.py`, `tests/test_data.py`
-- [x] Legacy value-MLP on device — int8 export, sparse L1, benchmarks; archived in `legacy/pre-sardine/`
+### A · Feature encoder (PC + device parity)
 
----
-
-## SARDINE v1 — build pipeline
-
-Mirrors the blueprint mermaid flow: encoder → search → train → port → Elo gate.
-
-### 1 · Feature encoder
-
-- [x] 716 sparse features — index map, king mirror, castling/EP meta (`src/tinymlinternship/features/`)
-- [x] Dual-perspective encoder + 8-bucket router (`encode_dual`, `bucket_id`)
-- [x] Step-1 gate — golden FEN snapshots, **29 tests** (`tests/test_features.py`)
-- [ ] Encoder parity on device (C port with search, step 6)
-
-### 2 · Search skeleton (PC)
-
-- [ ] `engine/` — alpha-beta + quiescence, move gen, perft
-- [ ] Eval hook stub (constant score) + TT format prototype
-- [ ] Benchmark nodes/s on PC before Wio port
-
-### 3 · Training data
-
-- [ ] `scripts/download_lc0.py` — **~1–2 GB** Lc0 subset under `data/raw/lc0/`
-- [ ] Stockfish centipawn labels on sampled positions
-- [ ] Bucket-stratified resampling (games ≥ 16 moves; queen-split)
-
-### 4 · Bucketed NNUE
-
-Architecture (updated diagram): shared **716 → 16** FFNN (int8, called twice) → own + opponent accumulators → **concat 32** → bucket router → expert head **32 → 1** (×8 buckets). Hidden **CReLU**; output **tanh via LUT**.
-
-- [ ] Train in **nnue-pytorch** — shared accumulator + 8 expert heads
-- [ ] Calibrated int8 export + tanh LUT generation
-- [ ] Queen-split ablation (per-bucket eval MSE vs piece-count baseline)
-
-### 5 · Incremental NNUE + full search
-
-- [ ] Lazy add/sub accumulators; full refresh on king centre-file crossing
-- [ ] Search stack — futility, LMR, null-move, lazy eval, iterative deepening
-- [ ] TT 128–160 KB layout; MVV-LVA + killer moves; **SPSA** tuning
-
-### 6 · Port Wio + Elo gate
-
-- [ ] Port search + NNUE to **C**; benchmark `-O3` vs `-Os`
-- [ ] Minimal **UCI over Serial** (TFT off during search)
-- [ ] **Elo gate ≥ 1700** (e.g. cutechess-cli)
-
-### v2 (after gate)
-
-- [ ] Policy guidance head off shared accumulator
-- [ ] MCTS exploration, opening book
-- [ ] SCReLU / QAT / compact transformer — only if gate missed
+- [x] Pruned **716** features (pawn prune, king mirror, castling, EP) — `index_map.py`, `encoder.py`, `mirror.py`
+- [x] Dual-perspective sparse input — `encode_dual()`
+- [x] Enemy-king full 64-square resolution (only the perspective king is mirror-compressed to 32 slots)
+- [ ] **Castling coordinate-frame fix** — `_append_castling_features` must read from the mirrored `view`, not the unmirrored `base`, or castling rights get computed in the wrong file-frame whenever a horizontal flip fires (same bug class as the EP fix already applied). Confirm this landed before trusting the "done" status on the row above.
+- [x] 8-bucket router (piece count + queen-split), boundaries closed at **p ≤ 12** (no gap)
+- [x] Gate test (`tests/test_features.py`, golden FEN) — **29** tests
+- [ ] Encoder parity on **device** (C, with search) — step F
 
 ---
 
-## Research & community
+### B · Search skeleton on PC
 
-### Documented
+- [ ] perft
+- [ ] Eval hook (pluggable; HCE bring-up ok, NNUE later) — _partial: HCE v0.1, 1-ply only, no depth search yet_
+- [ ] TT entry format prototype + PC benchmark
+- [ ] Alpha-beta (blueprint: C++ on PC first)
+- [ ] Nodes/s benchmark on PC
+- [ ] Node-budget model vs Urusov ESP32 baseline (~20 kNps, heuristics-only) — estimate reachable depth once eval latency is measured
 
-- [x] **FIDE & Google Efficient Chess AI Challenge** (Kaggle) — [NOTES/FIDE & Google Efficient Chess AI Challenge.md](NOTES/FIDE%20%26%20Google%20Efficient%20Chess%20AI%20Challenge.md)
-  - **Elo per byte** under hard RAM/flash caps (~5 MiB) — direct inspiration for SARDINE's constraint mindset (we have *less*: 192 KB RAM)
-  - **1st — linrock / minifish:** micro-NNUE + Cfish port; strength in optimized weights, not bloated search code
-  - **2nd — Approvers:** pruned input features (704-dim geometric zeros) — ancestor of our 716 layout
-  - **4th — Nagiss:** aggressive geometric pruning + stripped alpha-beta (LMR, NMP)
-  - **9th — HCE + SPSA:** hand-crafted eval + automated tuning can compete when NNUE is too heavy; `-O3` compiler win
-  - **Dog (ESP32):** ~1700+ Elo with NNUE + TT on ~320 KB RAM — feasibility reference for Wio target
+---
 
-### To explore
+### C · Train bucketed NNUE
 
-- [ ] Deep-read top-5 Kaggle writeups — map patterns to 192 KB / 500 KB flash budget
-- [ ] **Urusov** ESP32 engine (~20 kNps, ~2023 Elo, no NNUE) — search throughput baseline
-- [ ] **Lc0** small nets / nnue-pytorch community recipes for bucketed training
-- [ ] **chessprogramming.org** wiki + Discord; **r/chessprogramming**
-- [ ] Papers on compressing chess engines onto microcontrollers
-- [ ] Thesis thread — *explainable tiny chess & world models* (longer horizon)
-- [ ] ICGA, competing paradigms for machine intelligence
+Architecture: shared **716 → 16** (int8, dual call, **same weights applied twice** — own-POV + opponent-POV, concatenated by side-to-move, not by fixed color) → concat **32** → router → expert **32 → 1** × 8 · **CReLU** hidden **and output** (no tanh — tanh LUT was explicitly rejected earlier in favor of CReLU to avoid extra flash + int8-quantization complexity; correct this if it's still in the design anywhere downstream).
+
+- [ ] Lc0 subset **~1–2 GB** (`data/raw/lc0/`, `download_lc0.py`)
+- [ ] Games **≥ 16** moves; bucket-stratified resampling
+- [ ] Stockfish centipawn labels
+- [ ] **nnue-pytorch** train (shared accumulator + 8 heads)
+- [ ] Calibrated **int8** export (histogram post-training weights, scale onto [-127,127])
+- [ ] Measure fp32→int8 eval-error gap — **decide acceptance threshold** (e.g. <5–10 centipawn avg delta) before treating PTQ as sufficient
+- [ ] Magnitude pruning ~80% post-training
+- [x] Kaggle `games.csv` smoke only (not NNUE training) — `scripts/download_data.py`
+
+---
+
+### D · Queen-split ablation
+
+- [ ] Per-bucket eval MSE vs piece-count-only baseline (Stockfish-labeled val set, stratified like training)
+- [ ] Define "decisive vs ambiguous" threshold (e.g. >5% relative MSE change per bucket = decisive; 2–5% or mixed-direction buckets = ambiguous → escalate)
+- [ ] Playing-strength test — **only if** per-bucket results are ambiguous or contradictory
+
+---
+
+### E · Incremental accumulators (device)
+
+- [ ] Lazy add/sub on shared layer (bucket-agnostic)
+- [ ] Full refresh on king centre-file crossing
+- [ ] Lazy accumulator updates (TT cutoffs)
+- [ ] Castling-bit add/sub (rare — only on king/rook moves or rook capture)
+- [ ] En-passant-bit add/sub (frequent — flips near every ply, but cheap: single bit)
+
+---
+
+### F · Port search + NNUE to C (Wio)
+
+- [ ] C engine core (after playable PC search)
+- [ ] Benchmark **`-O3` vs `-Os`** on Wio
+- [ ] int8 weights in flash; int16 accumulators in RAM (no tanh LUT — see note under C)
+
+---
+
+### G · Full search stack + tuning
+
+Phased rollout dal blueprint (tutto v1, non rinviato salvo dove indicato):
+
+- [ ] Alpha-beta + **quiescence**
+- [ ] **Futility** + **LMR** + **null-move**
+- [ ] **Lazy evaluation** (paired with lazy accumulators)
+- [ ] **Iterative deepening** (TT stable)
+- [ ] TT **128–160 KB** — format decision: ~10 B tight pack vs 16 B byte-aligned entry, decided by wall-clock nodes/sec + depth reached on Wio, **not** hit-rate alone
+- [ ] Move ordering: **MVV-LVA** + **killer moves** (depth > 4)
+- [ ] Move ordering: resolve whether **countermove history** (mentioned under Policy) is actually in v1 scope — currently not integrated into the move-ordering plan above
+- [ ] **SPSA** search/heuristic tuning
+
+---
+
+### H · Elo gate
+
+- [ ] **≥ 1700 Elo** ⚠️ (see flag at top — confirm this isn't meant to be 2000) — e.g. cutechess-cli
+- [ ] Minimal **UCI over Serial**
+- [ ] TFT **off** during search; Serial for debug
+
+---
+
+### I · Iterate (if gate missed)
+
+- [ ] SCReLU fallback (hidden layer) — clip int16 accumulator to activation range **before** squaring (load-bearing, avoids overflow); square in int16; multiply-accumulate with int8 weights in **int32**
+- [ ] Quantization-aware training (only if int8 gap too large) — stay on nnue-pytorch first; only evaluate Grapheus or in-pipeline QAT if PTQ gap threatens the Elo gate
+- [ ] TT format / bucket scheme revision
+
+---
+
+### J · v2 (after gate)
+
+- [ ] Minimal UCI polish
+- [ ] Policy guidance head (off shared accumulator, 16 → move-ranking; watch per-node latency vs ~1 s budget)
+- [ ] Opening book
+- [ ] SCReLU / QAT / compact transformer fallback (~210K design) — only if needed
+- [ ] Tactical MoE axis (`inCheck`, capture threat) — only if switching cost analysis shows it's worth it earlier than assumed
+
+**Explicitly deferred in blueprint (v1):** MCTS · tactical MoE heads · autoencoder warm-start · separate pattern tables · opening book · Grapheus/QAT · MicroChess stack surfing · MicroChess bare-metal patterns.
+
+---
+
+## Open questions / research (not blocking, but untracked otherwise)
+
+- [ ] Dog (ESP32) RAM budget study — how it splits flash/RAM across NNUE/TT/book; sanity-check only, doesn't override the TT-dominant plan
+- [ ] Compact-transformer fallback evaluation criteria — define what "underperforms" means for the v2 policy head before deciding to invoke this fallback
 
 ---
