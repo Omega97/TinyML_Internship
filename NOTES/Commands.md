@@ -69,6 +69,14 @@ py -3.12 scripts/download_lc0.py --list      # curated shard catalog
 py -3.12 scripts/download_lc0.py --max-gb 1  # stop after first shard
 ```
 
+Lc0 preprocessing (parse → filter → sample; run stats before Stockfish labeling):
+
+```bash
+py -3.12 scripts/stats_lc0_processed.py --max-chunks 80 --max-records 30000
+py -3.12 scripts/prepare_lc0_dataset.py --max-chunks 120 --total 10000
+py -3.12 scripts/smoke_test_lc0_chunk.py
+```
+
 ---
 
 ## Wio sketch — regenerate headers (legacy)
