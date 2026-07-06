@@ -1,7 +1,7 @@
 """
 SARDINE 716-dimensional feature index map.
 
-Layout (see NOTES/SARDINE 🐟.md):
+Layout (see NOTES/SARDINE Engine Blueprint.md):
   768 raw piece-square (6 types × 2 colors × 64 squares)
     − 32  pawn ranks 1/8 removed from the index map (hard-zero at runtime)
     − 32  perspective-king plane compressed 64 → 32 (horizontal mirroring)

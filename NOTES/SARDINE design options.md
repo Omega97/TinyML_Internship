@@ -2,7 +2,7 @@
 Small Artificial RAM-restricted Deep Intelligent Neural Engine
 ```
 
-![SARDINE logo](../images/SARDINE-logo-dark-small.png)
+![SARDINE logo](../images/logo/SARDINE-logo-dark-small.png)
 
 A modular chess engine plan for the Wio Terminal. **Locked decisions:** [SARDINE 🐟.md](SARDINE%20🐟.md).
 

@@ -14,6 +14,7 @@ _Riferimenti: [SARDINE Engine Blueprint](SARDINE%20Engine%20Blueprint.md) §Trai
 | **Expected reward** (side to move) | `Q = W − L` (range circa `[-1, +1]`)                                                                                   |
 | Uso depth-1 baseline               | `position fen …` → `go nodes 1` → leggere WDL dalla risposta UCI                                                       |
 | Uso labeling batch                 | stesso binario/rete su ogni FEN in `positions.parquet` (e futuro Lichess)                                              |
+| **Installato locale**              | `models/teacher/` — `py -3.12 scripts/download_teacher.py` · smoke: `scripts/smoke_test_teacher.py`                    |
 | Fallback                           | Stockfish 16+ con `UCI_ShowWDL value true` + comando `eval`                                                            |
 | Alternativa leggera                | [chess_lite](https://huggingface.co/satana123/chess_lite) (PyTorch, tanh in `[-1,1]`) solo se `lc0` non è installabile |
 
@@ -72,14 +73,19 @@ _Riferimenti: [SARDINE Engine Blueprint](SARDINE%20Engine%20Blueprint.md) §Trai
 
 Cercati dump già pronti (FEN + WDL / expected reward) compatibili con encoder 716 SARDINE.
 
-| Candidato | Esito | Note |
-|-----------|-------|------|
-| Lc0 training chunks (`best_q`, `result_q`) | ⚠️ parziale | Q/WDL nel record, ma legati al net di generazione; non sostituiscono teacher BT4 uniforme |
-| Lichess + label community | ❓ da esplorare | Nessun dump compatibile ancora in repo; cercare mirror HF/Kaggle “lichess positions wdl” |
-| Stockfish NNUE `.binpack` training sets | ❌ formato diverso | HalfKP / centipawn — non allineato a 716-dim + expected reward |
-| nnue-pytorch example data | ❌ riferimento only | Stockfish centipawn, architettura diversa |
+## Dataset pre-etichettati — survey
 
-**Conclusione:** nessun dataset pre-etichettato riutilizzabile end-to-end. Pipeline custom: campiona FEN → `lc0` BT4 → `expected_reward`.
+| Dataset                            | Size     | Output                   | Engine         | Formato  | Compatibilità SARDINE                 |
+| ---------------------------------- | -------- | ------------------------ | -------------- | -------- | ------------------------------------- |
+| satana123/Chess-Alpha-700K         | 706k     | **tanh(x/300) → [-1,1]** | SF 16.1        | HF       | ✅ **Pronto** — output già in [-1,1]   |
+| Lichess Chess Position Evaluations | 388M     | Centipawn                | SF (varie)     | HF       | ⚠️ Da convertire cp → expected reward |
+| kaupane/ChessFormer-SL             | 56M      | Centipawn                | SF depth 18/27 | HF       | ⚠️ Da convertire                      |
+| ChessBench                         | 530M     | Value + best-action      | SF 16          | Research | ⚠️ Value non normalizzato             |
+| Kaggle Chess Evaluations           | 16M      | Centipawn                | SF 11 depth 22 | Kaggle   | ⚠️ Da convertire                      |
+| mauricett/lichess_sf               | >2B      | Stockfish eval           | SF             | HF       | ⚠️ Formato compresso, da esplorare    |
+| Lc0 training chunks (locale)       | 1.15 GiB | `best_q`, `result_q`     | Lc0            | Protobuf | ⚠️ Q del net di generazione, non BT4  |
+
+**Conclusione:** `satana123/Chess-Alpha-700K` è l'unico dataset **pronto all'uso** con output in [-1,1]. Per volumi maggiori, serve pipeline custom: FEN → Lc0 BT4 → expected reward.
 
 ---
 

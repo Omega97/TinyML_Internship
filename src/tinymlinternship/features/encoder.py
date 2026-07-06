@@ -1,9 +1,14 @@
 """
 Sparse 716-feature encoder for SARDINE NNUE input.
 
+Spec: NOTES/SARDINE Engine Blueprint.md (Input features).
+
 Dual-perspective contract (NOTES/NNUE.md):
-  - White accumulator input: encode from White's POV (king mirroring applied).
-  - Black accumulator input: encode from White's POV on ``board.mirror()``.
+  - Own accumulator input: encode from side-to-move POV (king mirroring applied).
+  - Opponent accumulator input: encode from opponent POV on ``board.mirror()``.
+
+Castling: rights read from ``base`` board; kingside/queenside labels swapped when
+horizontal mirror was applied (``_append_castling_features``). EP from mirrored view.
 """
 
 from __future__ import annotations

@@ -48,6 +48,35 @@ py -3.12 scripts/record_engine_game.py --output images/sardine_game.gif --frame-
 py -3.12 scripts/record_engine_game.py --headless --exporter pygame
 ```
 
+### Teacher 1-ply self-play + GIF (Lc0 BT4)
+
+Shallow search with **Lc0 BT4** as eval (`go nodes 1` per position, no quiescence). Slow on CPU (~10 s/ply); use few plies for a quick demo.
+
+Requires teacher install first: `py -3.12 scripts/download_teacher.py`
+
+```bash
+# Default: fast net (791556, ~0.7 s/ply) — prints moves live
+py -3.12 scripts/record_teacher_game.py --headless
+
+# Other networks: fast | t1-256 | bt4 | path/to/net.pb.gz
+py -3.12 scripts/record_teacher_game.py --headless --network t1-256
+py -3.12 scripts/record_teacher_game.py --headless --network bt4 --max-plies 12
+
+# Depth 2
+py -3.12 scripts/record_teacher_game.py --headless --depth 2 --max-plies 100
+
+# Shorter game / custom output
+py -3.12 scripts/record_teacher_game.py --headless --max-plies 12 --output images/teacher_1ply_game.gif --frame-ms 500
+
+# Smoke: one move from startpos (~11 s on CPU)
+py -3.12 scripts/bench_teacher_move.py
+```
+
+```bash
+# Faster bot
+py -3.12 scripts/record_hf_game.py --headless --depth 1 --max-plies 48
+```
+
 More SARDINE snippets (encoder tests, manual checks): [SARDINE commands.md](SARDINE%20commands.md).
 
 ---
@@ -75,6 +104,11 @@ Lc0 preprocessing (parse → filter → sample; run stats before Stockfish label
 py -3.12 scripts/stats_lc0_processed.py --max-chunks 80 --max-records 30000
 py -3.12 scripts/prepare_lc0_dataset.py --max-chunks 120 --total 10000
 py -3.12 scripts/smoke_test_lc0_chunk.py
+```
+
+Regenerate the Stockfish 16 dataset
+```bash
+py -3.12 scripts/prepare_chessbench_dataset.py
 ```
 
 ---

@@ -1,5 +1,5 @@
 
-![SARDINE logo](../images/SARDINE-logo-dark-small.png)
+![SARDINE logo](../images/logo/SARDINE-logo-dark-small.png)
 
 Chess engine for the **Wio Terminal** — neural evaluation + alpha-beta search, maximizing **Elo per byte** under 192 KB RAM / ~500 KB flash.
 

@@ -1,5 +1,267 @@
 
-## Dense/Convolutional Models, AlphaZero, Lc0
+# Candidate Teacher Models
+
+
+## Top Recommendation: Lc0 Networks
+
+Lc0 (Leela Chess Zero) is the most natural choice. Its value head is explicitly trained to predict expected game outcome.
+
+**What it outputs**: Since v0.21 (Feb 2019), Lc0's value head predicts **Win/Draw/Loss probabilities** (three numbers summing to 1.0) rather than a single scalar. The MCTS converts this to a single Q value via `Q = Win - Loss`.
+
+**Latest developments**: v0.30.0 (July 2023) introduced WDL rescaling with an Elo-based transformation, making predictions more realistic across different playing strengths. It also added a `WDL_mu` score type that follows the same convention as Stockfish: **+1.00 means 50% white win chance**.
+
+**Where to get networks**: https://training.lczero.org/ — all trained networks are available for download.
+
+**How to use as teacher**:
+```python
+# Using lc0 Python bindings or UCI interface
+# Position → value head → WDL probabilities → expected reward = W - L
+```
+
+
+## Stockfish NNUE (with WDL output)
+
+Stockfish itself doesn't output expected reward directly — its NNUE outputs centipawns. **However**, Stockfish has a built-in `UCI_ShowWDL` option that converts its internal evaluation to WDL probabilities using a **win-rate model**.
+
+**What it outputs**: Win/Draw/Loss percentages via UCI.
+
+**How to use as teacher**:
+```python
+import chess
+import subprocess
+
+engine = subprocess.Popen(["stockfish"], ...)
+engine.write(b"uci\n")
+engine.write(b"setoption name UCI_ShowWDL value true\n")
+engine.write(b"position fen ...\n")
+engine.write(b"eval\n")
+# Parse WDL from output
+```
+
+**Caveat**: The WDL values are a post-hoc conversion, not the network's native output. The conversion is based on Elo differences and may not be as directly calibrated as Lc0's value head.
+
+
+## Hugging Face Models (PyTorch)
+
+Several open-source PyTorch models output value in [-1, 1] and are ready to use:
+
+### 1. **chess_lite** (satana123/chess_lite)
+- **Architecture**: 15-channel CNN with batch normalization
+- **Value Head**: Scalar evaluation from -1 (Loss) to +1 (Win), normalized via tanh
+- **Training**: Reinforcement learning + Stockfish 16.1 evaluation
+- **License**: Apache 2.0
+- **Link**: https://huggingface.co/satana123/chess_lite
+
+### 2. **Artoria Zero** (Shinapri/artoria-zero)
+- **Architecture**: Decoder-only transformer (LLaMA-style) with dual policy + value heads
+- **Value Head**: Position evaluation with tanh output in [-1, 1]
+- **Training**: Behavioral cloning on Lichess games
+- **Variants**: Small (~19M params), Mid (~100M), Large (~500M)
+- **License**: MIT
+- **Link**: https://huggingface.co/Shinapri/artoria-zero
+
+### 3. **AlphaZero-style PyTorch implementations**
+Several GitHub repos implement AlphaZero with value heads in [-1, 1]:
+- https://github.com/ns-1456/AlphaZero-Chess
+- https://github.com/lipeeeee/lunachess
+
+
+## Comparison Table
+
+| Network               | Output          | Local path                                                      | Ruolo                                    |
+| --------------------- | --------------- | --------------------------------------------------------------- | ---------------------------------------- |
+| **Lc0 791556 (fast)** | WDL permille    | `models/teacher/lc0/791556.pb.gz`                               | ✅ **Default** — bot, demo, smoke         |
+| **Lc0 T1-256**        | WDL permille    | `models/teacher/networks/t1-256x10-distilled-swa-2432500.pb.gz` | ✅ Installato — alternativa CPU           |
+| **Lc0 BT4**           | WDL permille    | `models/teacher/networks/BT4-1024x15x32h-swa-6147500.pb.gz`     | ✅ Installato — qualità ref, troppo lento |
+| **Stockfish + WDL**   | WDL (converted) | —                                                               | Fallback, non installato                 |
+| **chess_lite**        | Scalar `[-1,1]` | `models/teacher/hf/chess_lite/chess_lite.pth`                   | ✅ Installato — veloce, **gioco debole** |
+| **Artoria Zero**      | Scalar `[-1,1]` | `models/teacher/hf/artoria-zero/small/checkpoint.pt`            | ✅ Installato (small) — più lento di lite |
+
+
+## Decision (2026-07-06, agg. depth-2 playtest) — teacher v1
+
+**Famiglia: Lc0 value head** via `lc0` UCI + WDL permille. Rete **operativa: `fast` (791556)**; BT4 tenuto come riferimento qualità.
+
+| | |
+|---|---|
+| Label (se mai custom) | `expected_reward = (W − L) / 1000` · side to move → White POV in code |
+| **Dataset training** | **Solo dump pre-etichettati** — labeling live scartato; vedi [Datasets.md](Datasets.md) |
+| Bot / baseline (Lc0) | `scripts/record_teacher_game.py` · `--network fast\|t1-256\|bt4` · `--depth 1\|2` |
+| Bot / baseline (HF) | `scripts/record_hf_game.py` · `--model auto\|chess_lite\|artoria` · `--depth 1` |
+| Codice eval | `eval_lc0.py` (`Lc0Teacher`) · `eval_chess_lite.py` (`ChessLiteEvaluator`) |
+| Fallback | Stockfish `UCI_ShowWDL` — **non installato** |
+
+**Rationale:** WDL nativo allineato al blueprint — **teacher per training** resta Lc0. **Depth-2** gioca nettamente meglio di depth-1 (depth-1 ≈ 300 Elo), ma resta lento in partita reale (~1 min/ply con `fast`). **chess_lite** è utile come smoke inference (~2 ms/eval, 400 ply in secondi) ma gioca **molto male** a depth-1 — non sostituisce Lc0 per demo qualità. Per **training NNUE**: dataset pre-etichettato (ChessBench test scaricato; train 1.1 TB opzionale).
+
+**Installazione Lc0:** `py -3.12 scripts/download_teacher.py` (BT4 + lc0) · T1-256 via `scripts/bench_teacher_nets.py` o download manuale · `791556` già nello zip lc0.
+
+**Installazione HF:** `py -3.12 scripts/download_hf_teacher.py` (chess_lite + artoria-small).
+
+
+## Locally installed models (survey 2026-07-06, agg. HF bench)
+
+Path relativi alla root. Costanti: `settings.py` → `LC0_*`, `CHESS_LITE_WEIGHTS`, `ARTORIA_SMALL_CKPT`.
+
+### Teacher Lc0 — ✅ installato (3 reti + binario)
+
+**Binario condiviso**
+
+| File | Path | Size |
+|------|------|------|
+| **lc0.exe** | `models/teacher/lc0/lc0.exe` | 2.1 MB |
+| OpenBLAS DLL | `models/teacher/lc0/libopenblas.dll` | 19.5 MB |
+| Release zip | `models/teacher/lc0/lc0-v0.32.1-windows-cpu-openblas.zip` | 22 MB |
+| Manifest | `models/teacher/manifest.json` | 675 B |
+
+**Reti value (preset `--network` in `record_teacher_game.py`)**
+
+| Preset | Path | Size | Eval singola | 1-ply (startpos) | Note |
+|--------|------|------|--------------|------------------|------|
+| **`fast`** (default) | `models/teacher/lc0/791556.pb.gz` | 18 MB | ~12 ms | ~0.5–1 s/ply | Bot baseline, GIF; ~300 Elo a depth=1 |
+| `t1-256` | `models/teacher/networks/t1-256x10-distilled-swa-2432500.pb.gz` | 35 MB | ~36 ms | ~1 s/ply | Alternativa leggermente più forte |
+| `bt4` | `models/teacher/networks/BT4-1024x15x32h-swa-6147500.pb.gz` | 320 MB | ~600 ms | ~11–23 s/ply | Qualità max; impraticabile per play/label |
+
+**Integrazione:** `Lc0Teacher(weights=…)` · UCI `UCI_ShowWDL` + `go nodes 1` · default weights = `LC0_NETWORK_FAST`.
+
+### Shallow-search baseline (misurato 2026-07-06)
+
+| Depth | Rete | Tempo/ply | Nodi (startpos) | Forza | Uso |
+|-------|------|-----------|-----------------|-------|-----|
+| 1 | fast | **~0.7–1 s** | ~20 | ~300 Elo vs random | Demo veloce, sanity |
+| 2 | fast | **~1 min** in partita · ~4–5 s startpos | ~190 | **molto migliore** di depth-1 | Demo qualità; impraticabile per labeling |
+| 1 | bt4 | ~10–23 s | — | teacher più calibrato | Solo spot-check |
+
+Depth-2 già supportato: `--depth 2` (alpha-beta esistente, no qsearch). Il tempo esplode in posizioni reali (ramificazione × eval lc0 per nodo); startpos è un lower bound. GIF esempio depth-1: `images/teacher_1ply_game.gif`.
+
+### Teacher HF PyTorch — ✅ installato (chess_lite + artoria-small)
+
+Confronto inferenza CPU (eval singola, startpos, 2026-07-06):
+
+| Modello | Path | Size | Eval/pos | 1-ply (40 ply) | Play strength depth-1 |
+|---------|------|------|----------|----------------|------------------------|
+| **chess_lite** | `models/teacher/hf/chess_lite/chess_lite.pth` | 39 MB | **~1.8 ms** | ~6 s | ❌ **Debole** — mosse ripetitive / anti-tattiche |
+| artoria-small | `models/teacher/hf/artoria-zero/small/checkpoint.pt` | 101 MB | ~6.4 ms | ~20 s | Non testato in partita lunga |
+
+**Playtest chess_lite (2026-07-06):** `record_hf_game.py --depth 1 --max-plies 400` — partita completa in pochi secondi, ma qualità di gioco **orribile** (nonostante value head allenata con SF 16.1). Conclusione: velocità ≠ forza; utile solo per **latency smoke**, non per baseline Elo.
+
+**Integrazione:** `ChessLiteEvaluator` in `eval_chess_lite.py` · `record_hf_game.py --model auto` · architettura `BossChessNet` ricostruita da state dict.
+
+GIF esempio: `images/games/hf_chess_lite_depth1_20260706_143456.gif` (40 ply).
+
+**Limiti HF vs Lc0:** eval tanh `[-1,1]` (non WDL); play strength ≪ Lc0 anche a parità depth; **non teacher per training NNUE** (target blueprint = expected reward da WDL).
+
+### Dataset posizioni–evaluations — serve qualcosa di già pronto
+
+| Approccio | Verdetto |
+|-----------|----------|
+| `label_positions.py` + lc0 UCI | **❌ Scartato** — depth-1 ≈ 1 s/pos, depth-2 ≈ 1 min/pos in partita → giorni/settimane per training set |
+| Lc0 chunk `best_q` / `root_q` | ⚠️ Parziale — già nel raw data locale, ma net di generazione ≠ teacher uniforme |
+| **ChessBench** (DeepMind, SF 16) | **✅ Scaricato (test)** — vedi sotto; train 15.3B action-values, serve conversione label |
+| Altri dump (Lichess/Lc0 HF) | ⚠️ Survey in [Datasets.md](Datasets.md) |
+
+#### ChessBench — ✅ test split locale (2026-07-06)
+
+Fonte: [google-deepmind/searchless_chess](https://github.com/google-deepmind/searchless_chess) · mirror HF: `heidar-an/ChessBench`.
+
+| | |
+|---|---|
+| **Path locale** | `data/raw/chessbench/test/` |
+| **File scaricati** | `state_value_data.bag` (4.4 MB, 62 829 pos) · `action_value_data.bag` (141 MB, ~1.8M action-values test) |
+| **Download** | `py -3.12 scripts/download_chessbench.py` · ispezione: `scripts/study_chessbench.py` |
+| **Formato Research** | `.bag` (Apache Beam tuple coder) — non Parquet |
+
+**Tre varianti nel formato originale:**
+
+| Variante | Record | Campi |
+|----------|--------|-------|
+| `state_value` | `(fen, win_prob)` | eval posizione |
+| `action_value` | `(fen, move_uci, win_prob)` | eval dopo mossa legale |
+| `behavioral_cloning` | `(fen, move_uci)` | solo policy oracle |
+
+**Tipo di valore — analisi (paper §2.1, verificato su test split):**
+
+| Domanda | Risposta |
+|---------|----------|
+| Centipawns grezzi? | **No** — il dataset espone solo `win_prob` (float64) |
+| Expected value WDL (`W−L`)? | **No** — è **probabilità di vittoria** ∈ [0, 1], non WDL completo |
+| Normalizzato `[-1,1]`? | **No** — è win% in frazione [0, 1] (0 = 0%, 1 = 100%) |
+| Come si ottiene? | SF 16 analizza 50 ms/pos (o /coppia pos-mossa); legge **cp** interni → formula Lichess: `win_prob = 1 / (1 + exp(−0.00368208 · cp))` · **mate → 1.0** |
+| Prospettiva | `score.relative` Stockfish → **side to move** |
+| Distribuzione test (5k campione) | state: mean ≈ 0.51 · action: mean ≈ 0.35 · molti 0.0 e 1.0 (posizioni decisive) |
+
+**Conversione verso SARDINE (approssimata):** `expected_reward ≈ 2·win_prob − 1` (tratta win% come proxy; ignora massa draw implicita nella formula cp→win). Per allineamento stretto al blueprint Lc0 WDL servirebbe re-label o dataset con WDL nativo.
+
+**Train full:** 15.3B action-values (~1.1 TB `.bag` shard) — non scaricato; test split sufficiente per prototipo pipeline.
+
+### Candidati teacher — ❌ non installati
+
+| Modello | Path previsto | Note |
+|---------|---------------|------|
+| Stockfish + WDL | `models/teacher/stockfish/stockfish.exe` | Fallback veloce; WDL post-hoc |
+| Artoria mid/large | `models/teacher/hf/artoria-zero/{mid,large}/` | Solo small installato |
+
+### SARDINE NNUE (target) — ❌ vuoto
+
+| Path | Stato |
+|------|-------|
+| `models/` | Root artefatti SARDINE (`SARDINE_MODELS_DIR`) |
+| `models/checkpoints/` | Previsto post-nnue-pytorch — **inesistente** |
+| `models/exported/` | Previsto int8 + tanh LUT — **inesistente** |
+
+Architettura target: `716 → W (128/256) → 2W → 1` × 8 bucket.
+
+### Legacy pre-SARDINE — archivio (768-dim, centipawn)
+
+**Checkpoints PyTorch** — `legacy/pre-sardine/models/checkpoints/`
+
+| File | Size |
+|------|------|
+| `tiny_value_wio.pt` | 53 KB |
+| `tiny_value_wio_nano_int8.pt` | 53 KB |
+| `tiny_value_wio_tiny_int8.pt` | 104 KB |
+| `tiny_value_wio_small_int8.pt` | 209 KB |
+| `tiny_value_wio_medium_int8.pt` | 430 KB |
+| `tiny_value_wio_big_int8.pt` | 857 KB |
+| `tiny_value_wio_huge_int8.pt` | 1.7 MB |
+| `tiny_value_wio_sparse80_int8.pt` | 53 KB |
+| `tiny_chess_policy_lab.pt` | 16.8 MB |
+| `tiny_chess_policy_lab_full.pt` | 16.8 MB |
+
+**Export** — `legacy/pre-sardine/models/exported/`
+
+| File | Size |
+|------|------|
+| `tiny_value_wio_*_int8.bin` | 12–427 KB |
+| `tiny_chess_policy_lab.onnx` + `.onnx.data` | ~16.8 MB |
+| `tiny_chess_policy_lab.ts.pt` | 16.8 MB |
+| `my_tiny_model.ts.pt` | 60 B |
+
+**Headers Wio (int8 embed)** — `legacy/pre-sardine/models/arduino/models/`
+
+| File | Size |
+|------|------|
+| `tiny_value_wio_int8_model.h` | 79 KB |
+| `tiny_value_wio_tiny_int8_model.h` | 156 KB |
+| `tiny_chess_policy_model.h` | 100 MB |
+| `tiny_chess_onnx_data.h` | 100 MB |
+| `my_tiny_model.h` | 374 B |
+
+Sketch: `legacy/pre-sardine/Arduino/Wio_TinyValueTest/`. **Non usare per SARDINE v1** (encoder 716, expected reward).
+
+### Riepilogo
+
+| Categoria | Path root | Installato | Uso SARDINE v1 |
+|-----------|-----------|------------|----------------|
+| Lc0 teacher (fast default) | `models/teacher/` | ✅ 3 reti + lc0 | Bot depth 1–2, demo GIF; **teacher training** |
+| HF teacher (chess_lite) | `models/teacher/hf/` | ✅ 2 checkpoint | Smoke latency; gioco debole a depth-1 |
+| ChessBench (SF 16) | `data/raw/chessbench/` | ✅ test split | Label win_prob — conversione per step C |
+| Dataset pre-label (full) | esterno / `data/` | ⚠️ parziale | Train ChessBench 1.1 TB o Lc0 WDL dump |
+| SARDINE NNUE | `models/` | ❌ | Training step C |
+| Legacy value/policy | `legacy/pre-sardine/models/` | ✅ archivio | Riferimento storico |
+
+
+---
+# Dense/Convolutional Models, AlphaZero, Lc0
 
 #### Marvin
 - [Marvin](https://huggingface.co/holymolyyy/marvin) is a human-like chess neural network that models human play at a specified Elo rating and time control. 
@@ -134,101 +396,5 @@ Originally invented by Yu Nasu in 2018 for Shogi and ported to computer chess in
     
 - https://github.com/undera/chess-engine-nn chess-engine-nn
     
-
----
-
-# Candidate Teacher Models
-
-
-## Top Recommendation: Lc0 Networks
-
-Lc0 (Leela Chess Zero) is the most natural choice. Its value head is explicitly trained to predict expected game outcome.
-
-**What it outputs**: Since v0.21 (Feb 2019), Lc0's value head predicts **Win/Draw/Loss probabilities** (three numbers summing to 1.0) rather than a single scalar. The MCTS converts this to a single Q value via `Q = Win - Loss`.
-
-**Latest developments**: v0.30.0 (July 2023) introduced WDL rescaling with an Elo-based transformation, making predictions more realistic across different playing strengths. It also added a `WDL_mu` score type that follows the same convention as Stockfish: **+1.00 means 50% white win chance**.
-
-**Where to get networks**: https://training.lczero.org/ — all trained networks are available for download.
-
-**How to use as teacher**:
-```python
-# Using lc0 Python bindings or UCI interface
-# Position → value head → WDL probabilities → expected reward = W - L
-```
-
-
-## Stockfish NNUE (with WDL output)
-
-Stockfish itself doesn't output expected reward directly — its NNUE outputs centipawns. **However**, Stockfish has a built-in `UCI_ShowWDL` option that converts its internal evaluation to WDL probabilities using a **win-rate model**.
-
-**What it outputs**: Win/Draw/Loss percentages via UCI.
-
-**How to use as teacher**:
-```python
-import chess
-import subprocess
-
-engine = subprocess.Popen(["stockfish"], ...)
-engine.write(b"uci\n")
-engine.write(b"setoption name UCI_ShowWDL value true\n")
-engine.write(b"position fen ...\n")
-engine.write(b"eval\n")
-# Parse WDL from output
-```
-
-**Caveat**: The WDL values are a post-hoc conversion, not the network's native output. The conversion is based on Elo differences and may not be as directly calibrated as Lc0's value head.
-
-
-## Hugging Face Models (PyTorch)
-
-Several open-source PyTorch models output value in [-1, 1] and are ready to use:
-
-### 1. **chess_lite** (satana123/chess_lite)
-- **Architecture**: 15-channel CNN with batch normalization
-- **Value Head**: Scalar evaluation from -1 (Loss) to +1 (Win), normalized via tanh
-- **Training**: Reinforcement learning + Stockfish 16.1 evaluation
-- **License**: Apache 2.0
-- **Link**: https://huggingface.co/satana123/chess_lite
-
-### 2. **Artoria Zero** (Shinapri/artoria-zero)
-- **Architecture**: Decoder-only transformer (LLaMA-style) with dual policy + value heads
-- **Value Head**: Position evaluation with tanh output in [-1, 1]
-- **Training**: Behavioral cloning on Lichess games
-- **Variants**: Small (~19M params), Mid (~100M), Large (~500M)
-- **License**: MIT
-- **Link**: https://huggingface.co/Shinapri/artoria-zero
-
-### 3. **AlphaZero-style PyTorch implementations**
-Several GitHub repos implement AlphaZero with value heads in [-1, 1]:
-- https://github.com/ns-1456/AlphaZero-Chess
-- https://github.com/lipeeeee/lunachess
-
-
-## Comparison Table
-
-| Network | Output Format | Training Method | Notes |
-|---------|---------------|-----------------|-------|
-| **Lc0** | WDL probabilities | Reinforcement learning (self-play) | Gold standard; most calibrated |
-| **Stockfish NNUE + WDL** | WDL probabilities (converted) | Supervised (Stockfish eval) | Conversion is post-hoc |
-| **chess_lite** | Scalar [-1, 1] | RL + Stockfish supervision | Lightweight CNN |
-| **Artoria Zero** | Scalar [-1, 1] | Behavioral cloning | Transformer, no search needed |
-
-
-## Decision (2026-07-06) — teacher v1
-
-**Scelto: Lc0 value head (rete BT4)** via binario `lc0` + UCI.
-
-| | |
-|---|---|
-| Label | `expected_reward = W − L` da WDL nativo (side to move) |
-| Depth-1 baseline | Stesso `lc0`: `go nodes 1` come eval del motore a 1 ply |
-| Fallback | Stockfish 16+ `UCI_ShowWDL` + `eval` |
-| Alternativa | `satana123/chess_lite` se installazione `lc0` fallisce |
-
-**Rationale:** unico candidato con WDL nativo allineato al blueprint; riusabile per labeling batch e shallow-search baseline; reti su [training.lczero.org](https://training.lczero.org/). Stockfish WDL è conversione post-hoc; HF CNN/transformer aggiungono dipendenze senza vantaggio chiaro per il labeling.
-
-**Gate:** correlazione su `data/processed/lc0/splits/val.parquet` + posizioni Syzygy; se debole → Stockfish WDL.
-
-Dettaglio dataset: [Datasets.md](Datasets.md).
 
 ---

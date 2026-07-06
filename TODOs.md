@@ -45,6 +45,7 @@ Architecture: shared L1 **716 → W** with $W \in \{128, 256\}$ (dense train →
 - [x] Survey pre-labeled datasets — nessun dump riutilizzabile end-to-end; vedi [NOTES/Datasets.md](NOTES/Datasets.md)
 - [ ] Lichess human-game positions (primary diversity) + Lc0 supplement
 - [x] Teacher scelto: **Lc0 BT4** (`expected_reward = W − L`); fallback Stockfish WDL — [NOTES/Models.md](NOTES/Models.md)
+- [x] Teacher installato — `models/teacher/` (lc0 v0.32.1 + BT4); `scripts/download_teacher.py`, `smoke_test_teacher.py` OK
 - [ ] Label pilot: `label_positions.py` su `data/processed/lc0/` via `lc0` UCI
 - [ ] **nnue-pytorch** train (shared pruned L1 + 8 expert heads)
 - [ ] Calibrated **int8** export + tanh LUT (histogram post-training weights, scale onto [-127,127])

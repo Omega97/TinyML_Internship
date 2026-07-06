@@ -32,6 +32,11 @@ viz = [
     "imageio",
     "chess-gif",
 ]
+data = [
+    "pyarrow",
+    "matplotlib",
+    "openpyxl",
+]
 
 [tool.setuptools.packages.find]
 where = ["src"]
