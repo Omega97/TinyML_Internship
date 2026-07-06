@@ -5,11 +5,8 @@
 
 > *I am developing an end-to-end pipeline that optimizes a given chess engine based on specific hardware constraints. By applying compression techniques such as pruning and quantization, the framework aims to significantly reduce the model's footprint while preserving its original playing performance.*
 
-- [About me](https://omega97.github.io/)
-- [Thesis repo](https://github.com/Omega97/world-models-thesis)
-- [Internship repo](https://github.com/Omega97/TinyML_Internship)
+- Engine blueprint: [NOTES/SARDINE Engine Blueprint.md](NOTES/SARDINE%20Engine%20Blueprint.md)
 - Modelli online: [NOTES/Models.md](NOTES/Models.md)
-- Engine blueprint: [NOTES/SARDINE Engine Blueprint.md](NOTES/SARDINE%20Engine%20Blueprint.md) · [design options](NOTES/SARDINE%20design%20options.md)
 - Kaggle challenge: [FIDE & Google Efficient Chess AI Challenge](NOTES/FIDE%20%26%20Google%20Efficient%20Chess%20AI%20Challenge.md)
 - Dettagli progetto: [PROJECT.md](PROJECT.md)
 - Note progetto: [NOTES/notes.md](_notes.md)

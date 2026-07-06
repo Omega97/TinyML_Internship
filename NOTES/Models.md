@@ -136,3 +136,99 @@ Originally invented by Yu Nasu in 2018 for Shogi and ported to computer chess in
     
 
 ---
+
+# Candidate Teacher Models
+
+
+## Top Recommendation: Lc0 Networks
+
+Lc0 (Leela Chess Zero) is the most natural choice. Its value head is explicitly trained to predict expected game outcome.
+
+**What it outputs**: Since v0.21 (Feb 2019), Lc0's value head predicts **Win/Draw/Loss probabilities** (three numbers summing to 1.0) rather than a single scalar. The MCTS converts this to a single Q value via `Q = Win - Loss`.
+
+**Latest developments**: v0.30.0 (July 2023) introduced WDL rescaling with an Elo-based transformation, making predictions more realistic across different playing strengths. It also added a `WDL_mu` score type that follows the same convention as Stockfish: **+1.00 means 50% white win chance**.
+
+**Where to get networks**: https://training.lczero.org/ — all trained networks are available for download.
+
+**How to use as teacher**:
+```python
+# Using lc0 Python bindings or UCI interface
+# Position → value head → WDL probabilities → expected reward = W - L
+```
+
+
+## Stockfish NNUE (with WDL output)
+
+Stockfish itself doesn't output expected reward directly — its NNUE outputs centipawns. **However**, Stockfish has a built-in `UCI_ShowWDL` option that converts its internal evaluation to WDL probabilities using a **win-rate model**.
+
+**What it outputs**: Win/Draw/Loss percentages via UCI.
+
+**How to use as teacher**:
+```python
+import chess
+import subprocess
+
+engine = subprocess.Popen(["stockfish"], ...)
+engine.write(b"uci\n")
+engine.write(b"setoption name UCI_ShowWDL value true\n")
+engine.write(b"position fen ...\n")
+engine.write(b"eval\n")
+# Parse WDL from output
+```
+
+**Caveat**: The WDL values are a post-hoc conversion, not the network's native output. The conversion is based on Elo differences and may not be as directly calibrated as Lc0's value head.
+
+
+## Hugging Face Models (PyTorch)
+
+Several open-source PyTorch models output value in [-1, 1] and are ready to use:
+
+### 1. **chess_lite** (satana123/chess_lite)
+- **Architecture**: 15-channel CNN with batch normalization
+- **Value Head**: Scalar evaluation from -1 (Loss) to +1 (Win), normalized via tanh
+- **Training**: Reinforcement learning + Stockfish 16.1 evaluation
+- **License**: Apache 2.0
+- **Link**: https://huggingface.co/satana123/chess_lite
+
+### 2. **Artoria Zero** (Shinapri/artoria-zero)
+- **Architecture**: Decoder-only transformer (LLaMA-style) with dual policy + value heads
+- **Value Head**: Position evaluation with tanh output in [-1, 1]
+- **Training**: Behavioral cloning on Lichess games
+- **Variants**: Small (~19M params), Mid (~100M), Large (~500M)
+- **License**: MIT
+- **Link**: https://huggingface.co/Shinapri/artoria-zero
+
+### 3. **AlphaZero-style PyTorch implementations**
+Several GitHub repos implement AlphaZero with value heads in [-1, 1]:
+- https://github.com/ns-1456/AlphaZero-Chess
+- https://github.com/lipeeeee/lunachess
+
+
+## Comparison Table
+
+| Network | Output Format | Training Method | Notes |
+|---------|---------------|-----------------|-------|
+| **Lc0** | WDL probabilities | Reinforcement learning (self-play) | Gold standard; most calibrated |
+| **Stockfish NNUE + WDL** | WDL probabilities (converted) | Supervised (Stockfish eval) | Conversion is post-hoc |
+| **chess_lite** | Scalar [-1, 1] | RL + Stockfish supervision | Lightweight CNN |
+| **Artoria Zero** | Scalar [-1, 1] | Behavioral cloning | Transformer, no search needed |
+
+
+## Decision (2026-07-06) — teacher v1
+
+**Scelto: Lc0 value head (rete BT4)** via binario `lc0` + UCI.
+
+| | |
+|---|---|
+| Label | `expected_reward = W − L` da WDL nativo (side to move) |
+| Depth-1 baseline | Stesso `lc0`: `go nodes 1` come eval del motore a 1 ply |
+| Fallback | Stockfish 16+ `UCI_ShowWDL` + `eval` |
+| Alternativa | `satana123/chess_lite` se installazione `lc0` fallisce |
+
+**Rationale:** unico candidato con WDL nativo allineato al blueprint; riusabile per labeling batch e shallow-search baseline; reti su [training.lczero.org](https://training.lczero.org/). Stockfish WDL è conversione post-hoc; HF CNN/transformer aggiungono dipendenze senza vantaggio chiaro per il labeling.
+
+**Gate:** correlazione su `data/processed/lc0/splits/val.parquet` + posizioni Syzygy; se debole → Stockfish WDL.
+
+Dettaglio dataset: [Datasets.md](Datasets.md).
+
+---

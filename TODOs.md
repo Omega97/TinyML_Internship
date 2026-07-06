@@ -1,6 +1,6 @@
 # SARDINE Blueprint — Progress
 
-_Checkpoint map vs NOTES/SARDINE Engine Blueprint.md only. Last updated: 2026-07-03 (engine v0.3.0 — quiescence)._
+_Checkpoint map vs NOTES/SARDINE Engine Blueprint.md only. Last updated: 2026-07-06 (blueprint sync — expected reward, L1 W=128/256)._
 
 ---
 
@@ -38,15 +38,19 @@ Stesso ordine del diagramma _Build Pipeline_ nel blueprint.
 
 ### C · Train bucketed NNUE
 
-Architecture: shared **716 → 16** (int8, dual call, **same weights applied twice** — own-POV + opponent-POV, concatenated by side-to-move, not by fixed color) → concat **32** → router → expert **32 → 1** × 8 · **CReLU** hidden **and output** (no tanh — tanh LUT was explicitly rejected earlier in favor of CReLU to avoid extra flash + int8-quantization complexity; correct this if it's still in the design anywhere downstream).
+Architecture: shared L1 **716 → W** with $W \in \{128, 256\}$ (dense train → magnitude prune 70–80%; **non-zero only in flash**; dual call, same weights twice — own-POV + opponent-POV) → concat **2W** → router → expert **2W → 1** × 8 · **CReLU** hidden · **tanh** output → expected-reward LUT in $[-1,+1]$.
 
 - [x] Lc0 subset **~1–2 GB** (`data/raw/lc0/`, `scripts/download_lc0.py`)
-- [x] Games **≥ 16** moves; bucket-stratified resampling — `lc0_preprocess.py`, `stats_lc0_processed.py`, `prepare_lc0_dataset.py` (ply≥32 global, bucket7≥8; gate stats prima di SF)
-- [ ] Stockfish centipawn labels
-- [ ] **nnue-pytorch** train (shared accumulator + 8 heads)
-- [ ] Calibrated **int8** export (histogram post-training weights, scale onto [-127,127])
-- [ ] Measure fp32→int8 eval-error gap — **decide acceptance threshold** (e.g. <5–10 centipawn avg delta) before treating PTQ as sufficient
-- [ ] Magnitude pruning ~80% post-training
+- [x] Games **≥ 16** moves; bucket-stratified resampling — `lc0_preprocess.py`, `stats_lc0_processed.py`, `prepare_lc0_dataset.py` (ply≥32 global, bucket7≥8)
+- [x] Survey pre-labeled datasets — nessun dump riutilizzabile end-to-end; vedi [NOTES/Datasets.md](NOTES/Datasets.md)
+- [ ] Lichess human-game positions (primary diversity) + Lc0 supplement
+- [x] Teacher scelto: **Lc0 BT4** (`expected_reward = W − L`); fallback Stockfish WDL — [NOTES/Models.md](NOTES/Models.md)
+- [ ] Label pilot: `label_positions.py` su `data/processed/lc0/` via `lc0` UCI
+- [ ] **nnue-pytorch** train (shared pruned L1 + 8 expert heads)
+- [ ] Calibrated **int8** export + tanh LUT (histogram post-training weights, scale onto [-127,127])
+- [ ] Measure fp32→int8 eval-error gap — decide acceptance threshold before treating PTQ as sufficient
+- [ ] L1 magnitude pruning 70–80% post-training; sparse flash export
+- [ ] Teacher-only **depth=1** playing-strength baseline (after first net)
 - [x] Kaggle `games.csv` smoke only (not NNUE training) — `scripts/download_data.py`
 - [x] Piece-count distribution for bucket design — `plot_piece_count_distribution.py`, `excel/piece_count_distribution_10k.xlsx`
 
@@ -54,7 +58,7 @@ Architecture: shared **716 → 16** (int8, dual call, **same weights applied twi
 
 ### D · Queen-split ablation
 
-- [ ] Per-bucket eval MSE vs piece-count-only baseline (Stockfish-labeled val set, stratified like training)
+- [ ] Per-bucket eval MSE vs piece-count-only baseline (teacher-labeled val set, stratified like training)
 - [ ] Define "decisive vs ambiguous" threshold (e.g. >5% relative MSE change per bucket = decisive; 2–5% or mixed-direction buckets = ambiguous → escalate)
 - [ ] Playing-strength test — **only if** per-bucket results are ambiguous or contradictory
 
@@ -74,7 +78,7 @@ Architecture: shared **716 → 16** (int8, dual call, **same weights applied twi
 
 - [ ] C engine core (after playable PC search)
 - [ ] Benchmark **`-O3` vs `-Os`** on Wio
-- [ ] int8 weights in flash; int16 accumulators in RAM (no tanh LUT — see note under C)
+- [ ] Sparse L1 int8 weights + tanh LUT in flash; int16 accumulators ($W$ per POV) in RAM
 
 ---
 
@@ -112,7 +116,7 @@ Phased rollout dal blueprint (tutto v1, non rinviato salvo dove indicato):
 ### J · v2 (after gate)
 
 - [ ] Minimal UCI polish
-- [ ] Policy guidance head (off shared accumulator, 16 → move-ranking; watch per-node latency vs ~1 s budget)
+- [ ] Policy guidance head (off shared accumulator, $W \rightarrow$ move-ranking; watch per-node latency vs ~1 s budget)
 - [ ] Opening book
 - [ ] SCReLU / QAT / compact transformer fallback (~210K design) — only if needed
 - [ ] Tactical MoE axis (`inCheck`, capture threat) — only if switching cost analysis shows it's worth it earlier than assumed
