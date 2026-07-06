@@ -1,7 +1,7 @@
 
 # DSAI Internship - Chess AI on TinyML
 
-![SARDINE logo](images/logl/SARDINE-logo-dark-small.png)
+![SARDINE logo](images/logo/SARDINE-logo-dark-small.png)
 
 > *I am developing an end-to-end pipeline that optimizes a given chess engine based on specific hardware constraints. By applying compression techniques such as pruning and quantization, the framework aims to significantly reduce the model's footprint while preserving its original playing performance.*
 
@@ -12,9 +12,13 @@
 - Note progetto: [NOTES/notes.md](_notes.md)
 - Pre-SARDINE archive: [legacy/pre-sardine/](legacy/pre-sardine/)
 
+
+![game-demo-gif](images/games/depth2_game_demo.gif)
+
+
 ---
 
-## SARDINE pipeline (active)
+## SARDINE Pipeline
 
 **SARDINE** — *Small Artificial RAM-restricted Deep Intelligent Neural Engine* — is a Wio Terminal chess engine targeting **~1700 Elo** and **~1 s/move**, under **192 KB RAM** and **~500 KB flash**. Full spec: [NOTES/SARDINE Engine Blueprint.md](NOTES/SARDINE%20Engine%20Blueprint.md).
 
