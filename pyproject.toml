@@ -37,6 +37,10 @@ data = [
     "matplotlib",
     "openpyxl",
 ]
+train = [
+    "torch",
+    "pyarrow",
+]
 
 [tool.setuptools.packages.find]
 where = ["src"]
