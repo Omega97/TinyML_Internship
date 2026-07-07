@@ -22,7 +22,7 @@ from tinymlinternship.data.chessbench_preprocess import (
 
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(
-        description="ChessBench state_value .bag → sparse 716 features + expected_reward"
+        description="ChessBench state_value .bag → sparse 844 features + expected_reward"
     )
     parser.add_argument(
         "--input",
@@ -83,7 +83,7 @@ def main(argv: list[str] | None = None) -> int:
         "source": str(args.input.resolve()),
         "format": "ChessBench state_value (SF16 win_prob → expected_reward)",
         "label_formula": "expected_reward = clip(2 * win_prob - 1, -1, +1)  # STM POV",
-        "features": "encode_dual() → white_features, black_features (sparse 716 indices)",
+        "features": "encode_dual() → white_features, black_features (sparse 844 indices)",
         "rows_total": len(df),
         "rows_train": len(train_df),
         "rows_val": len(val_df),

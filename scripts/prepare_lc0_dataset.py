@@ -1,5 +1,9 @@
 #!/usr/bin/env python3
-"""Parse Lc0 chunks → filter → bucket-stratified sample → positions.parquet."""
+"""Parse Lc0 chunks → filter → sample → positions.parquet.
+
+Pilot subset used bucket-stratified sampling for exploration; production
+training keeps natural bucket distribution (blueprint §Training pipeline).
+"""
 
 from __future__ import annotations
 

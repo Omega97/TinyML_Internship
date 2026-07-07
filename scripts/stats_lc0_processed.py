@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Bucket / ply survival stats on Lc0 chunks (pre–Stockfish labeling check)."""
+"""Bucket / ply survival stats on Lc0 chunks (pre–Lc0 labeling check)."""
 
 from __future__ import annotations
 

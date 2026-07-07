@@ -11,7 +11,8 @@ import chess
 
 sys.path.insert(0, str(Path(__file__).parent.parent / "src"))
 
-from tinymlinternship.engine import ENGINE_VERSION, search
+from tinymlinternship.config.settings import NNUE_CHECKPOINT_DEFAULT
+from tinymlinternship.engine import ENGINE_VERSION, EVAL_CHOICES, make_eval_fn, search
 
 
 def _parse_moves(move_str: str) -> list[chess.Move]:
@@ -22,7 +23,19 @@ def _parse_moves(move_str: str) -> list[chess.Move]:
 
 
 def main(argv: list[str] | None = None) -> int:
-    parser = argparse.ArgumentParser(description="SARDINE engine — HCE + alpha-beta search")
+    parser = argparse.ArgumentParser(description="SARDINE engine — alpha-beta search")
+    parser.add_argument(
+        "--eval",
+        choices=EVAL_CHOICES,
+        default="hce",
+        help="Static eval backend (default: hce)",
+    )
+    parser.add_argument(
+        "--nnue-checkpoint",
+        type=Path,
+        default=NNUE_CHECKPOINT_DEFAULT,
+        help="NNUE checkpoint path (--eval nnue)",
+    )
     parser.add_argument("--depth", type=int, default=1, help="Search depth in full moves (default: 1)")
     parser.add_argument(
         "--fen",
@@ -46,7 +59,11 @@ def main(argv: list[str] | None = None) -> int:
         for move in _parse_moves(args.moves.strip()):
             board.push(move)
 
-    result = search(board, args.depth)
+    eval_fn = make_eval_fn(
+        args.eval,
+        nnue_checkpoint=args.nnue_checkpoint if args.eval == "nnue" else None,
+    )
+    result = search(board, args.depth, eval_fn=eval_fn)
     if result is None:
         print("nomove")
         return 1

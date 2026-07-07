@@ -12,6 +12,8 @@ sys.path.insert(0, str(Path(__file__).parent.parent / "src"))
 import chess
 import chess.pgn
 
+from tinymlinternship.config.settings import NNUE_CHECKPOINT_DEFAULT
+from tinymlinternship.engine import EVAL_CHOICES, ENGINE_VERSION, make_eval_fn
 from tinymlinternship.visualization import (
     PygameBoardRenderer,
     export_game_gif,
@@ -28,6 +30,19 @@ def main(argv: list[str] | None = None) -> int:
         help="Output GIF path (default: images/sardine_game.gif)",
     )
     parser.add_argument("--max-plies", type=int, default=200, help="Max half-moves")
+    parser.add_argument("--depth", type=int, default=1, help="Search depth in full moves")
+    parser.add_argument(
+        "--eval",
+        choices=EVAL_CHOICES,
+        default="hce",
+        help="Static eval backend (default: hce)",
+    )
+    parser.add_argument(
+        "--nnue-checkpoint",
+        type=Path,
+        default=NNUE_CHECKPOINT_DEFAULT,
+        help="NNUE checkpoint path (--eval nnue)",
+    )
     parser.add_argument(
         "--headless",
         action="store_true",
@@ -47,8 +62,18 @@ def main(argv: list[str] | None = None) -> int:
     )
     args = parser.parse_args(argv)
 
-    print("Playing engine self-play...")
-    game = play_engine_game(max_plies=args.max_plies)
+    eval_fn = make_eval_fn(
+        args.eval,
+        nnue_checkpoint=args.nnue_checkpoint if args.eval == "nnue" else None,
+    )
+    annotator = f"SARDINE {ENGINE_VERSION} ({args.eval}, depth {args.depth})"
+    print(f"Playing engine self-play ({annotator})...")
+    game = play_engine_game(
+        max_plies=args.max_plies,
+        depth=args.depth,
+        eval_fn=eval_fn,
+        annotator=annotator,
+    )
     moves = max(0, game.end().ply() - game.ply())
     print(f"Game finished: {moves} moves, result {game.headers.get('Result', '*')}")
 
