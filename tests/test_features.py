@@ -4,13 +4,16 @@ import chess
 import pytest
 
 from tinymlinternship.features import (
+    BASE_FEATURE_DIM,
     FEATURE_DIM,
+    TACTICAL_SQUARES,
     bucket_id,
     castling_index,
     encode_dual,
     encode_perspective,
     is_pawn_rank_inactive,
     is_valid_index,
+    king_attacker_index,
     king_enemy_index,
     king_self_index,
     meta_base,
@@ -18,14 +21,21 @@ from tinymlinternship.features import (
     needs_horizontal_mirror,
     piece_square_count,
     piece_square_index,
+    tactical_base,
+    under_attack_index,
     validate_features,
 )
 
 
 def test_feature_dimension():
-    assert FEATURE_DIM == 716
+    assert BASE_FEATURE_DIM == 716
+    assert FEATURE_DIM == 844
+    assert TACTICAL_SQUARES == 64
+    assert tactical_base() == 716
     assert piece_square_count() == 704
     assert meta_base() == 704
+    assert under_attack_index(0) == 716
+    assert king_attacker_index(63) == 843
 
 
 def test_all_indices_in_range():
@@ -125,7 +135,7 @@ def test_encode_en_passant():
     fen = "8/8/4p3/3Pp2p/8/8/8/8 w - e6 0 1"
     features = encode_perspective(fen, chess.WHITE)
     validate_features(features)
-    assert len(features) == 5  # 4 pieces + 1 ep file
+    assert len(features) == 6  # 4 pieces + 1 ep file + 1 under-attack square
 
 
 def test_en_passant_file_follows_horizontal_flip():
@@ -205,7 +215,7 @@ _GOLDEN_STARTPOS_WHITE = [
     349, 350, 351, 409, 414, 474, 477, 536, 543, 604, 611, 699, 704, 705, 706, 707,
 ]
 
-_GOLDEN_EP_WHITE = [27, 332, 335, 340, 712]
+_GOLDEN_EP_WHITE = [27, 332, 335, 340, 712, 751]
 
 _GOLDEN_EP_MIRROR_WHITE = [339, 611, 699, 711]
 
@@ -213,10 +223,11 @@ _GOLDEN_KA1_WHITE = [608, 700]
 
 _GOLDEN_ENDGAME_P12 = [6, 309, 311, 611, 699]
 
-_GOLDEN_MID_P13_QUEEN = [4, 6, 244, 309, 311, 611, 699]
+_GOLDEN_MID_P13_QUEEN = [4, 6, 244, 309, 311, 611, 699, 720, 722]
 
 _GOLDEN_MID_P22 = [
     0, 2, 4, 6, 12, 14, 305, 307, 309, 311, 315, 317, 319, 611, 699,
+    716, 718, 726, 728, 730,
 ]
 
 _GOLDEN_DUAL_AFTER_E4_WHITE = [
@@ -282,6 +293,22 @@ def test_golden_encode_perspective(board_like, perspective, expected):
     features = encode_perspective(board_like, perspective)
     validate_features(features)
     assert features == expected
+
+
+def test_tactical_under_attack_hanging_queen():
+    # White queen on e1 is attacked by black queen on e4.
+    board = chess.Board("8/8/8/8/4q3/8/8/4Q3 w - - 0 1")
+    features = encode_perspective(board, chess.WHITE)
+    validate_features(features)
+    assert under_attack_index(chess.E1) in features
+
+
+def test_tactical_king_attacker():
+    # Black rook on c5 attacks white king on c2 (no horizontal mirror).
+    board = chess.Board("4k3/8/8/2r5/8/8/2K5/8 w - - 0 1")
+    features = encode_perspective(board, chess.WHITE)
+    validate_features(features)
+    assert king_attacker_index(chess.C5) in features
 
 
 def test_golden_encode_dual_asymmetric():
