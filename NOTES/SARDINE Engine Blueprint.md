@@ -31,7 +31,7 @@ Node budget reference: Urusov's ESP32 engine (~20 kNps, heuristics-only, ~2023 E
 ```mermaid
 flowchart TD
     A["Feature encoder<br/>PC + device parity"] --> B["Search skeleton in C++ on PC<br/>perft · eval hooks · TT format benchmark"]
-    B --> C["Train bucketed NNUE<br/>Lichess + Lc0 · teacher expected reward<br/>dense L1 W=128/256 · magnitude prune 70–80%<br/>games ≥ 16 · sparse int8 export"]
+    B --> C["Train bucketed NNUE<br/>Lichess + Lc0 · Lc0 latest net labels<br/>dense L1 W=128/256 · gradual prune 70–80%<br/>games ≥ 16 · nnue-pytorch · sparse int8 export"]
     C --> C1["Teacher-only depth=1 baseline<br/>playing strength vs weak engines"]
     C1 --> D["Queen-split ablation<br/>per-bucket eval MSE vs piece-count baseline"]
     D --> E["Incremental accumulators<br/>on device"]
@@ -52,10 +52,10 @@ flowchart TD
 ```mermaid
 flowchart TD
      subgraph A_row["Feature encoding"]
-         A1["Own-side features<br/>716-dim, own king mirrored"]
-         A2["Opponent-side features<br/>716-dim, board mirrored for opp"]
+         A1["Own-side features<br/>844-dim, own king mirrored"]
+         A2["Opponent-side features<br/>844-dim, board mirrored for opp"]
      end
-     B["Shared L1 FFNN (white POV)<br/>716 → W (128 or 256)<br/>dense train · magnitude-pruned sparse<br/>same weights, called twice"]
+     B["Shared L1 FFNN (white POV)<br/>844 → W (128 or 256)<br/>dense train · gradual-pruned sparse<br/>same weights, called twice"]
      subgraph C_row["Accumulators"]
          C1["My accumulator<br/>W values, own POV"]
          C2["Opponent accumulator<br/>W values, their POV"]
@@ -84,7 +84,7 @@ flowchart TD
      style G fill:#f1efe8,stroke:#5f5e5a,stroke-width:1px
 ```
 
-The L1 accumulator (green) is computed once per position and **shared across all 8 expert nets** — only the output head selected by the bucket router (orange) changes. Train the L1 dense at $W \in \{128, 256\}$, then apply post-training **magnitude pruning** (drop the 70–80% smallest weights); store only non-zero weights in flash. Incremental add/sub updates on the accumulator are bucket-agnostic.
+The L1 accumulator (green) is computed once per position and **shared across all 8 expert nets** — only the output head selected by the bucket router (orange) changes. Train the L1 dense at $W \in \{128, 256\}$, applying **gradual pruning during training** up to 70–80% sparsity; store only non-zero weights in flash. Incremental add/sub updates on the accumulator are bucket-agnostic.
 
 ---
 
@@ -103,30 +103,32 @@ MicroChess bare-metal patterns: skip — not worth diverging from a standard alp
 
 ### Input features
 
-Pruned 716 features: zero impossible pawn ranks + mirrored king coordinates. HalfKP deferred.
+Pruned **844** features: 716 base + 128 tactical. HalfKP deferred.
 
 Input structure:
 
-$$6 \times 2 \times 64 - 2\times16 - 32 + 4 + 8 = 716$$
+$$6 \times 2 \times 64 - 2\times16 - 32 + 4 + 8 + 64 + 64 = 844$$
 
 - $768$ raw piece-square (6 types × 2 colors × 64 squares)
 - $-32$ pawn ranks 1/8 omitted from index map
 - $-32$ perspective-king plane compressed 64→32 (enemy king keeps full 64-square resolution)
 - $+4$ castling rights · $+8$ en passant file
+- $+64$ pieces under attack (one bit per square, perspective frame)
+- $+64$ pieces attacking king (one bit per square, perspective frame)
 
-Implementazione: `index_map.py`, `encoder.py`, `mirror.py`, `bucket.py` — test: `tests/test_features.py`.
+Implementazione: `index_map.py`, `encoder.py`, `mirror.py`, `tactical.py`, `bucket.py` — test: `tests/test_features.py`, `tests/test_tactical.py`.
 
-Separate pattern tables: skip for v1. Geometric zeros (impossible pawn ranks, king mirroring) plus L1 magnitude pruning already capture the cheapest compression wins; a handcrafted pattern cache adds flash complexity for uncertain gain until the Elo gap is measured.
+Separate pattern tables: skip for v1. Geometric zeros (impossible pawn ranks, king mirroring) plus L1 gradual pruning during training already capture the cheapest compression wins; a handcrafted pattern cache adds flash complexity for uncertain gain until the Elo gap is measured.
 
 ### NNUE Architecture
 
 ```mermaid
 flowchart TD
      subgraph INPUT["📥INPUT_LAYER"]
-         X["716 sparse features<br/>(piece-square + castling + en passant)"]
+         X["844 sparse features<br/>(piece-square + castling + EP + tactical)"]
      end
      subgraph ACC["⚡SHARED_ACCUMULATOR_L1"]
-         W["Weights: 716 × W (128 or 256)<br/>dense train → magnitude prune 70–80%<br/>non-zero only in Flash (int8)<br/>update: lazy add/sub"]
+         W["Weights: 844 × W (128 or 256)<br/>dense train → gradual prune 70–80%<br/>non-zero only in Flash (int8)<br/>update: lazy add/sub"]
          MAC["MAC computation<br/>temp dtype: int32<br/>(sparse: only non-zero weights)"]
          A1["Own-POV accumulator<br/>W × int16 (RAM)"]
          A2["Opponent-POV accumulator<br/>W × int16 (RAM)"]
@@ -174,11 +176,11 @@ flowchart TD
 
 ### Evaluation
 
-Bucketed micro NNUE: `716 → W → 1` with $W \in \{128, 256\}$, dual-perspective, 8 output weight sets (experts) selected by position bucket.
+Bucketed micro NNUE: `844 → W → 1` with $W \in \{128, 256\}$, dual-perspective, 8 output weight sets (experts) selected by position bucket.
 
-**L1 shared layer:** train dense ($716 \times W$), then post-training **magnitude pruning** — zero out the 70–80% smallest-magnitude weights. Export and store **only non-zero weights** in flash (sparse index + int8 value). All 8 NNUE expert nets share this pruned L1; expert heads differ only in the $2W \rightarrow 1$ output weights. Pick $W$ empirically (128 vs 256) from eval latency on Wio and depth=1 / Elo baselines.
+**L1 shared layer:** train dense ($844 \times W$), applying **gradual pruning during training** up to 70–80% sparsity. Export and store **only non-zero weights** in flash (sparse index + int8 value). All 8 NNUE expert nets share this pruned L1; expert heads differ only in the $2W \rightarrow 1$ output weights. Pick $W$ empirically (128 vs 256) from eval latency on Wio and depth=1 / Elo baselines.
 
-Activations: CReLU on the shared hidden layer ($716 \rightarrow W$); tanh on the final scalar output ($2W \rightarrow 1$ per expert). The tanh is never computed at runtime — apply a precomputed lookup table indexed by the clipped int16 dot-product, mapping to **expected reward** in $[-1, +1]$ (side to move perspective). LUT lives in flash (~1–2 KB for 256–512 entries); training in `nnue-pytorch` uses tanh so export matches inference.
+Activations: CReLU on the shared hidden layer ($844 \rightarrow W$); tanh on the final scalar output ($2W \rightarrow 1$ per expert). The tanh is never computed at runtime — apply a precomputed lookup table indexed by the clipped int16 dot-product, mapping to **expected reward** in $[-1, +1]$ (side to move perspective). LUT lives in flash (~1–2 KB for 256–512 entries); training in `nnue-pytorch` uses tanh so export matches inference.
 
 Shared accumulator: all experts share the same first hidden layer. The accumulator depends only on board features, not on which output bucket is active — compute it once per position, then route to the correct output head. Matches Stockfish-style bucketed NNUE; incremental add/sub updates stay bucket-agnostic.
 
@@ -203,9 +205,9 @@ Balanced training buckets (based on number of pieces $p$, kings included) with q
 
 Queen presence is high-leverage in buckets 1–4. Buckets 0 and 7 barely need the split.
 
-Ablation plan: train queen-split vs pure piece-count buckets once pipeline exists. Compare per-bucket eval MSE on a teacher-labeled validation set (stratified like training) — not pooled MSE alone. Escalate to playing-strength tests only if per-bucket results are ambiguous or contradictory.
+Ablation plan: train queen-split vs pure piece-count buckets once pipeline exists. Compare per-bucket eval MSE on a teacher-labeled validation set (natural bucket mix like training) — not pooled MSE alone. Escalate to playing-strength tests only if per-bucket results are ambiguous or contradictory.
 
-Informed by `piece_count_distribution_10k.xlsx` (games ≥ 16 moves). Training uses bucket-stratified resampling.
+Informed by `piece_count_distribution_10k.xlsx` (games ≥ 16 moves). Training keeps the **natural bucket distribution** from Lichess PGNs — no stratified resampling.
 
 ### Policy (v1)
 
@@ -228,13 +230,13 @@ Killer moves are a complementary heuristic for non-capture moves. The idea: if a
 
 - Horizontal king mirroring
 - Hard-zero weights for impossible states (pawns on rank 1/8)
-- L1 magnitude pruning: post-training, prune 70–80% of smallest weights; sparse flash storage (non-zero only)
+- L1 gradual pruning during training: up to 70–80% sparsity; sparse flash storage (non-zero only)
 
 ### Quantization
 
 | Tensor            | Precision    | Note                                                                      |
 | ----------------- | ------------ | ------------------------------------------------------------------------- |
-| L1 weights        | int8         | Sparse in Flash (non-zero only, ~20–30% of $716 \times W$ after pruning)  |
+| L1 weights        | int8         | Sparse in Flash (non-zero only, ~20–30% of $844 \times W$ after pruning)  |
 | Expert weights    | int8         | Dense $2W \times 1$ per bucket, Flash                                     |
 | Biases            | int16        | Larger scale needed for offset                                            |
 | Accumulator (RAM) | int16        | $W$ values per POV; lazy add/sub                                          |
@@ -248,7 +250,7 @@ Tanh LUT: after int16 output-head dot-product, clip to LUT index range, fetch ex
 
 SCReLU fallback — first upgrade if hidden CReLU plateaus below ≥1700 Elo: clip before square (int16), multiply-accumulate in int32 (required: $2W \times 127^2$ can exceed int16 max). Output tanh + LUT unchanged.
 
-Grapheus / quantization-aware training: skip for v1. Stay on nnue-pytorch + calibrated post-training quantization; investigate QAT only if the fp32→int8 gap threatens the Elo gate.
+Grapheus / quantization-aware training: skip for v1. **PTQ only** initially (calibrated int8 export from fp32 weights); trigger QAT only if MSE > 0.01 or Elo drop > 30 vs fp32.
 
 ### Search
 
@@ -309,9 +311,9 @@ Move ordering is about the order in which a chess engine tries moves at each nod
 | Lc0 training games  | Supplemento / volume          | Subset filtrato (~1–2 GB locale, non il corpus completo); formato training-data / `.bin` Lc0                                                        |
 | Kaggle  `games.csv` | Smoke test / statistiche      | Già via  `scripts/download_data.py`;  `non` per training NNUE (partite deboli, label outcome)                                                        |
 | Filtro              | Games  ≥ 16 mosse             | Allineato a  `piece_count_distribution_10k.xlsx`                                                                                                     |
-| Resampling          | Bucket-stratified             | Queen-split ( `bucket_id()`); vedi tabella Output buckets                                                                                            |
+| Resampling          | Natural distribution          | No stratified resampling — queen-split ( `bucket_id()` ) solo per routing; vedi tabella Output buckets                                              |
 
-**Teacher v1 (deciso):** Lc0 value head — rete **BT4** via `lc0` UCI; `expected_reward = W − L` da WDL nativo. Fallback: Stockfish `UCI_ShowWDL`. Vedi [Models.md](Models.md) · [Datasets.md](Datasets.md).
+**Teacher v1 (deciso):** Lc0 value head — **latest best network** da [training.lczero.org](https://training.lczero.org/) via `lc0` UCI; `expected_reward = W − L` da WDL nativo. Label on-the-fly (`position fen …` + `eval`). Fallback: Stockfish `UCI_ShowWDL`. Vedi [Models.md](Models.md) · [Datasets.md](Datasets.md).
 
 Prossimi script: survey existing labeled datasets; `scripts/download_lichess.py` and/or `scripts/download_lc0.py` — download incrementale, checksum, path sotto `data/raw/`. Valutare mirror ufficiali e subset pre-processati della community prima di scaricare TB interi.
 
@@ -319,13 +321,18 @@ Prossimi script: survey existing labeled datasets; `scripts/download_lichess.py`
 
 ### Training pipeline
 
-- nnue-pytorch for v1 network training (not Grapheus)
-- L1: train dense at $W = 128$ or $256$; post-training magnitude pruning (70–80%); export sparse non-zero L1 weights shared by all experts
-- Hidden CReLU + output tanh in the training graph; labels = teacher **expected reward** (not centipawn)
-- Emit tanh LUT alongside int8 weights at export
-- Calibrated post-training int8 export; measure fp32→int8 gap before considering QAT
-- Teacher-only depth=1 playing-strength test after first trained net (see Training data)
-- SPSA post-hoc for search/heuristic tuning
+| **Stage** | **What we do** |
+|-----------|----------------|
+| **Data** | Label positions on‑the‑fly using **Lc0’s latest best network** (UCI, `position fen …` + `eval` → WDL → expected reward `W‑L`). |
+| **Framework** | **nnue‑pytorch** (Stockfish’s training codebase), adapted to SARDINE’s 844‑input / bucketed architecture. |
+| **Bucketing** | No resampling — use the **natural distribution** of bucket frequencies from Lichess PGNs. |
+| **L1 width & sparsity** | Train **dense** (`W = 128` or `256`), then apply **gradual pruning during training** up to 70‑80% sparsity (weights are gradually zeroed over epochs). |
+| **Quantization** | **PTQ only** initially (calibrated int8 export). If the FP32→int8 gap exceeds threshold (MSE > 0.01 or Elo drop >30), we trigger QAT as a fallback. |
+| **Validation** | Train for a **fixed 100 epochs**; save the best checkpoint (by validation loss) and also keep the final model. |
+| **Baseline check** | Run **depth‑1 matches** against weak reference engines (e.g., Sunfish, heuristic‑only) to confirm label/NNUE quality before investing in full search. |
+| **Tuning** | Use **SPSA** only on **search parameters** (pruning thresholds, LMR depth, null‑move, etc.) — no NNUE eval‑scaling tuning. |
+| **Export** | **nnue‑pytorch export script** that outputs sparse int8 L1 weights, dense int8 expert weights, and a tanh LUT for final evaluation on the Wio. |
+
 
 ### I/O
 
@@ -351,6 +358,18 @@ If the primary NNUE + search plan fails to reach 1700 Elo, the following fallbac
 | 6     | < 4 weeks left | Material-only eval         | Simplify (1w)     |
 
 **Decision authority**: I (the developer) trigger Level 1-2 autonomously. Level 3+ requires supervisor sign-off.
+
+---
+
+## Bot Evaluation Tool Selection
+
+| Decision | Choice | Description |
+|----------|--------|-------------|
+| **Method** | **A1** | **ACPL Heuristic** — Analyze moves with Stockfish, compute average centipawn loss, map to Elo via `Elo ≈ 2855 - (ACPL × 10)` |
+| **Opponents** | **B1** | **Sunfish** — Simple open-source Python engine (~1400-1600 Elo) as a reference for calibration |
+| **Output** | **C2** | **Elo range** — Provide confidence interval (e.g., "1550-1750") to reflect uncertainty with few games |
+| **Automation** | **D1** | **Manual script** — Run evaluation on demand via a Python script |
+| **Frequency** | **E1** | **Single evaluation** — Run once after final training to assess the final bot |
 
 ---
 
