@@ -1,5 +1,5 @@
 """
-Sparse 716-feature encoder for SARDINE NNUE input.
+Sparse 844-feature encoder for SARDINE NNUE input.
 
 Spec: NOTES/SARDINE Engine Blueprint.md (Input features).
 
@@ -23,6 +23,7 @@ from tinymlinternship.features.index_map import (
     piece_square_index,
 )
 from tinymlinternship.features.mirror import needs_horizontal_mirror, perspective_board
+from tinymlinternship.features.tactical import append_tactical_features
 
 BoardLike = Union[str, chess.Board]
 
@@ -84,6 +85,7 @@ def encode_perspective(board: BoardLike, perspective: chess.Color) -> list[int]:
         base, active, horizontally_mirrored=needs_horizontal_mirror(base, perspective)
     )
     _append_ep_feature(view, active)
+    append_tactical_features(view, perspective, active)
     return sorted(active)
 
 

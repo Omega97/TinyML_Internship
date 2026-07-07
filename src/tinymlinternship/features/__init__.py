@@ -1,14 +1,19 @@
 from tinymlinternship.features.index_map import (
+    BASE_FEATURE_DIM,
     FEATURE_DIM,
+    TACTICAL_SQUARES,
     castling_index,
     ep_file_index,
     is_pawn_rank_inactive,
     is_valid_index,
+    king_attacker_index,
     king_enemy_index,
     king_self_index,
     meta_base,
     piece_square_count,
     piece_square_index,
+    tactical_base,
+    under_attack_index,
 )
 from tinymlinternship.features.bucket import NUM_BUCKETS, bucket_id, has_queen, piece_count
 from tinymlinternship.features.encoder import encode_dual, encode_perspective, validate_features
@@ -20,6 +25,8 @@ from tinymlinternship.features.mirror import (
 
 __all__ = [
     "NUM_BUCKETS",
+    "BASE_FEATURE_DIM",
+    "TACTICAL_SQUARES",
     "bucket_id",
     "encode_dual",
     "encode_perspective",
@@ -27,6 +34,9 @@ __all__ = [
     "piece_count",
     "validate_features",
     "FEATURE_DIM",
+    "king_attacker_index",
+    "tactical_base",
+    "under_attack_index",
     "castling_index",
     "ep_file_index",
     "is_pawn_rank_inactive",

@@ -1,13 +1,18 @@
 """
-SARDINE 716-dimensional feature index map.
+SARDINE feature index map (844 dimensions).
 
-Layout (see NOTES/SARDINE Engine Blueprint.md):
+Base layout (see NOTES/SARDINE Engine Blueprint.md):
   768 raw piece-square (6 types × 2 colors × 64 squares)
     − 32  pawn ranks 1/8 removed from the index map (hard-zero at runtime)
     − 32  perspective-king plane compressed 64 → 32 (horizontal mirroring)
   +  4  castling rights (WK, WQ, BK, BQ)
   +  8  en-passant file indicators
   = 716
+
+Tactical extension (ai-feed.md):
+  + 64  pieces under attack (one bit per square, perspective frame)
+  + 64  pieces attacking king (one bit per square, perspective frame)
+  = 844
 
 Piece-square block = 704 indices:
   96 pawns + 512 (N/B/R/Q) + 32 perspective-king + 64 enemy-king = 704.
@@ -20,7 +25,9 @@ from __future__ import annotations
 
 import chess
 
-FEATURE_DIM = 716
+BASE_FEATURE_DIM = 716
+TACTICAL_SQUARES = 64
+FEATURE_DIM = BASE_FEATURE_DIM + 2 * TACTICAL_SQUARES
 
 PIECE_TYPES = (
     chess.PAWN,
@@ -87,8 +94,8 @@ def _build_maps() -> None:
     for file in range(8):
         _EP_FILE_INDEX[file] = _META_BASE + 4 + file
 
-    if idx + 12 != FEATURE_DIM:
-        raise RuntimeError(f"piece-square count {idx} + 12 meta != {FEATURE_DIM}")
+    if idx + 12 != BASE_FEATURE_DIM:
+        raise RuntimeError(f"piece-square count {idx} + 12 meta != {BASE_FEATURE_DIM}")
 
 
 def piece_square_count() -> int:
@@ -147,6 +154,21 @@ def castling_index(side: bool, is_kingside: bool) -> int:
 def ep_file_index(file: int) -> int:
     """Index for en-passant indicator on file (0..7)."""
     return _EP_FILE_INDEX[file]
+
+
+def tactical_base() -> int:
+    """First index of the tactical extension (716)."""
+    return BASE_FEATURE_DIM
+
+
+def under_attack_index(square: int) -> int:
+    """Square ``s`` holds an own piece that is attacked (perspective frame)."""
+    return BASE_FEATURE_DIM + square
+
+
+def king_attacker_index(square: int) -> int:
+    """Square ``s`` holds an opponent piece that attacks the perspective king."""
+    return BASE_FEATURE_DIM + TACTICAL_SQUARES + square
 
 
 def is_valid_index(index: int) -> bool:

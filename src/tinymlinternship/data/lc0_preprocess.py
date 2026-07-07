@@ -1,4 +1,4 @@
-"""Lc0 chunk → filtered, bucket-aware position tables (no Stockfish labels)."""
+"""Lc0 chunk → filtered, bucket-aware position tables (labels added separately via Lc0 UCI)."""
 
 from __future__ import annotations
 

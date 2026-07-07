@@ -11,6 +11,8 @@ PROCESSED_DATA_DIR = DATA_DIR / "processed"
 
 # SARDINE pipeline artifacts (active)
 SARDINE_MODELS_DIR = PROJECT_ROOT / "models"
+NNUE_CHECKPOINTS_DIR = SARDINE_MODELS_DIR / "checkpoints" / "nnue"
+NNUE_CHECKPOINT_DEFAULT = NNUE_CHECKPOINTS_DIR / "pilot_W128_844" / "best.pt"
 TEACHER_DIR = SARDINE_MODELS_DIR / "teacher"
 TEACHER_MANIFEST = TEACHER_DIR / "manifest.json"
 LC0_BINARY = TEACHER_DIR / "lc0" / "lc0.exe"

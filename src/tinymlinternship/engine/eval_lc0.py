@@ -1,5 +1,5 @@
 """
-Lc0 BT4 teacher evaluation for 1-ply search baseline.
+Lc0 teacher evaluation for 1-ply search baseline.
 
 Uses a persistent ``lc0`` UCI process (``go nodes 1``) and maps WDL permille to
 centipawns from White's perspective for the existing negamax search stack.
