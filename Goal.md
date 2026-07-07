@@ -11,7 +11,7 @@ Build a playable chess bot that runs **entirely on-device** (no cloud, no GPU) o
 ### 1. **Hardware-Aware Architecture**
 Unlike typical chess engines that assume gigabytes of RAM, SARDINE is designed from the ground up for severe memory constraints:
 - **Bucketed NNUE** with 8 specialized expert heads (routed by piece count + queen presence)
-- **Shared accumulator** (716 → 16, dual-perspective) computed once per position
+- **Shared accumulator** (844 → W, dual-perspective) computed once per position
 - **CReLU activation** + **tanh lookup table** (no runtime `tanh()` computation)
 - **Incremental add/sub updates** (lazy evaluation, bucket-agnostic)
 
@@ -25,7 +25,7 @@ Every byte is accounted for:
 ### 3. **Phased Build Pipeline**
 1. Feature encoder (PC + device parity)
 2. Search skeleton in C++ on PC (perft, eval hooks, TT benchmark)
-3. Train bucketed NNUE (Lc0 data, bucket-stratified sampling)
+3. Train bucketed NNUE (Lichess PGN + Lc0, natural bucket distribution, nnue-pytorch)
 4. Port to Wio Terminal with incremental accumulators
 5. Full search stack (quiescence, futility, LMR, null-move, killer moves, iterative deepening)
 6. Elo gate test (≥1700)
@@ -45,7 +45,7 @@ Every byte is accounted for:
 
 ### Deliverables
 1. **Working chess engine** on Wio Terminal that plays legal moves within 1 second
-2. **NNUE value network** (716 → 16 → 1, bucketed, int8 quantized) running at >1M evals/sec
+2. **NNUE value network** (844 → W → 1, bucketed, int8 quantized) running at >1M evals/sec
 3. **Alpha-beta search** with quiescence, transposition table, and move ordering (MVV-LVA + killer moves)
 4. **Minimal UCI interface** over Serial for engine-vs-engine testing (cutechess-cli compatible)
 5. **Reproducible pipeline** from Python training to C deployment on device
@@ -86,9 +86,9 @@ The project is a proof-of-concept that **Elo per byte** can be optimized systema
 
 ## Timeline
 
-- **Phase 1** (Current): Feature encoder (716 sparse, dual-perspective, bucket router) — in progress
+- **Phase 1** (Current): Feature encoder (844 sparse, dual-perspective, bucket router) — done on PC
 - **Phase 2**: Search skeleton on PC (alpha-beta + quiescence, perft, TT benchmark)
-- **Phase 3**: NNUE training (Lc0 data subset, bucket-stratified, int8 export)
+- **Phase 3**: NNUE training (Lichess + Lc0, Lc0 on-the-fly labels, nnue-pytorch, gradual L1 prune, PTQ export)
 - **Phase 4**: Port to Wio Terminal (incremental accumulators, C port, benchmark)
 - **Phase 5**: Full search stack + tuning (SPSA, iterative deepening)
 - **Phase 6**: Elo gate test (≥1700) → v2 scope (policy head, UCI polish)

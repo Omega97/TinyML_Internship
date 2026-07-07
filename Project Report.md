@@ -1,3 +1,6 @@
+---
+description: Weekly updates on the work on the repo.
+---
 # Report del Progetto
 **Progetto di Tirocinio all'ICTP**
 
@@ -158,7 +161,7 @@ Meeting all'ufficio del prof. Zennaro
 - **3 Luglio** — Lc0 subset scaricato (~1.15 GiB, 54k chunk); parser V6→FEN; pipeline preprocess (stats + pilot parquet 1k posizioni, no SF labels). Encoder/engine SARDINE invariati (HCE + 1-ply). Daily note: [2026-07-03.md](2026-07-03.md).
 
 #### Repo work
-- Features: `src/tinymlinternship/features/` — 716 encoder, bucket router, 29 tests
+- Features: `src/tinymlinternship/features/` — 844 encoder (716 base + tactical 128), bucket router, 33+ tests
 - Engine: `src/tinymlinternship/engine/` — HCE + `search_best_move` (v0.1)
 - Visualization: `src/tinymlinternship/visualization/` + [scripts/record_engine_game.py](scripts/record_engine_game.py) → `sardine_game.gif`
 - Notes: [NOTES/Models.md](NOTES/Models.md), [NOTES/chess transformer.md](NOTES/chess%20transformer.md), [NOTES/NNUE.md](NOTES/NNUE.md), [NOTES/SARDINE Engine Blueprint.md](NOTES/SARDINE%20Engine%20Blueprint.md), [FIDE & Google Efficient Chess AI Kaggle Challenge.md](https://www.kaggle.com/competitions/fide-google-efficiency-chess-ai-challenge)

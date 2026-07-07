@@ -1,0 +1,17 @@
+{
+  "timestamp": "2026-07-07T13:58:46.579330+00:00",
+  "annotator": "SARDINE 0.3.0 (nnue, depth 1, qsearch=off)",
+  "stockfish": "C:\\Users\\monfalcone\\PycharmProjects\\TinyMLInternship\\models\\teacher\\stockfish\\stockfish.exe",
+  "sf_limit": {
+    "depth": 16,
+    "movetime_ms": 100
+  },
+  "games": 1,
+  "acpl": 121.12,
+  "acpl_std": 242.49,
+  "moves_analysed": 80,
+  "elo_estimate": 1644,
+  "elo_low": 1112,
+  "elo_high": 2175,
+  "elo_formula": "2855 - 10 * ACPL"
+}
