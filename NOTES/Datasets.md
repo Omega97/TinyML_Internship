@@ -6,14 +6,14 @@ _Riferimenti: [SARDINE Engine Blueprint](SARDINE%20Engine%20Blueprint.md) §Trai
 
 ## Teacher scelto (v1)
 
-**Lc0 value head** — rete **BT4** (o ultima variante BT4 stabile da [training.lczero.org](https://training.lczero.org/)), via binario `lc0` + UCI.
+**Lc0 value head** — **latest best network** da [training.lczero.org](https://training.lczero.org/), via binario `lc0` + UCI. Label **on-the-fly** durante il training (non dump pre-etichettati).
 
 | Campo                              | Valore                                                                                                                 |
 | ---------------------------------- | ---------------------------------------------------------------------------------------------------------------------- |
 | Output nativo                      | WDL — tre probabilità che sommano a 1                                                                                  |
 | **Expected reward** (side to move) | `Q = W − L` (range circa `[-1, +1]`)                                                                                   |
 | Uso depth-1 baseline               | `position fen …` → `go nodes 1` → leggere WDL dalla risposta UCI                                                       |
-| Uso labeling batch                 | stesso binario/rete su ogni FEN in `positions.parquet` (e futuro Lichess)                                              |
+| Uso labeling training              | `position fen …` + `eval` → WDL → `expected_reward` per ogni FEN campionato da Lichess/Lc0                            |
 | **Installato locale**              | `models/teacher/` — `py -3.12 scripts/download_teacher.py` · smoke: `scripts/smoke_test_teacher.py`                    |
 | Fallback                           | Stockfish 16+ con `UCI_ShowWDL value true` + comando `eval`                                                            |
 | Alternativa leggera                | [chess_lite](https://huggingface.co/satana123/chess_lite) (PyTorch, tanh in `[-1,1]`) solo se `lc0` non è installabile |
@@ -34,9 +34,9 @@ _Riferimenti: [SARDINE Engine Blueprint](SARDINE%20Engine%20Blueprint.md) §Trai
 | **Manifest** | `data/raw/lc0/manifest.json` |
 | **Download** | `scripts/download_lc0.py` |
 | **Formato** | Protobuf V6, `input_format=1` (classical) — parser in `lc0_parser.py` |
-| **Ruolo SARDINE** | Posizioni da self-play forte; **non** feature space Lc0 (usiamo FEN → encoder 716) |
+| **Ruolo SARDINE** | Posizioni da self-play forte; **non** feature space Lc0 (usiamo FEN → encoder 844) |
 | **Label attuale** | ❌ nessuna colonna `expected_reward` — solo metadati Lc0 (`best_q`, `root_q`, `result_q`, …) |
-| **Nota** | `best_q`/`root_q` nel chunk sono del net che ha generato il training data, **non** del teacher BT4 scelto → labeling uniforme via `lc0` UCI |
+| **Nota** | `best_q`/`root_q` nel chunk sono del net che ha generato il training data, **non** del teacher scelto → labeling uniforme via `lc0` UCI (latest best net) |
 
 ### 2. Lc0 processed (pilot) — **pronto per labeling**
 
@@ -48,7 +48,7 @@ _Riferimenti: [SARDINE Engine Blueprint](SARDINE%20Engine%20Blueprint.md) §Trai
 | **Campi** | FEN, `bucket_id`, ply, `plies_left`, visits, shard |
 | **Pilot stats** | 120 chunk scansionati · 6 038 posizioni valide · 3 149 dopo filtro ply/bucket |
 | **Filtri** | `min_ply=32` (16 mosse), bucket 7 relax `min_ply=8` |
-| **Prossimo step** | `scripts/label_positions.py` → colonna `expected_reward` via Lc0 BT4 |
+| **Prossimo step** | `scripts/label_positions.py` → colonna `expected_reward` via Lc0 latest best net (UCI) |
 
 ### 3. Kaggle Lichess sample — **smoke / statistiche bucket**
 
@@ -71,7 +71,7 @@ _Riferimenti: [SARDINE Engine Blueprint](SARDINE%20Engine%20Blueprint.md) §Trai
 
 ## Dataset pre-etichettati — survey
 
-Cercati dump già pronti (FEN + WDL / expected reward) compatibili con encoder 716 SARDINE.
+Cercati dump già pronti (FEN + WDL / expected reward) compatibili con encoder 844 SARDINE.
 
 ## Dataset pre-etichettati — survey
 
@@ -83,9 +83,9 @@ Cercati dump già pronti (FEN + WDL / expected reward) compatibili con encoder 7
 | ChessBench                         | 530M     | Value + best-action      | SF 16          | Research | ⚠️ Value non normalizzato             |
 | Kaggle Chess Evaluations           | 16M      | Centipawn                | SF 11 depth 22 | Kaggle   | ⚠️ Da convertire                      |
 | mauricett/lichess_sf               | >2B      | Stockfish eval           | SF             | HF       | ⚠️ Formato compresso, da esplorare    |
-| Lc0 training chunks (locale)       | 1.15 GiB | `best_q`, `result_q`     | Lc0            | Protobuf | ⚠️ Q del net di generazione, non BT4  |
+| Lc0 training chunks (locale)       | 1.15 GiB | `best_q`, `result_q`     | Lc0            | Protobuf | ⚠️ Q del net di generazione, non teacher uniforme |
 
-**Conclusione:** `satana123/Chess-Alpha-700K` è l'unico dataset **pronto all'uso** con output in [-1,1]. Per volumi maggiori, serve pipeline custom: FEN → Lc0 BT4 → expected reward.
+**Conclusione:** per il path produzione SARDINE, **Lichess PGN → FEN + label on-the-fly Lc0** (natural bucket distribution). Dump pre-etichettati (`Chess-Alpha-700K`, ChessBench test) restano **smoke** / survey only.
 
 ---
 
@@ -95,7 +95,7 @@ Cercati dump già pronti (FEN + WDL / expected reward) compatibili con encoder 7
 
 | Fonte | URL / accesso | Ruolo | Note |
 |-------|---------------|-------|------|
-| **Lichess monthly PGN** | [database.lichess.org](https://database.lichess.org/) | Posizioni principali da partite umane | Filtrare rating/time control; campionare FEN ogni N ply; label con Lc0 BT4 |
+| **Lichess monthly PGN** | [database.lichess.org](https://database.lichess.org/) | Posizioni principali da partite umane | Filtrare rating/time control; campionare FEN ogni N ply; label on-the-fly Lc0 latest net |
 | **Lichess puzzle DB** | export Lichess | Tattica / posizioni critiche | Utile come boost bucket medi; volume limitato |
 | **Lc0 shard aggiuntivi** | [storage.lczero.org](https://storage.lczero.org/files/training_data/) | Volume + copertura fasi | Estendere oltre i 2 tar attuali; stesso preprocess |
 
@@ -140,5 +140,5 @@ data/
 | `download_lc0.py` | ✅ | Incrementale chunk Lc0 |
 | `prepare_lc0_dataset.py` | ✅ | FEN + bucket da chunk |
 | `download_lichess.py` | ❌ | PGN monthly → FEN parquet |
-| `label_positions.py` | ❌ | FEN → `expected_reward` via `lc0` BT4 UCI |
-| `merge_training_sets.py` | ❌ | Lichess + Lc0, bucket-stratified export nnue-pytorch |
+| `label_positions.py` | ❌ | FEN → `expected_reward` via `lc0` UCI (latest best net) |
+| `merge_training_sets.py` | ❌ | Lichess + Lc0 merge; natural bucket distribution → nnue-pytorch |

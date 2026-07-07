@@ -78,20 +78,20 @@ Several GitHub repos implement AlphaZero with value heads in [-1, 1]:
 | **Artoria Zero**      | Scalar `[-1,1]` | `models/teacher/hf/artoria-zero/small/checkpoint.pt`            | ✅ Installato (small) — più lento di lite |
 
 
-## Decision (2026-07-06, agg. depth-2 playtest) — teacher v1
+## Decision (2026-07-07) — teacher v1
 
-**Famiglia: Lc0 value head** via `lc0` UCI + WDL permille. Rete **operativa: `fast` (791556)**; BT4 tenuto come riferimento qualità.
+**Famiglia: Lc0 value head** via `lc0` UCI + WDL permille. **Training:** latest best network da [training.lczero.org](https://training.lczero.org/), label on-the-fly. **Play/demo:** rete **`fast` (791556)** installata; BT4 come riferimento qualità (troppo lento per labeling batch).
 
 | | |
 |---|---|
-| Label (se mai custom) | `expected_reward = (W − L) / 1000` · side to move → White POV in code |
-| **Dataset training** | **Solo dump pre-etichettati** — labeling live scartato; vedi [Datasets.md](Datasets.md) |
+| Label training | `expected_reward = (W − L) / 1000` · on-the-fly UCI `eval` per FEN campionato |
+| **Dataset training** | **Lichess PGN primary** + Lc0 supplement; natural bucket distribution — vedi [Datasets.md](Datasets.md) |
 | Bot / baseline (Lc0) | `scripts/record_teacher_game.py` · `--network fast\|t1-256\|bt4` · `--depth 1\|2` |
 | Bot / baseline (HF) | `scripts/record_hf_game.py` · `--model auto\|chess_lite\|artoria` · `--depth 1` |
 | Codice eval | `eval_lc0.py` (`Lc0Teacher`) · `eval_chess_lite.py` (`ChessLiteEvaluator`) |
 | Fallback | Stockfish `UCI_ShowWDL` — **non installato** |
 
-**Rationale:** WDL nativo allineato al blueprint — **teacher per training** resta Lc0. **Depth-2** gioca nettamente meglio di depth-1 (depth-1 ≈ 300 Elo), ma resta lento in partita reale (~1 min/ply con `fast`). **chess_lite** è utile come smoke inference (~2 ms/eval, 400 ply in secondi) ma gioca **molto male** a depth-1 — non sostituisce Lc0 per demo qualità. Per **training NNUE**: dataset pre-etichettato (ChessBench test scaricato; train 1.1 TB opzionale).
+**Rationale:** WDL nativo allineato al blueprint §Training pipeline. **Depth-2** gioca nettamente meglio di depth-1 (depth-1 ≈ 300 Elo), ma resta lento in partita reale (~1 min/ply con `fast`). **chess_lite** è utile come smoke inference (~2 ms/eval) ma gioca debole a depth-1. **ChessBench** test split resta **smoke** per validare encoder/pipeline PyTorch — non path produzione (produzione = nnue-pytorch + Lichess + Lc0 on-the-fly).
 
 **Installazione Lc0:** `py -3.12 scripts/download_teacher.py` (BT4 + lc0) · T1-256 via `scripts/bench_teacher_nets.py` o download manuale · `791556` già nello zip lc0.
 
@@ -150,14 +150,14 @@ GIF esempio: `images/games/hf_chess_lite_depth1_20260706_143456.gif` (40 ply).
 
 **Limiti HF vs Lc0:** eval tanh `[-1,1]` (non WDL); play strength ≪ Lc0 anche a parità depth; **non teacher per training NNUE** (target blueprint = expected reward da WDL).
 
-### Dataset posizioni–evaluations — serve qualcosa di già pronto
+### Dataset posizioni–evaluations
 
 | Approccio | Verdetto |
 |-----------|----------|
-| `label_positions.py` + lc0 UCI | **❌ Scartato** — depth-1 ≈ 1 s/pos, depth-2 ≈ 1 min/pos in partita → giorni/settimane per training set |
-| Lc0 chunk `best_q` / `root_q` | ⚠️ Parziale — già nel raw data locale, ma net di generazione ≠ teacher uniforme |
-| **ChessBench** (DeepMind, SF 16) | **✅ Scaricato (test)** — vedi sotto; train 15.3B action-values, serve conversione label |
-| Altri dump (Lichess/Lc0 HF) | ⚠️ Survey in [Datasets.md](Datasets.md) |
+| **Lichess PGN + label on-the-fly Lc0** | **✅ Path produzione** — blueprint §Training pipeline; label durante dataloader nnue-pytorch |
+| Lc0 chunk `best_q` / `root_q` | ⚠️ Supplemento posizioni — Q del net di generazione ≠ teacher uniforme |
+| **ChessBench** (DeepMind, SF 16) | **⚠️ Smoke only** — test split locale per pilot PyTorch; non teacher WDL nativo |
+| Altri dump pre-etichettati | ⚠️ Survey in [Datasets.md](Datasets.md) — nessuno end-to-end per 844-dim |
 
 #### ChessBench — ✅ test split locale (2026-07-06)
 
@@ -208,7 +208,7 @@ Fonte: [google-deepmind/searchless_chess](https://github.com/google-deepmind/sea
 | `models/checkpoints/` | Previsto post-nnue-pytorch — **inesistente** |
 | `models/exported/` | Previsto int8 + tanh LUT — **inesistente** |
 
-Architettura target: `716 → W (128/256) → 2W → 1` × 8 bucket.
+Architettura target: `844 → W (128/256) → 2W → 1` × 8 bucket.
 
 ### Legacy pre-SARDINE — archivio (768-dim, centipawn)
 
@@ -246,17 +246,17 @@ Architettura target: `716 → W (128/256) → 2W → 1` × 8 bucket.
 | `tiny_chess_onnx_data.h` | 100 MB |
 | `my_tiny_model.h` | 374 B |
 
-Sketch: `legacy/pre-sardine/Arduino/Wio_TinyValueTest/`. **Non usare per SARDINE v1** (encoder 716, expected reward).
+Sketch: `legacy/pre-sardine/Arduino/Wio_TinyValueTest/`. **Non usare per SARDINE v1** (encoder 844, expected reward).
 
 ### Riepilogo
 
 | Categoria | Path root | Installato | Uso SARDINE v1 |
 |-----------|-----------|------------|----------------|
-| Lc0 teacher (fast default) | `models/teacher/` | ✅ 3 reti + lc0 | Bot depth 1–2, demo GIF; **teacher training** |
+| Lc0 teacher (fast default) | `models/teacher/` | ✅ 3 reti + lc0 | Bot depth 1–2, demo GIF; **latest best net per training** |
 | HF teacher (chess_lite) | `models/teacher/hf/` | ✅ 2 checkpoint | Smoke latency; gioco debole a depth-1 |
-| ChessBench (SF 16) | `data/raw/chessbench/` | ✅ test split | Label win_prob — conversione per step C |
-| Dataset pre-label (full) | esterno / `data/` | ⚠️ parziale | Train ChessBench 1.1 TB o Lc0 WDL dump |
-| SARDINE NNUE | `models/` | ❌ | Training step C |
+| ChessBench (SF 16) | `data/raw/chessbench/` | ✅ test split | **Smoke only** — pilot PyTorch, non produzione |
+| Lichess PGN | `data/raw/lichess/` | ❌ | Primary training positions (futuro) |
+| SARDINE NNUE | `models/` | 🔄 pilot | Produzione post-nnue-pytorch |
 | Legacy value/policy | `legacy/pre-sardine/models/` | ✅ archivio | Riferimento storico |
 
 

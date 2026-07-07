@@ -11,12 +11,12 @@ Produrre un dataset **processed** sotto `data/processed/lc0/` con:
 
 | Campo | Uso |
 |-------|-----|
-| **FEN** (o `chess.Board` ricostruibile) | `encode_dual()` → 716 feature sparse SARDINE |
+| **FEN** (o `chess.Board` ricostruibile) | `encode_dual()` → 844 feature sparse SARDINE |
 | **`bucket_id`** | router a 8 expert head in training/inference |
-| **`sf_cp`** | target eval **centipawn** Stockfish, prospettiva side-to-move |
+| **`expected_reward`** | target **W−L** da Lc0 latest best net (UCI WDL), prospettiva side-to-move |
 | metadati leggeri | ply, `plies_left`, visits, shard di provenienza |
 
-**Non** addestriamo sulla policy Lc0 (1858 prob) né sui piani Lc0 nativi (768/112): il feature space del motore è **716 pruned**, già implementato in `src/tinymlinternship/features/`.
+**Non** addestriamo sulla policy Lc0 (1858 prob) né sui piani Lc0 nativi (768/112): il feature space del motore è **844** (716 base + 128 tactical), già implementato in `src/tinymlinternship/features/`.
 
 ---
 
@@ -26,7 +26,7 @@ Produrre un dataset **processed** sotto `data/processed/lc0/` con:
 - Bit planes → FEN → `python-chess`: **~97%** posizioni legali su chunk campione (36/37).
 - Fix noti: ordine king/queen nei piani Lc0; sanitizzazione castling incoerente (`KQkq` → `-`).
 - **Fatto:** game grouping (`plies_left` reset), filter per-bucket min_ply, stats gate, pilot `positions.parquet`.
-- **Non ancora fatto:** labeling Stockfish, training nnue-pytorch.
+- **Non ancora fatto:** labeling Lc0 on-the-fly, training nnue-pytorch (produzione).
 
 ---
 
@@ -39,10 +39,10 @@ flowchart LR
     FEN["2 · Planes → FEN → Board"]
     GAME["3 · Raggruppa per partita"]
     FILTER["4 · Filtro posizioni"]
-    SAMPLE["5 · Campionamento per bucket"]
-    LABEL["6 · Label Stockfish"]
+    SAMPLE["5 · Campionamento (natural dist.)"]
+    LABEL["6 · Label Lc0 WDL on-the-fly"]
     EXPORT["7 · data/processed/lc0/"]
-    TRAIN["8 · nnue-pytorch (716→16→1)"]
+    TRAIN["8 · nnue-pytorch (844 bucketed)"]
 
     RAW --> PARSE --> FEN --> GAME --> FILTER --> SAMPLE --> LABEL --> EXPORT --> TRAIN
 ```
@@ -77,21 +77,21 @@ Metadati utili già nel record V6:
 Percorso scelto:
 
 ```
-uint64 planes[0:12]  →  FEN  →  chess.Board  →  encode_dual(board)  →  sparse 716
+uint64 planes[0:12]  →  FEN  →  chess.Board  →  encode_dual(board)  →  sparse 844
 ```
 
 **Perché FEN e non i piani Lc0?**
 
-1. SARDINE ha un encoder proprietario (716 dim, king mirror, castling frame, EP) — deve essere **identico** su PC e device.
+1. SARDINE ha un encoder proprietario (844 dim: king mirror, castling frame, EP, tactical planes) — deve essere **identico** su PC e device.
 2. I piani Lc0 (112/classical stacked history) non mappano 1:1 sul nostro index map.
 3. `python-chess` ci dà validazione legale e `bucket_id()` gratis.
 
 **Cosa persistiamo su disco (processed):**
 
-- **Minimo:** `fen`, `bucket_id`, `sf_cp`, `ply`, `game_id`.
+- **Minimo:** `fen`, `bucket_id`, `expected_reward`, `ply`, `game_id`.
 - **Opzionale:** coppie sparse `(feature_index, 1)` pre-calcolate — solo se il dataloader è troppo lento; default = encode on-the-fly da FEN.
 
-**Cosa non persistiamo:** vettori densi 716, piani Lc0 raw, policy 1858 float.
+**Cosa non persistiamo:** vettori densi 844, piani Lc0 raw, policy 1858 float.
 
 ---
 
@@ -145,15 +145,15 @@ Il vero problema non sono partite corte, ma il **sovrappeso dell’apertura** de
 | Fase | Risolve | Senza l’altra |
 |------|---------|---------------|
 | **4 · filtro ply** | **Diversità** dentro ogni bucket (meno startpos/apertura clone) | Fase 5 campionerebbe ancora da un pool quasi tutto apertura |
-| **5 · stratified sample** | **Bilanciamento tra** bucket (quota ≈ N/8) | Fase 4 sola lascerebbe bucket 6–7 numericamente dominanti |
+| **5 · cap per shard** | **Volume** senza bilanciare bucket (natural dist.) | Fase 4 sola lascerebbe bucket 6–7 numericamente dominanti nel pool |
 
 ### Rischio bucket 7 (p = 32)
 
-La prima cattura in molte aperture cade a **ply 16–30**. Un `min_ply` globale aggressivo può **affamare** il bucket 7 prima che la Fase 5 possa bilanciare.
+La prima cattura in molte aperture cade a **ply 16–30**. Un `min_ply` globale aggressivo può **affamare** il bucket 7 nel pool campionato.
 
 **Mitigazione v1:** `min_ply` **per-bucket** — default globale `32`, bucket 7 relax `8` (`DEFAULT_BUCKET_MIN_PLY` in `lc0_preprocess.py`).
 
-**Gate obbligatorio prima del labeling Stockfish:** `scripts/stats_lc0_processed.py` → tabella survival per bucket; se bucket 7 < N/8, abbassare `bucket7_min_ply`.
+**Gate obbligatorio prima del labeling:** `scripts/stats_lc0_processed.py` → tabella survival per bucket; se bucket 7 è troppo scarso, abbassare `bucket7_min_ply`.
 
 **Piano v1 (default):**
 
@@ -169,39 +169,42 @@ La prima cattura in molte aperture cade a **ply 16–30**. Un `min_ply` globale 
 
 ---
 
-## Fase 5 — Campionamento bucket-stratified
+## Fase 5 — Campionamento (distribuzione naturale)
 
 Dopo i filtri, la distribuzione `bucket_id()` resta sbilanciata verso middlegame denso.
 
-**Obiettivo:** ~uniforme su 8 bucket (B-C queen-split), come [design options §12](SARDINE%20design%20options.md).
+**Obiettivo (blueprint §Training pipeline):** **nessun resampling stratificato**. Tenere la frequenza naturale dei bucket; il router MoE impara dalla distribuzione reale.
 
-La Fase 5 **non** sostituisce la Fase 4: downsampling uniforme su un pool di sole aperture ripetute resta poco diversificato.
+La Fase 5 **non** sostituisce la Fase 4: senza filtro ply, il pool resterebbe quasi tutto apertura.
 
 Procedura:
 
 1. Calcola `bucket_id(board)` per ogni posizione candidata.
-2. Target per bucket: `N_total / 8` (o quote minime per bucket rari 0–1).
-3. Reservoir sampling / downsampling per bucket sovrarappresentati; cap su bucket 6–7 se necessario.
-4. Tenere **validation set** stratificato (es. 5%, stesso schema), **mai** mescolato con train.
+2. Campionare FEN con **quota fissa per shard/chunk** (es. cap `N_total`), senza bilanciare per bucket.
+3. Tenere **validation set** disgiunto (es. 5% per shard o hold-out mensile Lichess), **mai** mescolato con train.
 
-**Scala v1 (subset ~1.15 GiB raw):** puntare a **50k–200k posizioni** labeled Stockfish, non l’intero corpus decompresso (decine di milioni di record).
+**Nota pilot:** `prepare_lc0_dataset.py` usava bucket-stratified sampling per il subset esplorativo locale — **non** riflette il path produzione Lichess.
+
+**Scala v1 (subset ~1.15 GiB raw):** puntare a **50k–200k posizioni** con label Lc0 on-the-fly, non l’intero corpus decompresso (decine di milioni di record).
 
 ---
 
-## Fase 6 — Label Stockfish (target di training)
+## Fase 6 — Label Lc0 (target di training)
 
-**Target primario v1: `sf_cp` centipawn**, prospettiva **side-to-move**, da Stockfish a profondità fissa.
+**Target primario v1: `expected_reward = W − L`**, prospettiva **side-to-move**, da **Lc0 latest best network** via UCI WDL.
 
 | Parametro | Proposta iniziale |
 |-----------|-------------------|
-| Engine | Stockfish 16+ (PATH o `python-chess` UCI) |
-| Depth | 12–14 (compromesso qualità/tempo) |
-| Nodes | opzionale cap per posizione |
-| Output | `cp` da `info score cp` (mate → ±30000 clamp) |
+| Engine | `lc0` (installato in `models/teacher/`) |
+| Network | Latest best da [training.lczero.org](https://training.lczero.org/) |
+| Comando | `position fen …` → `eval` (o `go nodes 1` + parse WDL) |
+| Output | WDL permille → `expected_reward = (W − L) / 1000` |
 
-**Batch offline:** script `scripts/label_lc0_stockfish.py` (da scrivere) — resume, cache per `fen`, pool multiprocessing.
+**On-the-fly in training:** il dataloader nnue-pytorch etichetta ogni batch al volo (o cache incrementale per FEN ripetuti).
 
-**Non** usiamo `best_q` Lc0 come label finale: è WDL-normalizzato per le reti Lc0, non centipawn allineati al nostro output CReLU/tanh e alla gate Elo vs motori classici.
+**Batch offline (supplemento Lc0):** script `scripts/label_positions.py` — resume, cache per `fen`, pool multiprocessing.
+
+**Non** usiamo `best_q` Lc0 dal chunk come label finale: è del net di generazione, non del teacher uniforme scelto.
 
 ---
 
@@ -213,7 +216,7 @@ La NNUE di valutazione statica impara **«chi sta meglio in questa posizione»**
 
 | Segnale | Fonte | Ruolo v1 |
 |---------|-------|----------|
-| **Stockfish centipawn** | fase 6 | **target principale** — regressione eval |
+| **Lc0 WDL → expected reward** | fase 6 | **target principale** — regressione eval |
 | `best_q` / `root_q` Lc0 | record V6 | diagnostica; eventuale pre-filter qualità |
 | `result_q`, `result_d` | record V6 | **ignorato** — è outcome WDL della partita, utile per training **policy/value Lc0**, non per micro-NNUE stile Stockfish |
 | Esito W/L/D da `result_q` | derivabile | **non** mixed nella loss v1 |
@@ -222,7 +225,7 @@ La NNUE di valutazione statica impara **«chi sta meglio in questa posizione»**
 
 1. Outcome è **rumoroso** per singola posizione (posizione +3.0 può essere in partita persa).
 2. Lc0 stesso traina Q con blend di search + outcome; noi vogliamo eval **statica** compatibile con search alpha-beta + TT.
-3. Blueprint e TODOs esplicitano **Stockfish labels**, non outcome Kaggle-style.
+3. Blueprint §Training pipeline: **Lc0 on-the-fly labels**, non outcome Kaggle-style.
 
 ### Uso futuro (v2+, non pianificato ora)
 
@@ -238,7 +241,7 @@ La NNUE di valutazione statica impara **«chi sta meglio in questa posizione»**
 data/processed/lc0/
 ├── manifest.json          # versione pipeline, hash shard, conteggi
 ├── positions.parquet      # fen, bucket_id, ply, game_id, lc0_best_q, visits, …
-├── labeled.parquet        # + sf_cp, sf_depth, label_ms
+├── labeled.parquet        # + expected_reward, label_ms
 └── splits/
     ├── train.parquet
     └── val.parquet
@@ -247,7 +250,7 @@ data/processed/lc0/
 Schema minimo `labeled` per training:
 
 ```text
-fen, bucket_id, sf_cp, ply, game_id
+fen, bucket_id, expected_reward, ply, game_id
 ```
 
 Lo script di training legge FEN → `encode_dual()` → batch sparse → rete bucketed.
@@ -258,10 +261,12 @@ Lo script di training legge FEN → `encode_dual()` → batch sparse → rete bu
 
 SARDINE **non** usa l’input 768 HalfKP di Stockfish. Piano:
 
-1. Fork/adattare dataloader nnue-pytorch per **feature index list** da `encode_dual()`.
-2. Shared layer 716→16 + 8 teste 32→1; loss MSE (o huber) su `sf_cp` normalizzato.
-3. CReLU hidden **e** output (no tanh LUT — vedi [TODOs.md](../TODOs.md) §C).
-4. Export int8 post-training + misura gap fp32→int8.
+1. Fork/adattare dataloader nnue-pytorch per **feature index list** da `encode_dual()` (844-dim).
+2. Shared layer 844→W + 8 teste 2W→1; loss MSE su `expected_reward`; **gradual L1 prune** 70–80% durante training.
+3. **100 ep fissi**; salva best (val loss) + final checkpoint.
+4. **PTQ** int8 export + tanh LUT; QAT solo se MSE > 0.01 o Elo drop > 30.
+
+**Smoke parallelo:** `scripts/train_nnue.py` (PyTorch custom su ChessBench) valida encoder/engine — non sostituisce nnue-pytorch.
 
 ---
 
@@ -272,7 +277,7 @@ SARDINE **non** usa l’input 768 HalfKP di Stockfish. Piano:
 | `scripts/smoke_test_lc0_chunk.py` | ✅ smoke parse |
 | `scripts/stats_lc0_processed.py` | ✅ survival bucket × min_ply (gate pre-labeling) |
 | `scripts/prepare_lc0_dataset.py` | ✅ 1–5: parse, FEN, filter, sample → `positions.parquet` |
-| `scripts/label_lc0_stockfish.py` | 6: `positions.parquet` → `labeled.parquet` |
+| `scripts/label_positions.py` | 6: `positions.parquet` → `labeled.parquet` (Lc0 UCI) |
 
 ---
 
@@ -280,7 +285,7 @@ SARDINE **non** usa l’input 768 HalfKP di Stockfish. Piano:
 
 1. **% `input_format != 1`** negli shard — se > 0, estendere parser o filtrare.
 2. **Distribuzione `ply` dopo filtro** — confrontare con `excel/piece_count_distribution_10k.xlsx`.
-3. **Costo labeling** — stimare: 100k pos × ~0.5–2 s/pos @ depth 12 → ore/giorni; campionare prima 5k.
+3. **Costo labeling** — on-the-fly in training o batch offline; stimare throughput con rete scelta; campionare prima 5k.
 4. **Accordo FEN parser vs encoder** — golden test: FEN da Lc0 → `encode_dual` vs stesso board da mossa UCI (parity spot-check).
 
 ---
@@ -291,9 +296,9 @@ SARDINE **non** usa l’input 768 HalfKP di Stockfish. Piano:
 |---------|----------------|
 | Filtrare partite < 16 mosse? | **No** (salvo log anomalie); filtrare **posizioni** con `ply < 32` (16 mosse), bucket 7: `ply < 8` |
 | Calcolare board state? | **Sì** — FEN da piani, poi `chess.Board` |
-| Usare risultato partita nel training? | **No** come target; **sì** Stockfish `sf_cp` |
-| Usare piani Lc0 come input? | **No** — solo SARDINE 716 via `encode_dual` |
-| Precomputare sparse 716? | **Opzionale**; default encode a train time |
+| Usare risultato partita nel training? | **No** come target; **sì** Lc0 `expected_reward` (W−L) |
+| Usare piani Lc0 come input? | **No** — solo SARDINE 844 via `encode_dual` |
+| Precomputare sparse 844? | **Opzionale**; default encode a train time |
 
 ---
 

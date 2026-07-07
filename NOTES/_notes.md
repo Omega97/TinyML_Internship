@@ -26,7 +26,7 @@ Central hub for all project notes and references.
 - [SARDINE design options.md](SARDINE%20design%20options.md) — Full component option catalog.
 - [Ideas 💡.md](Ideas%20💡.md) — Raw design ideas feeding into SARDINE.
 - [NNUE.md](NNUE.md) — Efficiently Updatable Neural Network evaluation: architecture, incremental updates, quantization, advanced techniques.
-- [Lc0 preprocessing pipeline.md](Lc0%20preprocessing%20pipeline.md) — Raw Lc0 chunks → FEN → bucket sampling → Stockfish labels → nnue-pytorch.
+- [Lc0 preprocessing pipeline.md](Lc0%20preprocessing%20pipeline.md) — Raw Lc0 chunks → FEN → natural bucket dist. → Lc0 on-the-fly labels → nnue-pytorch.
 - [chess.md](chess.md) — FEN notation, pawn promotion handling for policy heads.
 
 ---

@@ -1,6 +1,15 @@
 
 ## Ideas
 
+- Add hand-crafted, quick-to-compute features about the chess board 
+	- `8x8` pieces under attack, 
+	- `8x8` pieces attacking the king,
+	- `8x8` pieces that are attacked more than defended?
+    
+- find online simple patters for the value function (piece position etc.)
+    
+- quiescence
+    
 - AlphaZero-style Dual head (policy + value net, all in one)? 
 	- Maybe too heavy...
     
@@ -58,8 +67,6 @@
 
 ---
 
-## See Also
-
 ### "Dog" (NNUE su ESP32)
 
 Questa è probabilmente la scoperta più rilevante per te. Uno sviluppatore (Folkert van Heusden) ha creato **Dog**, un motore scacchistico progettato specificamente per girare su un microcontrollore ESP32.
@@ -71,6 +78,8 @@ Questa è probabilmente la scoperta più rilevante per te. Uno sviluppatore (Fol
 - **Perché ti è utile:** Dimostra che il tuo obiettivo (un TinyML per scacchi su un chip con ~200KB di RAM) è assolutamente fattibile e competitivo. L'autore lo ha anche interfacciato in modalità UCI per farlo giocare online su Lichess direttamente dal chip.
     
 
+---
+
 ### "MicroChess"
 
 Se la sfida di Kaggle imponeva un limite di 5 MB di RAM, questo progetto su GitHub porta il concetto di "vincolo" alla follia.
@@ -81,6 +90,8 @@ Se la sfida di Kaggle imponeva un limite di 5 MB di RAM, questo progetto su GitH
     
 - **Perché ti è utile:** È il benchmark definitivo per capire come scrivere codice C _bare-metal_ super efficiente. Se vuoi implementare l'Alpha-Beta sul Wio Terminal senza sprecare byte, il codice sorgente di MicroChess è un'enciclopedia dell'ottimizzazione.
     
+
+---
 
 ###  "ESP32 Chess Engine" (di Sergey Urusov)
 
@@ -95,3 +106,10 @@ Questo progetto è un'evoluzione di un vecchio motore per Arduino Mega, riscritt
 
 ---
 
+## See Also
+
+- [Kaggle tiny chess AI challenge](https://www.kaggle.com/competitions/fide-google-efficiency-chess-ai-challenge)
+- [Top Chess Engine Championship (TCEC)](https://en.wikipedia.org/wiki/Top_Chess_Engine_Championship)
+- [TCEC 4k](https://wiki.chessdom.org/TCEC_4k_Rules)
+- https://www.youtube.com/watch?v=_vqlIPDR2TU  
+- https://www.youtube.com/watch?v=Ne40a5LkK6A

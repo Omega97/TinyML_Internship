@@ -17,40 +17,83 @@ pip install torch          # legacy export / training only
 
 ---
 
-## SARDINE engine v0.1 & game GIF (active)
+## SARDINE engine v0.3 & game GIF (active)
 
-Engine: `src/tinymlinternship/engine/` — HCE + **1-ply** search (`search_best_move`).  
-Visualization: `src/tinymlinternship/visualization/` — pygame board + GIF export (**gifpgn**; `chess_gif` needs libvips on Windows).
+Engine: `src/tinymlinternship/engine/` — alpha-beta + quiescence, pluggable eval (`hce` | `nnue` | `lc0`).  
+Frozen bot recipes: **`NOTES/agents/*.md`** (value + search params).  
+Visualization: `src/tinymlinternship/visualization/` — pygame + GIF (**gifpgn**).
 
 ### Single position — best move
 
 ```bash
-py -3.12 scripts/run_engine.py
-py -3.12 scripts/run_engine.py --fen "4qk2/8/8/8/8/8/8/4R1K1 w - - 0 1"
-py -3.12 scripts/run_engine.py --moves "e2e4 e7e5"
+# HCE (default), depth 1
+py -3.12 scripts/run_engine.py --depth 1
+
+# NNUE (844-dim), depth 2
+py -3.12 scripts/run_engine.py --eval nnue --depth 2
+
+# Custom checkpoint / FEN
+py -3.12 scripts/run_engine.py --eval nnue --nnue-checkpoint models/checkpoints/nnue/pilot_W128_844/best.pt --depth 2
+py -3.12 scripts/run_engine.py --fen "4qk2/8/8/8/8/8/8/4R1K1 w - - 0 1" --depth 2
+py -3.12 scripts/run_engine.py --moves "e2e4 e7e5" --depth 1
 ```
 
 ### Self-play + GIF (project root)
 
-Plays a full game with the engine, shows it in pygame (unless `--headless`), writes **`images/sardine_game.gif`** and **`images/sardine_game.pgn`**:
+Writes **`images/sardine_game.gif`** and **`images/sardine_game.pgn`**:
 
 ```bash
-# Window + GIF (default output: images/sardine_game.gif)
-py -3.12 scripts/record_engine_game.py
-
-# No window (CI / headless)
 py -3.12 scripts/record_engine_game.py --headless
-
-# Custom path and timing
-py -3.12 scripts/record_engine_game.py --output images/sardine_game.gif --frame-ms 450 --max-plies 200
-
-# GIF from pygame frames (same look as the live window)
+py -3.12 scripts/record_engine_game.py --eval nnue --depth 2 --headless --max-plies 80
+py -3.12 scripts/record_engine_game.py --eval hce --depth 2 --output images/sardine_game.gif --frame-ms 450
 py -3.12 scripts/record_engine_game.py --headless --exporter pygame
 ```
 
-### Teacher 1-ply self-play + GIF (Lc0 BT4)
+### NNUE training (smoke only)
 
-Shallow search with **Lc0 BT4** as eval (`go nodes 1` per position, no quiescence). Slow on CPU (~10 s/ply); use few plies for a quick demo.
+Production path = Lichess PGN + Lc0 on-the-fly labels + **nnue-pytorch** (see blueprint §Training pipeline). The commands below validate encoder/engine wiring on ChessBench parquet only:
+
+```bash
+pip install -e ".[train]"
+py -3.12 scripts/prepare_chessbench_dataset.py
+py -3.12 scripts/train_nnue.py --epochs 10 --run-name pilot_W128_844
+```
+
+### Bot evaluation — ACPL → Elo (Stockfish)
+
+Blueprint §Bot Evaluation (A1): Stockfish analizza le mosse; **non** è un match win-rate vs avversario.
+
+**Stockfish:** `models/teacher/stockfish/stockfish.exe` (o `--stockfish` / `STOCKFISH_PATH`).
+
+#### Gate depth-1 — self-play + ACPL aggregato
+
+```bash
+py -3.12 scripts/eval_bot_acpl.py --eval nnue --depth 1 --max-plies 80 --no-quiescence --sf-movetime-ms 100 --verbose
+py -3.12 scripts/eval_bot_acpl.py --eval hce --depth 1 --max-plies 80 --no-quiescence --sf-movetime-ms 100
+py -3.12 scripts/eval_bot_acpl.py --pgn plots/nnue_d1_gate.pgn --sf-movetime-ms 100 --json plots/nnue_d1_gate_acpl.json
+```
+
+#### Elo per giocatore (bianco e nero separati)
+
+`eval_game_elo.py` — da **PGN** o da lista mosse UCI (`--moves`).
+
+> **Il file di input deve essere in formato PGN** (`.pgn`): testo con header `[Event]`, `[White]`, `[Black]`, `[Result]`, … e mosse in notazione standard. Non usare JSON, CSV o altri formati con `--pgn`.
+
+```bash
+# Da PGN (formato obbligatorio per --pgn)
+py -3.12 scripts/eval_game_elo.py --pgn plots/nnue_d1_gate.pgn --sf-movetime-ms 100
+py -3.12 scripts/eval_game_elo.py --pgn images/sardine_game.pgn --sf-movetime-ms 100 --json plots/game_elo_by_side.json
+
+# Da lista mosse UCI (alternativa senza file)
+py -3.12 scripts/eval_game_elo.py --moves "e2e4 e7e5 g1f3 b8c6" --white "BotA" --black "BotB" --sf-movetime-ms 100
+
+# FEN iniziale + mosse UCI
+py -3.12 scripts/eval_game_elo.py --fen "rnbqkbnr/pppppppp/8/8/4P3/8/PPPP1PPP/RNBQKBNR b KQkq e3 0 1" --moves "e7e5 g1f3" --sf-depth 16
+```
+
+### Teacher 1-ply self-play + GIF (Lc0)
+
+Shallow search with **Lc0** as eval (`go nodes 1` per position, no quiescence). Default `fast` net (~1 s/ply); `bt4` ~10 s/ply — use few plies for a quick demo.
 
 Requires teacher install first: `py -3.12 scripts/download_teacher.py`
 
@@ -98,7 +141,7 @@ py -3.12 scripts/download_lc0.py --list      # curated shard catalog
 py -3.12 scripts/download_lc0.py --max-gb 1  # stop after first shard
 ```
 
-Lc0 preprocessing (parse → filter → sample; run stats before Stockfish labeling):
+Lc0 preprocessing (parse → filter → sample; run stats before Lc0 labeling):
 
 ```bash
 py -3.12 scripts/stats_lc0_processed.py --max-chunks 80 --max-records 30000

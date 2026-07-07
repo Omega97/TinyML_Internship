@@ -21,7 +21,7 @@ py -3.12 -m pip install -e ".[dev]"
 
 ## Tests — feature encoder (`tests/test_features.py`)
 
-29 tests: index map (716 dims), king mirroring, `encode_perspective`, `encode_dual`, `bucket_id`, golden FEN snapshots.
+33+ tests: index map (844 dims), king mirroring, tactical planes, `encode_perspective`, `encode_dual`, `bucket_id`, golden FEN snapshots.
 
 ### Option A — pytest (recommended)
 
@@ -75,7 +75,7 @@ Bucket on startpos (expect `7`):
 py -3.12 -c "import sys; sys.path.insert(0,'src'); import chess; from tinymlinternship.features import bucket_id; print(bucket_id(chess.Board()))"
 ```
 
-Index map sanity (expect `716 704 704`):
+Index map sanity (expect `844 716 704`):
 
 ```bash
 py -3.12 -c "import sys; sys.path.insert(0,'src'); from tinymlinternship.features.index_map import FEATURE_DIM, piece_square_count, meta_base; print(FEATURE_DIM, piece_square_count(), meta_base())"
