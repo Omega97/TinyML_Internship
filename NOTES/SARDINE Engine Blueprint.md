@@ -3,7 +3,7 @@
 
 Chess engine for the **Wio Terminal** — neural evaluation + alpha-beta search, maximizing **Elo per byte** under 192 KB RAM / ~500 KB flash.
 
-*Alternative designs considered: [SARDINE design options.md](SARDINE%20design%20options.md).*
+*Alternative designs considered: [[SARDINE Engine Blueprint]].*
 
 ---
 
@@ -353,3 +353,5 @@ If the primary NNUE + search plan fails to reach 1700 Elo, the following fallbac
 **Decision authority**: I (the developer) trigger Level 1-2 autonomously. Level 3+ requires supervisor sign-off.
 
 ---
+
+#core

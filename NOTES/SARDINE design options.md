@@ -4,9 +4,9 @@ Small Artificial RAM-restricted Deep Intelligent Neural Engine
 
 ![SARDINE logo](../images/logo/SARDINE-logo-dark-small.png)
 
-A modular chess engine plan for the Wio Terminal. **Locked decisions:** [SARDINE 🐟.md](SARDINE%20🐟.md).
+A modular chess engine plan for the Wio Terminal. **Locked decisions:** [[SARDINE Engine Blueprint]].
 
-Sources: [Ideas 💡.md](Ideas%20💡.md), [NNUE.md](NNUE.md), [Models.md](Models.md), [FIDE Challenge](FIDE%20%26%20Google%20Efficient%20Chess%20AI%20Challenge.md), [Performance.md](Performance.md), `piece_count_distribution_10k.xlsx`.
+Sources: [Ideas 💡.md](Ideas%20💡.md), [NNUE.md](NNUE.md), [Models.md](Models.md), [Kaggle FIDE Challenge](https://www.kaggle.com/competitions/fide-google-efficiency-chess-ai-challenge), [Performance.md](Performance.md), `piece_count_distribution_10k.xlsx`.
 
 ---
 
@@ -329,10 +329,10 @@ Short bundles if you want a starting point before mixing options:
 
 ## Open Questions
 
-- [ ] Per-bucket ablation MSE thresholds — decisive vs ambiguous (see [SARDINE 🐟.md](SARDINE%20🐟.md))
+- [ ] Per-bucket ablation MSE thresholds — decisive vs ambiguous (see [[SARDINE Engine Blueprint]])
 - [ ] TT 10 B vs 16 B benchmark on Wio hardware
 - [ ] PTQ acceptance criterion before SCReLU/QAT escalation
 
 ---
 
-[← Locked decisions](SARDINE%20🐟.md) · [← Notes index](_notes.md)
+[[SARDINE Engine Blueprint]] · [← Notes index](_notes.md)

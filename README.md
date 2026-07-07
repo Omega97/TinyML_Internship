@@ -7,11 +7,11 @@
 
 - Engine blueprint: [NOTES/SARDINE Engine Blueprint.md](NOTES/SARDINE%20Engine%20Blueprint.md)
 - Modelli online: [NOTES/Models.md](NOTES/Models.md)
-- Kaggle challenge: [FIDE & Google Efficient Chess AI Challenge](NOTES/FIDE%20%26%20Google%20Efficient%20Chess%20AI%20Challenge.md)
+- Kaggle challenge: [FIDE & Google Efficient Chess AI Challenge](https://www.kaggle.com/competitions/fide-google-efficiency-chess-ai-challenge)
 - Dettagli progetto: [PROJECT.md](PROJECT.md)
 - Report di tirocinio: [Project Report.md](Project%20Report.md)
 - Note progetto: [NOTES/notes.md](_notes.md)
-- Pre-SARDINE archive: [legacy/pre-sardine/](legacy/pre-sardine/)
+- Pre-SARDINE archive: `legacy/pre-sardine/`
 
 
 ![game-demo-gif](images/games/depth2_game_demo.gif)

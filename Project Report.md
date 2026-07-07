@@ -149,7 +149,7 @@ Meeting all'ufficio del prof. Zennaro
 
 - **Catalogo modelli** — consolidata la ricerca HF in [NOTES/Models.md](NOTES/Models.md): confronto per famiglia (Dense/Conv, ResNet, Transformer, NNUE, Lc0 edge) con parametri, file size e fattibilità su Wio. Conclusione: i modelli HF (8–100M params) sono fuori budget; NNUE e dual-head custom restano le direzioni più promettenti.
 - **Transformer compatto** — definita in [NOTES/chess transformer.md](NOTES/chess%20transformer.md) un'architettura policy+value a **~210K parametri** (input `24×8×8`, 2 blocchi transformer, policy 2048 + value tanh) — ~165× più piccola di ChessBot (34.7M).
-- **FIDE & Google Challenge** — analizzate le soluzioni top sotto vincoli estremi (5 MiB RAM, binario ≤ 64 KiB): micro-NNUE, king mirroring, geometric pruning, SPSA tuning. Note: [NOTES/FIDE & Google Efficient Chess AI Challenge.md](NOTES/FIDE%20%26%20Google%20Efficient%20Chess%20AI%20Challenge.md).
+- **FIDE & Google Challenge** — analizzate le soluzioni top sotto vincoli estremi (5 MiB RAM, binario ≤ 64 KiB): micro-NNUE, king mirroring, geometric pruning, SPSA tuning. Note: [FIDE & Google Efficient Chess AI Kaggle Challenge](https://www.kaggle.com/competitions/fide-google-efficiency-chess-ai-challenge).
 - **NNUE deep-dive** — nota dedicata su architettura, aggiornamenti incrementali e quantizzazione: [NOTES/NNUE.md](NOTES/NNUE.md).
 - **Analisi dataset** — distribuzione piece-count su 1k e 10k partite Lichess (`piece_count_distribution.xlsx`, `piece_count_distribution_10k.xlsx`); usata per progettare i bucket bilanciati del training.
 - **SARDINE blueprint** — decisioni in [NOTES/SARDINE Engine Blueprint.md](NOTES/SARDINE%20Engine%20Blueprint.md); catalogo opzioni in [SARDINE design options.md](NOTES/SARDINE%20design%20options.md). Vedi sezione [SARDINE Pipeline](README.md#sardine-pipeline) nel README.
@@ -161,9 +161,9 @@ Meeting all'ufficio del prof. Zennaro
 - Features: `src/tinymlinternship/features/` — 716 encoder, bucket router, 29 tests
 - Engine: `src/tinymlinternship/engine/` — HCE + `search_best_move` (v0.1)
 - Visualization: `src/tinymlinternship/visualization/` + [scripts/record_engine_game.py](scripts/record_engine_game.py) → `sardine_game.gif`
-- Notes: [NOTES/Models.md](NOTES/Models.md), [NOTES/chess transformer.md](NOTES/chess%20transformer.md), [NOTES/NNUE.md](NOTES/NNUE.md), [NOTES/SARDINE Engine Blueprint.md](NOTES/SARDINE%20Engine%20Blueprint.md), [NOTES/FIDE & Google Efficient Chess AI Challenge.md](NOTES/FIDE%20%26%20Google%20Efficient%20Chess%20AI%20Challenge.md)
+- Notes: [NOTES/Models.md](NOTES/Models.md), [NOTES/chess transformer.md](NOTES/chess%20transformer.md), [NOTES/NNUE.md](NOTES/NNUE.md), [NOTES/SARDINE Engine Blueprint.md](NOTES/SARDINE%20Engine%20Blueprint.md), [FIDE & Google Efficient Chess AI Kaggle Challenge.md](https://www.kaggle.com/competitions/fide-google-efficiency-chess-ai-challenge)
 - Data analysis: [scripts/plot_piece_count_distribution.py](scripts/plot_piece_count_distribution.py) → `piece_count_distribution.xlsx`, `piece_count_distribution_10k.xlsx`
-- Archive: [legacy/pre-sardine/](legacy/pre-sardine/) (export pipeline, `Wio_TinyValueTest`, checkpoints)
+- Archive: `legacy/pre-sardine/` (export pipeline, `Wio_TinyValueTest`, checkpoints)
 
 ---
 

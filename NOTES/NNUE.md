@@ -124,7 +124,7 @@ This is the same int8 philosophy we use on the Wio pipeline — NNUE was designe
 
 ## Advanced Techniques
 
-Used in top engines and especially in the [FIDE & Google Efficient Chess AI Challenge](FIDE%20%26%20Google%20Efficient%20Chess%20AI%20Challenge.md) to shrink networks without losing Elo:
+Used in top engines and especially in the [FIDE & Google Efficient Chess AI Challenge](https://www.kaggle.com/competitions/fide-google-efficiency-chess-ai-challenge) to shrink networks without losing Elo:
 
 | Technique | Idea | Trade-off |
 |-----------|------|-----------|
