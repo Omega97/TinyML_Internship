@@ -11,11 +11,13 @@ import argparse
 import json
 import os
 import sys
+import time
 from datetime import UTC, datetime
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).parent.parent / "src"))
 
+import chess
 import chess.engine
 import chess.pgn
 
@@ -27,6 +29,41 @@ from tinymlinternship.bot_eval import (
 from tinymlinternship.config.settings import NNUE_CHECKPOINT_DEFAULT, PROJECT_ROOT
 from tinymlinternship.engine import EVAL_CHOICES, ENGINE_VERSION, make_eval_fn
 from tinymlinternship.visualization import play_engine_game
+
+
+class _TerminalProgress:
+    """Single-line progress bar (no extra dependencies)."""
+
+    def __init__(self, total: int, label: str, *, width: int = 32) -> None:
+        self.total = max(total, 1)
+        self.label = label
+        self.width = width
+        self._started = time.perf_counter()
+        self._last_extra = ""
+
+    def update(self, current: int, extra: str = "") -> None:
+        ratio = min(current / self.total, 1.0)
+        filled = int(self.width * ratio)
+        if filled >= self.width:
+            bar = "=" * self.width
+        else:
+            bar = "=" * filled + ">" + " " * (self.width - filled - 1)
+        elapsed = time.perf_counter() - self._started
+        if extra:
+            self._last_extra = extra
+        line = f"\r{self.label} [{bar}] {current}/{self.total}  {elapsed:5.1f}s"
+        if self._last_extra:
+            line += f"  {self._last_extra}"
+        sys.stdout.write(line[:120].ljust(120))
+        sys.stdout.flush()
+
+    def finish(self, message: str = "") -> None:
+        elapsed = time.perf_counter() - self._started
+        sys.stdout.write(f"\r{self.label} done in {elapsed:.1f}s")
+        if message:
+            sys.stdout.write(f" — {message}")
+        sys.stdout.write("\n")
+        sys.stdout.flush()
 
 
 def _resolve_stockfish(path: str | None) -> str:
@@ -135,6 +172,11 @@ def main(argv: list[str] | None = None) -> int:
         help="Write JSON report",
     )
     parser.add_argument("--verbose", action="store_true", help="Print worst moves")
+    parser.add_argument(
+        "--no-progress",
+        action="store_true",
+        help="Disable terminal progress bars",
+    )
     args = parser.parse_args(argv)
 
     sf_path = _resolve_stockfish(args.stockfish)
@@ -164,17 +206,42 @@ def main(argv: list[str] | None = None) -> int:
         print(f"Loaded {len(games)} game(s) from {args.pgn}")
     else:
         for i in range(args.games):
-            print(f"Self-play game {i + 1}/{args.games} ({annotator})...")
+            label = f"Self-play {i + 1}/{args.games}"
+            if not args.no_progress:
+                print(f"{label} ({annotator})...")
+                play_bar = _TerminalProgress(args.max_plies, label)
+
+                def _on_ply(
+                    ply: int,
+                    _max_plies: int,
+                    move: chess.Move,
+                    ply_sec: float,
+                    _bar: _TerminalProgress = play_bar,
+                ) -> None:
+                    _bar.update(ply, f"ply {ply} {move.uci()} {ply_sec:.1f}s")
+
+                on_ply = _on_ply
+            else:
+                play_bar = None
+                print(f"{label} ({annotator})...")
+                on_ply = None
+
             game = play_engine_game(
                 max_plies=args.max_plies,
                 depth=args.depth,
                 eval_fn=eval_fn,
                 quiescence=args.quiescence,
                 annotator=annotator,
+                on_ply=on_ply,
             )
             games.append(game)
             plies = max(0, game.end().ply() - game.ply())
-            print(f"  {plies} half-moves, result {game.headers.get('Result', '*')}")
+            if play_bar is not None:
+                play_bar.finish(
+                    f"{plies} plies, result {game.headers.get('Result', '*')}"
+                )
+            else:
+                print(f"  {plies} half-moves, result {game.headers.get('Result', '*')}")
 
     if args.output_pgn and not args.pgn:
         args.output_pgn.parent.mkdir(parents=True, exist_ok=True)
@@ -187,7 +254,37 @@ def main(argv: list[str] | None = None) -> int:
     with chess.engine.SimpleEngine.popen_uci(sf_path) as engine:
         engine.configure({"Threads": 1})
         for i, game in enumerate(games):
-            rep = analyse_game_acpl(game, engine, limit=limit, max_plies=args.max_plies)
+            analyse_moves = min(
+                args.max_plies,
+                sum(1 for _ in game.mainline_moves()),
+            )
+            sf_label = f"Stockfish {i + 1}/{len(games)}"
+            sf_bar = (
+                None
+                if args.no_progress
+                else _TerminalProgress(analyse_moves, sf_label)
+            )
+            if sf_bar is not None:
+                print(f"{sf_label} analysing {analyse_moves} moves...")
+
+            def _on_analyse(
+                ply: int,
+                total: int,
+                move: chess.Move,
+                _bar: _TerminalProgress | None = sf_bar,
+            ) -> None:
+                if _bar is not None:
+                    _bar.update(ply, move.uci())
+
+            rep = analyse_game_acpl(
+                game,
+                engine,
+                limit=limit,
+                max_plies=args.max_plies,
+                on_ply=None if sf_bar is None else _on_analyse,
+            )
+            if sf_bar is not None:
+                sf_bar.finish()
             reports.append(rep)
             if len(games) > 1:
                 _print_report(f"Game {i + 1}", rep, verbose=args.verbose)

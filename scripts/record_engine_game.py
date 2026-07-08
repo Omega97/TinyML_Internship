@@ -5,6 +5,7 @@ from __future__ import annotations
 
 import argparse
 import sys
+import time
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).parent.parent / "src"))
@@ -19,6 +20,42 @@ from tinymlinternship.visualization import (
     export_game_gif,
     play_engine_game,
 )
+
+
+class _TerminalProgress:
+    """Single-line progress bar (no extra dependencies)."""
+
+    def __init__(self, total: int, label: str, *, width: int = 32) -> None:
+        self.total = max(total, 1)
+        self.label = label
+        self.width = width
+        self._started = time.perf_counter()
+        self._last_extra = ""
+
+    def update(self, current: int, extra: str = "") -> None:
+        ratio = min(current / self.total, 1.0)
+        filled = int(self.width * ratio)
+        if filled >= self.width:
+            bar = "=" * self.width
+        else:
+            bar = "=" * filled + ">" + " " * (self.width - filled - 1)
+        elapsed = time.perf_counter() - self._started
+        if extra:
+            self._last_extra = extra
+        suffix = self._last_extra
+        line = f"\r{self.label} [{bar}] {current}/{self.total}  {elapsed:5.1f}s"
+        if suffix:
+            line += f"  {suffix}"
+        sys.stdout.write(line[:120].ljust(120))
+        sys.stdout.flush()
+
+    def finish(self, message: str = "") -> None:
+        elapsed = time.perf_counter() - self._started
+        sys.stdout.write(f"\r{self.label} done in {elapsed:.1f}s")
+        if message:
+            sys.stdout.write(f" — {message}")
+        sys.stdout.write("\n")
+        sys.stdout.flush()
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -49,6 +86,12 @@ def main(argv: list[str] | None = None) -> int:
         help="No pygame window (still builds frames for optional pygame GIF)",
     )
     parser.add_argument(
+        "--quiescence",
+        action=argparse.BooleanOptionalAction,
+        default=True,
+        help="Capture quiescence at leaves (default: on)",
+    )
+    parser.add_argument(
         "--frame-ms",
         type=int,
         default=450,
@@ -60,6 +103,11 @@ def main(argv: list[str] | None = None) -> int:
         default="gifpgn",
         help="GIF backend (gifpgn recommended on Windows)",
     )
+    parser.add_argument(
+        "--no-progress",
+        action="store_true",
+        help="Disable terminal progress bars",
+    )
     args = parser.parse_args(argv)
 
     eval_fn = make_eval_fn(
@@ -67,24 +115,44 @@ def main(argv: list[str] | None = None) -> int:
         nnue_checkpoint=args.nnue_checkpoint if args.eval == "nnue" else None,
     )
     annotator = f"SARDINE {ENGINE_VERSION} ({args.eval}, depth {args.depth})"
-    print(f"Playing engine self-play ({annotator})...")
+    qsearch = "on" if args.quiescence else "off"
+    print(f"Playing engine self-play ({annotator}, qsearch={qsearch})...")
+
+    play_progress = None if args.no_progress else _TerminalProgress(args.max_plies, "Self-play")
+
+    def _on_ply(ply: int, max_plies: int, move: chess.Move, ply_sec: float) -> None:
+        if play_progress is not None:
+            play_progress.update(ply, f"ply {ply} {move.uci()} {ply_sec:.1f}s")
+
     game = play_engine_game(
         max_plies=args.max_plies,
         depth=args.depth,
         eval_fn=eval_fn,
+        quiescence=args.quiescence,
         annotator=annotator,
+        on_ply=None if args.no_progress else _on_ply,
     )
     moves = max(0, game.end().ply() - game.ply())
-    print(f"Game finished: {moves} moves, result {game.headers.get('Result', '*')}")
+    if play_progress is not None:
+        play_progress.finish(f"{moves} plies, result {game.headers.get('Result', '*')}")
+    else:
+        print(f"Game finished: {moves} moves, result {game.headers.get('Result', '*')}")
 
     renderer = PygameBoardRenderer(headless=args.headless)
     pygame_frames: list = []
 
+    mainline = list(game.mainline())
+    frame_total = sum(1 for node in mainline if node.move is not None) + 1
+    frame_progress = None if args.no_progress else _TerminalProgress(frame_total, "Frames")
+
     try:
         board = game.board()
         pygame_frames.append(renderer.show(board, caption="Start", delay_ms=200))
+        if frame_progress is not None:
+            frame_progress.update(1)
         last_move = None
-        for node in game.mainline():
+        frame_idx = 1
+        for node in mainline:
             if node.move is None:
                 continue
             last_move = node.move
@@ -97,11 +165,19 @@ def main(argv: list[str] | None = None) -> int:
                     delay_ms=120 if not args.headless else 0,
                 )
             )
+            frame_idx += 1
+            if frame_progress is not None:
+                frame_progress.update(frame_idx, last_move.uci())
     finally:
         renderer.quit()
 
+    if frame_progress is not None:
+        frame_progress.finish()
+
     frame_duration = args.frame_ms / 1000.0
     output = args.output.resolve()
+    if not args.no_progress:
+        print("Exporting GIF...", flush=True)
     export_game_gif(
         game,
         output,

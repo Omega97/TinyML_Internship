@@ -2,12 +2,18 @@
 
 from __future__ import annotations
 
+import time
+from collections.abc import Callable
+from typing import Any
+
 import chess
 import chess.pgn
 
 from tinymlinternship.engine import ENGINE_VERSION, search
 from tinymlinternship.engine.eval_hce import evaluate_hce
 from tinymlinternship.engine.search import EvalFn
+
+OnPlyCallback = Callable[[int, int, chess.Move, float], Any]
 
 
 def play_engine_game(
@@ -19,6 +25,7 @@ def play_engine_game(
     eval_fn: EvalFn = evaluate_hce,
     quiescence: bool = True,
     annotator: str | None = None,
+    on_ply: OnPlyCallback | None = None,
 ) -> chess.pgn.Game:
     """
     Self-play with fixed-depth search until game over or ``max_plies`` reached.
@@ -38,12 +45,16 @@ def play_engine_game(
     plies = 0
 
     while not board.is_game_over() and plies < max_plies:
+        t0 = time.perf_counter()
         result = search(board, depth, eval_fn=eval_fn, quiescence=quiescence)
         if result is None:
             break
+        ply_sec = time.perf_counter() - t0
         node = node.add_variation(result.move)
         board.push(result.move)
         plies += 1
+        if on_ply is not None:
+            on_ply(plies, max_plies, result.move, ply_sec)
 
     outcome = board.outcome()
     if outcome is not None:

@@ -15,6 +15,8 @@ import chess
 import chess.engine
 import chess.pgn
 
+from collections.abc import Callable
+
 if TYPE_CHECKING:
     from collections.abc import Iterator
 
@@ -106,18 +108,22 @@ def analyse_game_acpl(
     *,
     limit: chess.engine.Limit,
     max_plies: int | None = None,
+    on_ply: Callable[[int, int, chess.Move], None] | None = None,
 ) -> AcplReport:
     """Run Stockfish on every move in ``game`` mainline; return ACPL report."""
+    moves = list(game.mainline_moves())
+    if max_plies is not None:
+        moves = moves[:max_plies]
+    total = len(moves)
+
     board = game.board()
     results: list[AcplMoveResult] = []
-    plies = 0
 
-    for move in game.mainline_moves():
-        if max_plies is not None and plies >= max_plies:
-            break
+    for plies, move in enumerate(moves, start=1):
         results.append(_centipawn_loss(board, move, engine, limit))
         board.push(move)
-        plies += 1
+        if on_ply is not None:
+            on_ply(plies, total, move)
 
     return _report_from_moves(results)
 
