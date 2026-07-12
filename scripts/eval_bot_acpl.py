@@ -28,7 +28,13 @@ from tinymlinternship.bot_eval import (
 )
 from tinymlinternship.config.settings import NNUE_CHECKPOINT_DEFAULT, PROJECT_ROOT
 from tinymlinternship.engine import EVAL_CHOICES, ENGINE_VERSION, make_eval_fn
-from tinymlinternship.visualization import play_engine_game
+from tinymlinternship.visualization import (
+    artifact_paths,
+    engine_player_label,
+    play_engine_game,
+    write_game_gif,
+    write_game_pgn,
+)
 
 
 class _TerminalProgress:
@@ -117,6 +123,12 @@ def main(argv: list[str] | None = None) -> int:
     )
     parser.add_argument("--games", type=int, default=1, help="Self-play games to generate")
     parser.add_argument("--max-plies", type=int, default=80, help="Max half-moves per game")
+    parser.add_argument(
+        "--max-game-seconds",
+        type=float,
+        default=None,
+        help="Stop self-play after this many seconds per game (e.g. 300 for 5 min)",
+    )
     parser.add_argument("--depth", type=int, default=1, help="SARDINE search depth")
     parser.add_argument(
         "--eval",
@@ -134,6 +146,16 @@ def main(argv: list[str] | None = None) -> int:
         action=argparse.BooleanOptionalAction,
         default=False,
         help="Capture quiescence at leaves (default: off for depth-1 gate)",
+    )
+    parser.add_argument(
+        "--max-qsearch-depth",
+        type=int,
+        default=None,
+        metavar="PLIES",
+        help=(
+            "Cap capture/promotion extensions in quiescence (default: unlimited). "
+            "Suggested 6 when --depth 2 with qsearch on."
+        ),
     )
     parser.add_argument(
         "--pgn",
@@ -160,10 +182,45 @@ def main(argv: list[str] | None = None) -> int:
         help="Stockfish movetime per position (overrides --sf-depth if set)",
     )
     parser.add_argument(
+        "--output-dir",
+        type=Path,
+        default=PROJECT_ROOT / "images" / "games",
+        help="Directory for auto-named PGN + GIF (default: images/games)",
+    )
+    parser.add_argument(
         "--output-pgn",
         type=Path,
         default=None,
-        help="Write self-play PGN to this path",
+        help="Override PGN path (default: [white]_vs_[black]_[date].pgn in --output-dir)",
+    )
+    parser.add_argument(
+        "--output-gif",
+        type=Path,
+        default=None,
+        help="Override GIF path (default: [white]_vs_[black]_[date].gif in --output-dir)",
+    )
+    parser.add_argument(
+        "--no-gif",
+        action="store_true",
+        help="Skip GIF export",
+    )
+    parser.add_argument(
+        "--frame-ms",
+        type=int,
+        default=450,
+        help="Milliseconds per GIF frame",
+    )
+    parser.add_argument(
+        "--white",
+        type=str,
+        default=None,
+        help="White player name for PGN headers and filenames (default: from --eval)",
+    )
+    parser.add_argument(
+        "--black",
+        type=str,
+        default=None,
+        help="Black player name (default: same as white for self-play)",
     )
     parser.add_argument(
         "--json",
@@ -190,10 +247,21 @@ def main(argv: list[str] | None = None) -> int:
         args.eval,
         nnue_checkpoint=args.nnue_checkpoint if args.eval == "nnue" else None,
     )
+    qsearch_note = "on" if args.quiescence else "off"
+    if args.quiescence and args.max_qsearch_depth is not None:
+        qsearch_note = f"on,max{args.max_qsearch_depth}"
     annotator = (
         f"SARDINE {ENGINE_VERSION} ({args.eval}, depth {args.depth}, "
-        f"qsearch={'on' if args.quiescence else 'off'})"
+        f"qsearch={qsearch_note})"
     )
+    default_player = engine_player_label(
+        args.eval,
+        depth=args.depth,
+        quiescence=args.quiescence,
+        nnue_checkpoint=args.nnue_checkpoint if args.eval == "nnue" else None,
+    )
+    white_name = args.white or default_player
+    black_name = args.black or default_player
 
     games: list[chess.pgn.Game] = []
     if args.pgn is not None:
@@ -231,24 +299,42 @@ def main(argv: list[str] | None = None) -> int:
                 depth=args.depth,
                 eval_fn=eval_fn,
                 quiescence=args.quiescence,
+                max_qsearch_depth=args.max_qsearch_depth,
+                white_name=white_name,
+                black_name=black_name,
                 annotator=annotator,
                 on_ply=on_ply,
+                max_seconds=args.max_game_seconds,
             )
             games.append(game)
             plies = max(0, game.end().ply() - game.ply())
+            suffix = game.headers.get("Result", "*")
+            if game.headers.get("Termination") == "time limit":
+                suffix += " (time limit)"
             if play_bar is not None:
-                play_bar.finish(
-                    f"{plies} plies, result {game.headers.get('Result', '*')}"
-                )
+                play_bar.finish(f"{plies} plies, result {suffix}")
             else:
-                print(f"  {plies} half-moves, result {game.headers.get('Result', '*')}")
+                print(f"  {plies} half-moves, result {suffix}")
 
-    if args.output_pgn and not args.pgn:
-        args.output_pgn.parent.mkdir(parents=True, exist_ok=True)
-        with args.output_pgn.open("w", encoding="utf-8") as f:
-            for g in games:
-                print(g, file=f, end="\n\n")
-        print(f"PGN written: {args.output_pgn}")
+    if not args.pgn:
+        pgn_path, gif_path = artifact_paths(white_name, black_name, args.output_dir)
+        if args.output_pgn is not None:
+            pgn_path = args.output_pgn
+        if args.output_gif is not None:
+            gif_path = args.output_gif
+
+        with pgn_path.open("w", encoding="utf-8") as handle:
+            for game in games:
+                print(game, file=handle, end="\n\n")
+        print(f"PGN written: {pgn_path}")
+
+        if not args.no_gif:
+            for i, game in enumerate(games):
+                target = gif_path if len(games) == 1 else gif_path.with_stem(
+                    f"{gif_path.stem}_game{i + 1}"
+                )
+                write_game_gif(game, target, frame_ms=args.frame_ms)
+                print(f"GIF written: {target} ({target.stat().st_size:,} bytes)")
 
     reports = []
     with chess.engine.SimpleEngine.popen_uci(sf_path) as engine:
@@ -292,12 +378,19 @@ def main(argv: list[str] | None = None) -> int:
     combined = merge_reports(reports) if len(reports) > 1 else reports[0]
     _print_report("Combined" if len(reports) > 1 else "Game", combined, verbose=args.verbose)
 
+    report_annotator = annotator
+    if args.pgn and games:
+        report_annotator = games[0].headers.get("Annotator", annotator)
+
     if args.json:
         payload = {
             "timestamp": datetime.now(UTC).isoformat(),
-            "annotator": annotator,
+            "annotator": report_annotator,
             "stockfish": sf_path,
             "sf_limit": {"depth": args.sf_depth, "movetime_ms": args.sf_movetime_ms},
+            "max_plies": args.max_plies,
+            "max_game_seconds": args.max_game_seconds,
+            "max_qsearch_depth": args.max_qsearch_depth,
             "games": len(games),
             "acpl": round(combined.acpl, 2),
             "acpl_std": round(combined.acpl_std, 2),

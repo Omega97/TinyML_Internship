@@ -1,17 +1,19 @@
 {
-  "timestamp": "2026-07-10T15:47:47.887402+00:00",
-  "annotator": "SARDINE 0.3.0 (hce, depth 1, qsearch=off)",
+  "timestamp": "2026-07-10T20:01:18.052828+00:00",
+  "annotator": "SARDINE 0.3.0 (nnue, depth 2, qsearch=off)",
   "stockfish": "C:\\Users\\monfalcone\\PycharmProjects\\TinyMLInternship\\models\\teacher\\stockfish\\stockfish.exe",
   "sf_limit": {
     "depth": 16,
     "movetime_ms": 100
   },
+  "max_plies": 60,
+  "max_game_seconds": 300.0,
   "games": 16,
-  "acpl": 356.57,
-  "acpl_std": 2152.15,
-  "moves_analysed": 1280,
+  "acpl": 1587.98,
+  "acpl_std": 6450.55,
+  "moves_analysed": 960,
   "elo_estimate": 400,
   "elo_low": 400,
-  "elo_high": 1579,
+  "elo_high": 3200,
   "elo_formula": "2855 - 10 * ACPL"
 }

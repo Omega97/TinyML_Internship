@@ -1,6 +1,6 @@
 # SARDINE Blueprint — Progress
 
-_Checkpoint map vs NOTES/SARDINE Engine Blueprint.md only. Last updated: 2026-07-07 (encoder 844-dim + tactical planes)._
+_Checkpoint map vs NOTES/SARDINE Engine Blueprint.md only. Last updated: 2026-07-10 (label_positions scaffold, gate depth-1 HCE/Sunfish, GIF d2)._
 
 ---
 
@@ -29,8 +29,9 @@ Stesso ordine del diagramma _Build Pipeline_ nel blueprint.
 - [x] Alpha-beta — fixed-depth negamax (`search(board, depth)`), engine **v0.2**
 - [x] Capture quiescence — depth-0 leaves, MVV-LVA noisy moves, `quiescence=False` opt-out; engine **v0.3**
 - [x] MVV-LVA move ordering — main search + qsearch (killers: step G)
-- [ ] `record_engine_game.py --depth` + rigenerare `images/sardine_game.gif`
+- [x] `record_engine_game.py --depth` + GIF depth-2 — `images/nnue_d2_game.gif`, `images/hce_d2_game.gif` (`--no-quiescence` per HCE)
 - [x] Eval hook at depth-search nodes — `evaluate_nnue` + `--eval nnue` (`eval_nnue.py`, `make_eval_fn`)
+- [x] Gate depth-1 ACPL (§Bot Evaluation) — NNUE **121** · HCE **275** · Sunfish **818** cp (`eval_bot_acpl.py`, `sunfish_selfplay_pgn.py`, `tests/test_bot_eval_acpl.py`)
 - [ ] TT entry format prototype + PC benchmark
 - [ ] Nodes/s benchmark on PC
 - [ ] Node-budget model vs Urusov ESP32 baseline (~20 kNps, heuristics-only) — estimate reachable depth once eval latency is measured
@@ -47,7 +48,7 @@ Architecture: shared L1 **844 → W** with $W \in \{128, 256\}$ (dense train + *
 - [ ] Lichess PGN → FEN (primary, **natural bucket distribution**) + Lc0 supplement
 - [x] Teacher scelto: **Lc0 latest best network** (`expected_reward = W − L`, on-the-fly UCI); fallback Stockfish WDL — [NOTES/Models.md](NOTES/Models.md)
 - [x] Teacher installato — `models/teacher/` (lc0 v0.32.1 + reti); `scripts/download_teacher.py`, `smoke_test_teacher.py` OK
-- [ ] `label_positions.py` — label on-the-fly via `lc0` UCI (Lichess + Lc0 FEN)
+- [x] `label_positions.py` — scaffold + smoke via `lc0` UCI WDL (`scripts/label_positions.py`); batch Lichess/Lc0 FEN pending
 - [ ] **nnue-pytorch** fork/adapt — 844-dim bucketed, gradual L1 prune, 100 ep fixed
 - [x] PyTorch **smoke** pilot (shared L1 + 8 expert heads) — `train_nnue.py`, `pilot_W128_844` val_mse 0.056
 - [ ] Calibrated **PTQ int8** export + tanh LUT (histogram weights, scale onto [-127,127])

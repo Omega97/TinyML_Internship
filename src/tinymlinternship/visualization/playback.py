@@ -24,11 +24,14 @@ def play_engine_game(
     depth: int = 1,
     eval_fn: EvalFn = evaluate_hce,
     quiescence: bool = True,
+    max_qsearch_depth: int | None = None,
     annotator: str | None = None,
     on_ply: OnPlyCallback | None = None,
+    max_seconds: float | None = None,
 ) -> chess.pgn.Game:
     """
-    Self-play with fixed-depth search until game over or ``max_plies`` reached.
+    Self-play with fixed-depth search until game over, ``max_plies``, or
+    ``max_seconds`` elapsed.
 
     Returns a ``chess.pgn.Game`` with the main line recorded.
     """
@@ -43,10 +46,21 @@ def play_engine_game(
 
     node = game
     plies = 0
+    game_start = time.perf_counter()
+    truncated_time = False
 
     while not board.is_game_over() and plies < max_plies:
+        if max_seconds is not None and (time.perf_counter() - game_start) >= max_seconds:
+            truncated_time = True
+            break
         t0 = time.perf_counter()
-        result = search(board, depth, eval_fn=eval_fn, quiescence=quiescence)
+        result = search(
+            board,
+            depth,
+            eval_fn=eval_fn,
+            quiescence=quiescence,
+            max_qsearch_depth=max_qsearch_depth,
+        )
         if result is None:
             break
         ply_sec = time.perf_counter() - t0
@@ -55,6 +69,9 @@ def play_engine_game(
         plies += 1
         if on_ply is not None:
             on_ply(plies, max_plies, result.move, ply_sec)
+
+    if truncated_time:
+        game.headers["Termination"] = "time limit"
 
     outcome = board.outcome()
     if outcome is not None:

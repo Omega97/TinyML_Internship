@@ -48,6 +48,19 @@ def main(argv: list[str] | None = None) -> int:
         help="Space-separated UCI moves to apply before searching",
     )
     parser.add_argument("--version", action="store_true", help="Print engine version and exit")
+    parser.add_argument(
+        "--quiescence",
+        action=argparse.BooleanOptionalAction,
+        default=True,
+        help="Capture quiescence at leaves (default: on)",
+    )
+    parser.add_argument(
+        "--max-qsearch-depth",
+        type=int,
+        default=None,
+        metavar="PLIES",
+        help="Cap quiescence depth (default: unlimited; try 6 with --depth 2)",
+    )
     args = parser.parse_args(argv)
 
     if args.version:
@@ -63,7 +76,13 @@ def main(argv: list[str] | None = None) -> int:
         args.eval,
         nnue_checkpoint=args.nnue_checkpoint if args.eval == "nnue" else None,
     )
-    result = search(board, args.depth, eval_fn=eval_fn)
+    result = search(
+        board,
+        args.depth,
+        eval_fn=eval_fn,
+        quiescence=args.quiescence,
+        max_qsearch_depth=args.max_qsearch_depth,
+    )
     if result is None:
         print("nomove")
         return 1

@@ -5,12 +5,19 @@ from __future__ import annotations
 
 import argparse
 import sys
+import time
 from pathlib import Path
+
+sys.path.insert(0, str(Path(__file__).parent.parent / "src"))
 
 import chess
 import chess.pgn
 
+from tinymlinternship.visualization import artifact_paths, write_game_gif, write_game_pgn
+
 PROJECT_ROOT = Path(__file__).parent.parent
+def _sunfish_player(depth: int) -> str:
+    return f"sunfish-d{depth}"
 SUNFISH_DIR = PROJECT_ROOT / "models" / "teacher" / "sunfish"
 
 
@@ -55,6 +62,8 @@ def play_sunfish_game(
     max_plies: int,
     depth: int,
     sunfish_ns: dict,
+    player: str | None = None,
+    max_seconds: float | None = None,
 ) -> chess.pgn.Game:
     Position = sunfish_ns["Position"]
     Searcher = sunfish_ns["Searcher"]
@@ -64,14 +73,20 @@ def play_sunfish_game(
     game = chess.pgn.Game()
     game.headers["Event"] = "Sunfish gate"
     game.headers["Site"] = "SARDINE calibration"
-    game.headers["White"] = "Sunfish"
-    game.headers["Black"] = "Sunfish"
+    name = player or _sunfish_player(depth)
+    game.headers["White"] = name
+    game.headers["Black"] = name
     game.headers["Annotator"] = f"sunfish depth {depth}"
 
     hist = [Position(initial, 0, (True, True), (True, True), 0, 0)]
     node = game
+    game_start = time.perf_counter()
+    truncated_time = False
 
     for ply in range(max_plies):
+        if max_seconds is not None and (time.perf_counter() - game_start) >= max_seconds:
+            truncated_time = True
+            break
         if board.is_game_over(claim_draw=True):
             break
         searcher = Searcher()
@@ -89,18 +104,40 @@ def play_sunfish_game(
         node = node.add_variation(chess_move)
         hist.append(hist[-1].move(move))
 
+    if truncated_time:
+        game.headers["Termination"] = "time limit"
     game.headers["Result"] = board.result(claim_draw=True)
     return game
 
 
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description="Sunfish self-play PGN for ACPL gate")
+    parser.add_argument("--games", type=int, default=1, help="Self-play games to generate")
     parser.add_argument("--max-plies", type=int, default=80)
     parser.add_argument("--depth", type=int, default=1)
     parser.add_argument(
+        "--output-dir",
+        type=Path,
+        default=PROJECT_ROOT / "images" / "games",
+        help="Directory for auto-named PGN + GIF",
+    )
+    parser.add_argument(
         "--output",
         type=Path,
-        default=PROJECT_ROOT / "plots" / "sunfish_d1_gate.pgn",
+        default=None,
+        help="Override PGN path (default: [white]_vs_[black]_[date].pgn)",
+    )
+    parser.add_argument(
+        "--no-gif",
+        action="store_true",
+        help="Skip GIF export",
+    )
+    parser.add_argument("--frame-ms", type=int, default=450, help="GIF frame duration")
+    parser.add_argument(
+        "--max-game-seconds",
+        type=float,
+        default=None,
+        help="Stop self-play after this many seconds per game",
     )
     args = parser.parse_args(argv)
 
@@ -111,16 +148,32 @@ def main(argv: list[str] | None = None) -> int:
         )
 
     sunfish_ns = _load_sunfish()
-    game = play_sunfish_game(
-        max_plies=args.max_plies,
-        depth=args.depth,
-        sunfish_ns=sunfish_ns,
-    )
-    args.output.parent.mkdir(parents=True, exist_ok=True)
-    with args.output.open("w", encoding="utf-8") as f:
-        print(game, file=f, end="\n\n")
-    plies = max(0, game.end().ply() - game.ply())
-    print(f"Sunfish self-play: {plies} half-moves → {args.output}")
+    player = _sunfish_player(args.depth)
+    games: list[chess.pgn.Game] = []
+    for i in range(args.games):
+        games.append(
+            play_sunfish_game(
+                max_plies=args.max_plies,
+                depth=args.depth,
+                sunfish_ns=sunfish_ns,
+                player=player,
+                max_seconds=args.max_game_seconds,
+            )
+        )
+        plies = max(0, games[-1].end().ply() - games[-1].ply())
+        print(f"Sunfish self-play {i + 1}/{args.games}: {plies} half-moves")
+
+    pgn_path, gif_path = artifact_paths(player, player, args.output_dir)
+    if args.output is not None:
+        pgn_path = args.output
+    pgn_path.parent.mkdir(parents=True, exist_ok=True)
+    with pgn_path.open("w", encoding="utf-8") as handle:
+        for game in games:
+            print(game, file=handle, end="\n\n")
+    print(f"PGN written: {pgn_path} ({len(games)} game(s))")
+    if not args.no_gif and len(games) == 1:
+        write_game_gif(games[0], gif_path, frame_ms=args.frame_ms)
+        print(f"GIF written: {gif_path} ({gif_path.stat().st_size:,} bytes)")
     return 0
 
 

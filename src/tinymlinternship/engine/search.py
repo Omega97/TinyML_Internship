@@ -70,9 +70,13 @@ def search(
     *,
     eval_fn: EvalFn = evaluate_hce,
     quiescence: bool = True,
+    max_qsearch_depth: int | None = None,
 ) -> SearchResult | None:
     """
     Fixed-depth negamax alpha-beta search with optional capture quiescence.
+
+    ``max_qsearch_depth`` caps noisy-move extensions at depth-0 leaves (``None`` =
+    unlimited). Each capture/promotion in qsearch consumes one ply of this budget.
 
     ``score`` is centipawns from **White's** perspective at the resulting position
     (same convention as ``evaluate_hce``). Returns ``None`` if there are no legal moves.
@@ -87,7 +91,12 @@ def search(
 
     nodes = 0
 
-    def qsearch(node: chess.Board, alpha: int, beta: int) -> int:
+    def qsearch(
+        node: chess.Board,
+        alpha: int,
+        beta: int,
+        qremaining: int | None,
+    ) -> int:
         nonlocal nodes
         nodes += 1
 
@@ -100,9 +109,13 @@ def search(
         if stand_pat > alpha:
             alpha = stand_pat
 
+        if qremaining is not None and qremaining <= 0:
+            return alpha
+
         for move in _noisy_moves(node):
             node.push(move)
-            score = -qsearch(node, -beta, -alpha)
+            next_q = None if qremaining is None else qremaining - 1
+            score = -qsearch(node, -beta, -alpha, next_q)
             node.pop()
 
             if score > alpha:
@@ -120,7 +133,7 @@ def search(
 
         if remaining == 0:
             if quiescence:
-                return qsearch(node, alpha, beta)
+                return qsearch(node, alpha, beta, max_qsearch_depth)
             return _eval_stm(node, eval_fn)
 
         value = -MATE_SCORE

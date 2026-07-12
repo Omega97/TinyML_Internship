@@ -22,6 +22,8 @@ Central hub for all project notes and references.
 
 ## Chess Domain
 
+- [Local models.md](Local%20models.md) — Inventario modelli scaricati e allenati (path, checkpoint, agent cards)
+- [Models.md](Models.md) — Survey candidati teacher e decisioni
 - [SARDINE.md](SARDINE%20Engine%20Blueprint.md) — Engine blueprint (target ~1700 Elo, pipeline, dati Lc0)
 - [SARDINE design options.md](SARDINE%20design%20options.md) — Full component option catalog.
 - [Ideas 💡.md](Ideas%20💡.md) — Raw design ideas feeding into SARDINE.

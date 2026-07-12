@@ -132,3 +132,18 @@ def test_quiescence_default_on():
     result = search(board, 1)
     assert result is not None
     assert result.move.uci() == "h2g1q"
+
+
+def test_max_qsearch_depth_limits_nodes():
+    board = chess.Board()
+    unlimited = search(board, 2, quiescence=True, max_qsearch_depth=None)
+    capped = search(board, 2, quiescence=True, max_qsearch_depth=2)
+    assert unlimited is not None and capped is not None
+    assert capped.nodes <= unlimited.nodes
+
+
+def test_max_qsearch_depth_zero_matches_noisy_cutoff():
+    board = chess.Board("8/8/8/8/8/8/7p/6K1 b - - 0 1")
+    shallow = search(board, 1, quiescence=True, max_qsearch_depth=0)
+    assert shallow is not None
+    assert shallow.move.uci() == "h2h1q"

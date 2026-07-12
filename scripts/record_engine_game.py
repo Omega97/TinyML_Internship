@@ -92,6 +92,13 @@ def main(argv: list[str] | None = None) -> int:
         help="Capture quiescence at leaves (default: on)",
     )
     parser.add_argument(
+        "--max-qsearch-depth",
+        type=int,
+        default=None,
+        metavar="PLIES",
+        help="Cap quiescence depth (default: unlimited; try 6 with --depth 2)",
+    )
+    parser.add_argument(
         "--frame-ms",
         type=int,
         default=450,
@@ -116,6 +123,8 @@ def main(argv: list[str] | None = None) -> int:
     )
     annotator = f"SARDINE {ENGINE_VERSION} ({args.eval}, depth {args.depth})"
     qsearch = "on" if args.quiescence else "off"
+    if args.quiescence and args.max_qsearch_depth is not None:
+        qsearch = f"on,max{args.max_qsearch_depth}"
     print(f"Playing engine self-play ({annotator}, qsearch={qsearch})...")
 
     play_progress = None if args.no_progress else _TerminalProgress(args.max_plies, "Self-play")
@@ -129,6 +138,7 @@ def main(argv: list[str] | None = None) -> int:
         depth=args.depth,
         eval_fn=eval_fn,
         quiescence=args.quiescence,
+        max_qsearch_depth=args.max_qsearch_depth,
         annotator=annotator,
         on_ply=None if args.no_progress else _on_ply,
     )
