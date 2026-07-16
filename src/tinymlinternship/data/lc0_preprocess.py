@@ -5,7 +5,7 @@ from __future__ import annotations
 import json
 import random
 from collections import Counter, defaultdict
-from dataclasses import asdict, dataclass, field
+from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Iterator
 
@@ -19,7 +19,7 @@ from tinymlinternship.data.lc0_parser import (
     decode_v6_record,
     read_chunk,
 )
-from tinymlinternship.features.bucket import NUM_BUCKETS, bucket_id, piece_count
+from tinymlinternship.features.bucket import NUM_BUCKETS, bucket_id, has_queen, piece_count
 
 # Blueprint «games ≥ 16 moves» in plot_piece_count_distribution uses min_moves on
 # the Kaggle moves column (= 16 full moves per side pair = 32 half-moves / ply).
@@ -39,11 +39,14 @@ class ParsedPosition:
     """One training candidate after parse + legality check."""
 
     fen: str
-    bucket: int
+    bucket: int  # internal; exported as bucket_id in positions_to_dataframe
     ply: int
     game_id: str
     chunk_path: str
     piece_count: int
+    has_queen: bool
+    stm_white: bool
+    source: str
     best_q: float
     root_q: float
     plies_left: float
@@ -168,6 +171,9 @@ def parse_position(
         game_id=game_id,
         chunk_path=chunk_path.as_posix(),
         piece_count=piece_count(board),
+        has_queen=bool(has_queen(board)),
+        stm_white=board.turn == chess.WHITE,
+        source="lc0",
         best_q=pos.best_q,
         root_q=pos.root_q,
         plies_left=pos.plies_left,
@@ -281,7 +287,29 @@ def stratified_sample(
 
 
 def positions_to_dataframe(positions: list[ParsedPosition]) -> pd.DataFrame:
-    return pd.DataFrame([asdict(p) for p in positions])
+    """Export ASSETS pre-label schema + optional Lc0 debug fields."""
+    rows = []
+    for p in positions:
+        rows.append(
+            {
+                "fen": p.fen,
+                "bucket_id": p.bucket,
+                "piece_count": p.piece_count,
+                "has_queen": p.has_queen,
+                "stm_white": p.stm_white,
+                "ply": p.ply,
+                "source": p.source,
+                "game_id": p.game_id,
+                # optional Lc0 metadata (not training targets)
+                "chunk_path": p.chunk_path,
+                "best_q": p.best_q,
+                "root_q": p.root_q,
+                "plies_left": p.plies_left,
+                "visits": p.visits,
+                "adjudicated": p.adjudicated,
+            }
+        )
+    return pd.DataFrame(rows)
 
 
 def discover_chunks(chunks_dir: Path, *, limit: int | None = None) -> list[Path]:

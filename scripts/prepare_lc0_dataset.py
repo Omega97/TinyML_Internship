@@ -94,6 +94,7 @@ def main(argv: list[str] | None = None) -> int:
         print("No positions passed filters.", file=sys.stderr)
         return 1
 
+    # positions.parquet = natural mix (all filter-pass); stratified only for pilot splits
     train, val = stratified_sample(candidates, sample_cfg)
     args.output_dir.mkdir(parents=True, exist_ok=True)
     splits_dir = args.output_dir / "splits"
@@ -103,19 +104,28 @@ def main(argv: list[str] | None = None) -> int:
     val_path = splits_dir / "val.parquet"
     all_path = args.output_dir / "positions.parquet"
 
-    positions_to_dataframe(train + val).to_parquet(all_path, index=False)
+    positions_to_dataframe(candidates).to_parquet(all_path, index=False)
     positions_to_dataframe(train).to_parquet(train_path, index=False)
     positions_to_dataframe(val).to_parquet(val_path, index=False)
 
+    from collections import Counter
+
+    from tinymlinternship.features.bucket import NUM_BUCKETS
+
+    bucket_counts = Counter(p.bucket for p in candidates)
     manifest = {
         "min_ply": args.min_ply,
         "bucket7_min_ply": args.bucket7_min_ply,
         "min_visits": args.min_visits,
         "chunks_scanned": stats.chunks_scanned,
         "candidates_after_filter": len(candidates),
-        "train_rows": len(train),
-        "val_rows": len(val),
+        "positions_parquet_rows": len(candidates),
+        "positions_parquet_policy": "natural_all_filter_pass",
+        "stratified_train_rows": len(train),
+        "stratified_val_rows": len(val),
         "seed": args.seed,
+        "bucket_counts": {str(b): int(bucket_counts.get(b, 0)) for b in range(NUM_BUCKETS)},
+        "buckets_missing": sorted(b for b in range(NUM_BUCKETS) if bucket_counts.get(b, 0) == 0),
     }
     (args.output_dir / "manifest.json").write_text(
         json.dumps(manifest, indent=2) + "\n", encoding="utf-8"
@@ -124,8 +134,9 @@ def main(argv: list[str] | None = None) -> int:
 
     print(f"Project:    {PROJECT_ROOT}")
     print(f"Scanned:    {stats.chunks_scanned} chunks, {stats.records_seen:,} records")
-    print(f"Candidates: {len(candidates):,} (after filter)")
-    print(f"Sample:     train={len(train):,}  val={len(val):,}")
+    print(f"Candidates: {len(candidates):,} (after filter) → positions.parquet (natural)")
+    print(f"Stratified: train={len(train):,}  val={len(val):,} (pilot splits only)")
+    print(f"Buckets:    {manifest['bucket_counts']}  missing={manifest['buckets_missing']}")
     print(f"Output:     {all_path}")
     print(f"            {train_path}")
     print(f"            {val_path}")

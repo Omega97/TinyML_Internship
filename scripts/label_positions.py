@@ -1,8 +1,10 @@
 #!/usr/bin/env python3
-"""Label chess positions with Lc0 UCI WDL → expected_reward = W − L (White POV).
+"""Label chess positions with Lc0 UCI WDL → expected_reward (White POV).
 
-Input: parquet/CSV with a ``fen`` column, or built-in startpos smoke positions.
-Output: parquet with ``fen``, ``expected_reward``, and raw WDL permille columns.
+Input: parquet/CSV with a ``fen`` column (ideally full ASSETS pre-label schema).
+Output: same metadata columns preserved + ``expected_reward``, WDL, ``teacher_network``.
+
+See ASSETS.md §Ideal final training set.
 """
 
 from __future__ import annotations
@@ -22,70 +24,96 @@ from tinymlinternship.config.settings import (
     LC0_NETWORK_PRESETS,
     PROJECT_ROOT,
 )
+from tinymlinternship.data.schema import (
+    LABEL_FORMULA,
+    ensure_prelabel_columns,
+    sha256_file,
+    stm_white_from_fen,
+    validate_rewards_series,
+)
 from tinymlinternship.engine.eval_lc0 import Lc0Teacher
 
 
-def smoke_fens(*, moves: int = 2) -> list[str]:
-    """Startpos plus a short self-play line for quick teacher checks."""
+def smoke_frame(*, moves: int = 2) -> pd.DataFrame:
+    """Startpos plus a short line for quick teacher checks."""
     board = chess.Board()
+    rows: list[dict] = []
     fens = [board.fen()]
-    for uci in ("e2e4", "e7e5", "g1f3", "b8c6", "f1c4", "f8c5")[: moves]:
+    for uci in ("e2e4", "e7e5", "g1f3", "b8c6", "f1c4", "f8c5")[:moves]:
         board.push_uci(uci)
         fens.append(board.fen())
-    return fens
+    for i, fen in enumerate(fens):
+        b = chess.Board(fen)
+        from tinymlinternship.features.bucket import bucket_id, has_queen, piece_count
+
+        rows.append(
+            {
+                "fen": fen,
+                "bucket_id": int(bucket_id(b)),
+                "piece_count": int(piece_count(b)),
+                "has_queen": bool(has_queen(b)),
+                "stm_white": b.turn == chess.WHITE,
+                "ply": i,
+                "source": "lichess",
+                "game_id": "smoke:startpos",
+            }
+        )
+    return pd.DataFrame(rows)
 
 
-def load_fens(path: Path, *, limit: int | None, fen_column: str) -> list[str]:
+def load_input_frame(path: Path, *, limit: int | None, fen_column: str) -> pd.DataFrame:
     if path.suffix == ".csv":
         df = pd.read_csv(path)
     else:
         df = pd.read_parquet(path)
     if fen_column not in df.columns:
         raise ValueError(f"column {fen_column!r} not in {path} (have {list(df.columns)})")
-    fens = df[fen_column].astype(str).tolist()
+    if fen_column != "fen":
+        df = df.rename(columns={fen_column: "fen"})
     if limit is not None:
-        fens = fens[:limit]
-    return fens
+        df = df.iloc[:limit].copy()
+    return ensure_prelabel_columns(df)
 
 
-def label_fens(
-    fens: list[str],
+def label_frame(
+    df: pd.DataFrame,
     teacher: Lc0Teacher,
     *,
+    teacher_network: str,
     verbose: bool = False,
-) -> list[dict]:
-    rows: list[dict] = []
-    for i, fen in enumerate(fens, start=1):
+) -> pd.DataFrame:
+    """Label each row; preserve all input columns; add reward + WDL + teacher id."""
+    rewards: list[float] = []
+    wins: list[int] = []
+    draws: list[int] = []
+    losses: list[int] = []
+    n = len(df)
+    for i, fen in enumerate(df["fen"].astype(str).tolist(), start=1):
         board = chess.Board(fen)
         win, draw, loss = teacher.evaluate_wdl(board)
         reward = teacher.evaluate_expected_reward(board)
-        row = {
-            "fen": fen,
-            "expected_reward": reward,
-            "wdl_win": win,
-            "wdl_draw": draw,
-            "wdl_loss": loss,
-        }
-        rows.append(row)
+        rewards.append(float(reward))
+        wins.append(int(win))
+        draws.append(int(draw))
+        losses.append(int(loss))
         if verbose:
             print(
-                f"[{i}/{len(fens)}] reward={reward:+.4f} wdl={win}/{draw}/{loss}  {fen[:48]}..."
+                f"[{i}/{n}] reward={reward:+.4f} wdl={win}/{draw}/{loss}  {fen[:48]}..."
             )
-    return rows
-
-
-def validate_rewards(rows: list[dict]) -> None:
-    bad = [r for r in rows if not (-1.0 <= r["expected_reward"] <= 1.0)]
-    if bad:
-        sample = bad[0]
-        raise ValueError(
-            f"{len(bad)} label(s) outside [-1, +1]; first: reward={sample['expected_reward']}"
-        )
+    out = df.copy()
+    out["expected_reward"] = rewards
+    out["wdl_win"] = wins
+    out["wdl_draw"] = draws
+    out["wdl_loss"] = losses
+    out["teacher_network"] = teacher_network
+    if "stm_white" not in out.columns:
+        out["stm_white"] = out["fen"].map(stm_white_from_fen)
+    return out
 
 
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(
-        description="Label FEN positions via Lc0 UCI WDL (expected_reward = W − L, White POV)"
+        description="Label FEN positions via Lc0 UCI WDL (expected_reward White POV)"
     )
     parser.add_argument(
         "--input",
@@ -118,46 +146,56 @@ def main(argv: list[str] | None = None) -> int:
     args = parser.parse_args(argv)
 
     if args.input is None:
-        fens = smoke_fens(moves=args.smoke_moves)
+        df = smoke_frame(moves=args.smoke_moves)
         if args.limit is not None:
-            fens = fens[: args.limit]
+            df = df.iloc[: args.limit].copy()
         source = "smoke:startpos"
     else:
         if not args.input.exists():
             print(f"Input not found: {args.input}", file=sys.stderr)
             return 1
         input_path = args.input.resolve()
-        fens = load_fens(input_path, limit=args.limit, fen_column=args.fen_column)
+        df = load_input_frame(input_path, limit=args.limit, fen_column=args.fen_column)
         try:
             source = str(input_path.relative_to(PROJECT_ROOT))
         except ValueError:
             source = str(input_path)
 
-    if not fens:
+    if df.empty:
         print("No positions to label.", file=sys.stderr)
         return 1
 
     weights = LC0_NETWORK_PRESETS[args.network] if args.network else LC0_NETWORK_DEFAULT
+    weights = weights.resolve() if weights.exists() else weights
+    teacher_name = weights.name
     output = args.output.resolve() if args.output else None
     if output is None:
         output = PROJECT_ROOT / "data" / "processed" / "labeled" / "smoke_labeled.parquet"
 
     with Lc0Teacher(weights=str(weights), backend=args.backend) as teacher:
-        rows = label_fens(fens, teacher, verbose=args.verbose)
+        out = label_frame(df, teacher, teacher_network=teacher_name, verbose=args.verbose)
 
-    validate_rewards(rows)
-    df = pd.DataFrame(rows)
+    validate_rewards_series(out["expected_reward"])
     output.parent.mkdir(parents=True, exist_ok=True)
-    df.to_parquet(output, index=False)
+    out.to_parquet(output, index=False)
+
+    net_sha = sha256_file(weights) if Path(weights).is_file() else None
+    try:
+        out_rel = str(output.relative_to(PROJECT_ROOT.resolve()))
+    except ValueError:
+        out_rel = str(output)
 
     summary = {
         "source": source,
-        "count": len(rows),
-        "network": weights.name,
-        "expected_reward_min": float(df["expected_reward"].min()),
-        "expected_reward_max": float(df["expected_reward"].max()),
-        "expected_reward_mean": float(df["expected_reward"].mean()),
-        "output": str(output.relative_to(PROJECT_ROOT.resolve())),
+        "count": len(out),
+        "network": teacher_name,
+        "network_sha256": net_sha,
+        "label_formula": LABEL_FORMULA,
+        "expected_reward_min": float(out["expected_reward"].min()),
+        "expected_reward_max": float(out["expected_reward"].max()),
+        "expected_reward_mean": float(out["expected_reward"].mean()),
+        "columns": list(out.columns),
+        "output": out_rel,
     }
     print(json.dumps(summary, indent=2))
     return 0

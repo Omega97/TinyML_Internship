@@ -11,8 +11,22 @@
 - Project details: [PROJECT.md](PROJECT.md)
 - Internship report: [Project Report.md](Project%20Report.md)
 - project notes: [NOTES/notes.md](_notes.md)
+- pipeline assets: [ASSETS.md](ASSETS.md)
 
-![game-demo-gif](images/games/depth2_game_demo.gif)
+**Engine self-play demos (depth 2):**
+
+| Eval | GIF |
+|------|-----|
+| Demo reel | ![depth-2 demo](images/games/depth2_game_demo.gif) |
+| HCE (no qsearch) | ![HCE d2](images/hce_d2_game.gif) |
+| NNUE `pilot_W128_844` | ![NNUE d2](images/nnue_d2_game.gif) |
+
+```bash
+# Reproduce GIFs
+pip install -e ".[viz]"
+py -3.12 scripts/record_engine_game.py --eval hce --depth 2 --no-quiescence --headless --output images/hce_d2_game.gif
+py -3.12 scripts/record_engine_game.py --eval nnue --depth 2 --headless --output images/nnue_d2_game.gif
+```
 
 ---
 
@@ -35,7 +49,7 @@
 
 **Build order:** feature encoder ✅ → search skeleton (partial ✅) → train bucketed NNUE (pilot ✅) → queen-split ablation → incremental accumulators → C port → full search + **Elo gate ≥ 1700**.
 
-**Active code:** `src/tinymlinternship/features/` (844 encoder: 716 base + tactical 128), `src/tinymlinternship/engine/` (v0.3), `src/tinymlinternship/nnue/` (training), `src/tinymlinternship/data/` (Lc0 + ChessBench), `src/tinymlinternship/visualization/` (pygame + GIF). Scripts: `run_engine.py`, `record_engine_game.py`, `train_nnue.py`, `download_lc0.py`, `prepare_chessbench_dataset.py`. Legacy value-net → `legacy/pre-sardine/`.
+**Active code:** `src/tinymlinternship/features/` (844 encoder: 716 base + tactical 128), `src/tinymlinternship/engine/` (v0.3), `src/tinymlinternship/nnue/` (training), `src/tinymlinternship/data/` (Lc0 + ChessBench), `src/tinymlinternship/visualization/` (pygame + GIF). Scripts: `run_engine.py`, `record_engine_game.py`, `lichess_pgn_to_fen.py`, `label_positions.py`, `train_nnue.py`, `download_lc0.py`, `prepare_chessbench_dataset.py`. Legacy value-net → `legacy/pre-sardine/`.
 
 **Train NNUE pilot (smoke only)** — not the production path; validates encoder + engine wiring (844-dim, ChessBench splits, W=128):
 

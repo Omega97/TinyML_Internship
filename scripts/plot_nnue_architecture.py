@@ -30,6 +30,8 @@ BUCKET_LABELS = [
 PALETTE = {
     "input": ("#e8f4f8", "#2196F3"),
     "l1": ("#e8f5e9", "#4CAF50"),
+    "l1_group": ("#f1f8f2", "#4CAF50"),
+    "reorder": ("#f3e5f5", "#7B1FA2"),
     "concat": ("#fff3e0", "#FF9800"),
     "router": ("#fff9c4", "#FFC107"),
     "expert": ("#ede7f6", "#673AB7"),
@@ -58,6 +60,7 @@ def _box(
         linewidth=1.6,
         edgecolor=edge,
         facecolor=face,
+        zorder=2,
     )
     ax.add_patch(patch)
     ax.text(
@@ -88,6 +91,54 @@ def _arrow(ax, start: tuple[float, float], end: tuple[float, float]) -> None:
     )
 
 
+def _group(
+    ax,
+    xy: tuple[float, float],
+    width: float,
+    height: float,
+    title: str,
+    *,
+    subtitle: str = "",
+    face: str,
+    edge: str,
+) -> FancyBboxPatch:
+    patch = FancyBboxPatch(
+        xy,
+        width,
+        height,
+        boxstyle="round,pad=0.02,rounding_size=0.08",
+        linewidth=2.0,
+        edgecolor=edge,
+        facecolor=face,
+        linestyle="--",
+        zorder=0,
+    )
+    ax.add_patch(patch)
+    ax.text(
+        xy[0] + width / 2,
+        xy[1] + height - 0.22,
+        title,
+        ha="center",
+        va="top",
+        fontsize=11,
+        fontweight="bold",
+        color=edge,
+        zorder=1,
+    )
+    if subtitle:
+        ax.text(
+            xy[0] + width / 2,
+            xy[1] + height - 0.55,
+            subtitle,
+            ha="center",
+            va="top",
+            fontsize=9,
+            color="#444444",
+            zorder=1,
+        )
+    return patch
+
+
 def count_parameters(feature_dim: int, hidden_dim: int, num_buckets: int) -> dict[str, int]:
     l1 = feature_dim * hidden_dim + hidden_dim
     expert = (hidden_dim * 2) * 1 + 1
@@ -112,7 +163,7 @@ def plot_architecture(
 
     fig, ax = plt.subplots(figsize=(14, 10.5))
     ax.set_xlim(0, 14)
-    ax.set_ylim(-0.15, 10)
+    ax.set_ylim(-0.6, 10)
     ax.axis("off")
 
     ax.text(
@@ -138,7 +189,7 @@ def plot_architecture(
     # Inputs
     _box(
         ax,
-        (1.0, 7.5),
+        (1.0, 7.85),
         4.0,
         1.0,
         "White POV input\n844 sparse (binary)",
@@ -147,7 +198,7 @@ def plot_architecture(
     )
     _box(
         ax,
-        (9.0, 7.5),
+        (9.0, 7.85),
         4.0,
         1.0,
         "Black POV input\n844 sparse (binary)",
@@ -155,44 +206,57 @@ def plot_architecture(
         edge=PALETTE["input"][1],
     )
 
-    # Shared L1
+    # Shared L1 region: same weight matrix applied once per POV → two accumulators
+    _group(
+        ax,
+        (0.55, 5.15),
+        12.9,
+        2.45,
+        "Shared L1 (same weights, called twice)",
+        subtitle=f"Linear {feature_dim} → {hidden_dim} · dense train → gradual prune 70–80%",
+        face=PALETTE["l1_group"][0],
+        edge=PALETTE["l1_group"][1],
+    )
     _box(
         ax,
-        (4.25, 6.0),
-        5.5,
-        1.0,
-        f"Shared L1 (same weights twice)\nLinear {feature_dim} → {hidden_dim}\n"
-        f"dense train → gradual prune 70–80%",
+        (1.1, 5.55),
+        4.7,
+        1.55,
+        f"White accumulator\nLinear {feature_dim} → {hidden_dim}\n"
+        f"CReLU [0,127] · incremental add/sub",
         face=PALETTE["l1"][0],
         edge=PALETTE["l1"][1],
-        fontsize=10,
-        weight="bold",
+        fontsize=9.5,
+    )
+    _box(
+        ax,
+        (8.2, 5.55),
+        4.7,
+        1.55,
+        f"Black accumulator\nLinear {feature_dim} → {hidden_dim}\n"
+        f"CReLU [0,127] · incremental add/sub",
+        face=PALETTE["l1"][0],
+        edge=PALETTE["l1"][1],
+        fontsize=9.5,
     )
 
-    # Accumulators
+    # STM ordering (no extra matmul — selects which POV is stm vs opponent)
     _box(
         ax,
-        (1.5, 4.4),
-        3.8,
-        1.0,
-        f"STM accumulator\n{hidden_dim} · CReLU [0,127]",
-        face=PALETTE["l1"][0],
-        edge=PALETTE["l1"][1],
-    )
-    _box(
-        ax,
-        (8.7, 4.4),
-        3.8,
-        1.0,
-        f"Opponent accumulator\n{hidden_dim} · CReLU [0,127]",
-        face=PALETTE["l1"][0],
-        edge=PALETTE["l1"][1],
+        (4.35, 3.85),
+        5.3,
+        0.9,
+        "STM reorder\nstm ← POV of side-to-move · opp ← other POV",
+        face=PALETTE["reorder"][0],
+        edge=PALETTE["reorder"][1],
+        fontsize=9.5,
+        weight="bold",
     )
 
     # Concat
     _box(
         ax,
-        (4.6, 3.0),
+        (4.6, 2.75),
         4.8,
         0.9,
         f"Concatenate (STM ‖ Opp)\n{concat_dim}-dim vector",
@@ -204,7 +268,7 @@ def plot_architecture(
     # Router
     _box(
         ax,
-        (4.9, 1.95),
+        (4.9, 1.7),
         4.2,
         0.8,
         "Bucket router\npiece count + queen → 1 of 8",
@@ -246,7 +310,7 @@ def plot_architecture(
             fontsize=7.2,
             fontweight="bold" if active else "normal",
         )
-        _arrow(ax, (7.0, 1.95), (x + expert_w / 2, expert_y + expert_h))
+        _arrow(ax, (7.0, 1.7), (x + expert_w / 2, expert_y + expert_h))
 
     # Output
     _box(
@@ -262,25 +326,24 @@ def plot_architecture(
     )
 
     # Arrows between main blocks
-    _arrow(ax, (3.0, 7.5), (6.0, 7.0))
-    _arrow(ax, (11.0, 7.5), (8.0, 7.0))
-    _arrow(ax, (6.0, 6.0), (3.4, 5.4))
-    _arrow(ax, (8.0, 6.0), (10.6, 5.4))
-    _arrow(ax, (3.4, 4.4), (6.0, 3.9))
-    _arrow(ax, (10.6, 4.4), (8.0, 3.9))
-    _arrow(ax, (7.0, 3.0), (7.0, 2.75))
-    _arrow(ax, (7.0, 0.55), (7.0, 0.4))
+    _arrow(ax, (3.0, 7.85), (3.45, 7.1))   # white input → white accumulator
+    _arrow(ax, (11.0, 7.85), (10.55, 7.1))  # black input → black accumulator
+    _arrow(ax, (3.45, 5.55), (5.4, 4.75))   # white accumulator → STM reorder
+    _arrow(ax, (10.55, 5.55), (8.6, 4.75))  # black accumulator → STM reorder
+    _arrow(ax, (7.0, 3.85), (7.0, 3.65))    # STM reorder → concat
+    _arrow(ax, (7.0, 2.75), (7.0, 2.5))     # concat → router
+    _arrow(ax, (7.0, 0.55), (7.0, 0.4))     # experts → output
 
     ax.text(
         0.35,
-        -0.05,
+        -0.6,
         "Pilot checkpoint: W=128 · val_mse≈0.058 · inference via evaluate_nnue()",
         fontsize=9,
         color="#666666",
     )
     ax.text(
         13.65,
-        -0.05,
+        -0.6,
         "encode_dual()",
         ha="right",
         fontsize=9,

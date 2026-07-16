@@ -1,6 +1,6 @@
 # SARDINE Blueprint — Progress
 
-_Checkpoint map vs NOTES/SARDINE Engine Blueprint.md only. Last updated: 2026-07-10 (label_positions scaffold, gate depth-1 HCE/Sunfish, GIF d2)._
+_Checkpoint map vs NOTES/SARDINE Engine Blueprint.md only. Last updated: 2026-07-16 (uniform `expected_reward` labels; lichess_pgn_to_fen + schema tooling)._
 
 ---
 
@@ -45,10 +45,13 @@ Architecture: shared L1 **844 → W** with $W \in \{128, 256\}$ (dense train + *
 - [x] Lc0 subset **~1–2 GB** (`data/raw/lc0/`, `scripts/download_lc0.py`)
 - [x] Games **≥ 16** moves; pilot preprocess — `lc0_preprocess.py`, `stats_lc0_processed.py`, `prepare_lc0_dataset.py` (ply≥32 global, bucket7≥8)
 - [x] Survey pre-labeled datasets — nessun dump riutilizzabile end-to-end; vedi [NOTES/Datasets.md](NOTES/Datasets.md)
-- [ ] Lichess PGN → FEN (primary, **natural bucket distribution**) + Lc0 supplement
-- [x] Teacher scelto: **Lc0 latest best network** (`expected_reward = W − L`, on-the-fly UCI); fallback Stockfish WDL — [NOTES/Models.md](NOTES/Models.md)
+- [x] Lichess PGN → FEN script — `scripts/lichess_pgn_to_fen.py` (streaming, `bucket_id` / piece_count / has_queen); smoke 50 games → `data/processed/lichess/positions.parquet` (all 8 buckets)
+- [ ] Full Lichess dump download + large-scale FEN extract (production volume; natural bucket mix) + Lc0 supplement at scale
+- [x] Teacher scelto: **Lc0** (`expected_reward` White POV from WDL, on-the-fly UCI); fallback Stockfish WDL — [NOTES/Models.md](NOTES/Models.md) · [ASSETS.md](ASSETS.md) §Uniformity
 - [x] Teacher installato — `models/teacher/` (lc0 v0.32.1 + reti); `scripts/download_teacher.py`, `smoke_test_teacher.py` OK
-- [x] `label_positions.py` — scaffold + smoke via `lc0` UCI WDL (`scripts/label_positions.py`); batch Lichess/Lc0 FEN pending
+- [x] `label_positions.py` — scaffold + smoke; **uniform target = `expected_reward` only** (same formula for every source block)
+- [ ] Label **all** production blocks (Lichess + Lc0) with the **same** teacher net → separate files OK; no `best_q` / ChessBench as train target
+- [x] Schema/merge tooling — `schema.py`, `merge_training_sets.py` (game-level split + single-teacher check)
 - [ ] **nnue-pytorch** fork/adapt — 844-dim bucketed, gradual L1 prune, 100 ep fixed
 - [x] PyTorch **smoke** pilot (shared L1 + 8 expert heads) — `train_nnue.py`, `pilot_W128_844` val_mse 0.056
 - [ ] Calibrated **PTQ int8** export + tanh LUT (histogram weights, scale onto [-127,127])

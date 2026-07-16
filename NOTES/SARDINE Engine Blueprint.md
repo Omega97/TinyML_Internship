@@ -9,7 +9,9 @@ Chess engine for the **Wio Terminal** — neural evaluation + alpha-beta search,
 
 ## Mission
 
-Playable chess bot on a tiny device: no cloud, no GPU. Extreme optimization and efficiency.
+Playable chess bot on a tiny device: no cloud, no GPU. Extreme optimization and efficiency. Ideally, we will be able to play against it on *Lichess*. 
+
+The hope is also to make a setup where we can later transpose the project to a different filed (accumulator layers + world models?)
 
 ---
 
@@ -209,6 +211,8 @@ Ablation plan: train queen-split vs pure piece-count buckets once pipeline exist
 
 Informed by `piece_count_distribution_10k.xlsx` (games ≥ 16 moves). Training keeps the **natural bucket distribution** from Lichess PGNs — no stratified resampling.
 
+#todo testing with fewer/different buckets (queen split vs only piece count)
+
 ### Policy (v1)
 
 Search-only for v1. Add killer-move once tables are in (no policy network for now).
@@ -361,15 +365,161 @@ If the primary NNUE + search plan fails to reach 1700 Elo, the following fallbac
 
 ---
 
-## Bot Evaluation Tool Selection
+## Benchmark Infrastructure
 
-| Decision | Choice | Description |
-|----------|--------|-------------|
-| **Method** | **A1** | **ACPL Heuristic** — Analyze moves with Stockfish, compute average centipawn loss, map to Elo via `Elo ≈ 2855 - (ACPL × 10)` |
-| **Opponents** | **B1** | **Sunfish** — Simple open-source Python engine (~1400-1600 Elo) as a reference for calibration |
-| **Output** | **C2** | **Elo range** — Provide confidence interval (e.g., "1550-1750") to reflect uncertainty with few games |
-| **Automation** | **D1** | **Manual script** — Run evaluation on demand via a Python script |
-| **Frequency** | **E1** | **Single evaluation** — Run once after final training to assess the final bot |
+Continuous measurement of strength, speed, eval quality, and ship readiness — not a one-shot post-training check.
+
+### Purpose
+
+Benchmark infrastructure answers five questions continuously, not only at the end of training:
+
+1. **Strength** — is this recipe stronger than last week?
+2. **Speed** — is eval/search fast enough for ~1 s/move (PC proxy now, Wio later)?
+3. **Eval quality** — does the student match teacher `expected_reward` on held-out FENs?
+4. **Parity** — do PC and device agree after the C port?
+5. **Ship gate** — may we claim the ≥1700 path (match Elo), or only “not broken” (ACPL smoke)?
+
+### Scope
+
+| Phase | What we run |
+| ----- | ----------- |
+| **Now** | Playing strength + **PC** performance microbench + train/eval quality metrics |
+| **After C port** | Same metric **schema** on Wio (`platform=wio`): latency, nodes/s, `-O3` vs `-Os`, encoder/NNUE parity |
+
+Device-only benchmarking is **not** the primary loop before the port; PC numbers are proxies and must be labeled as such.
+
+### Playing strength (hybrid)
+
+| Track | Role | Metric name (reports) |
+| ----- | ---- | --------------------- |
+| **Iteration** | Fast feedback after code/train changes | `elo_acpl_heuristic` (and raw ACPL ± σ) |
+| **Gate / milestone** | Credible strength claim | `elo_match` (BayesElo / Ordo / cutechess) + CI |
+
+**Never mix the two Elo numbers in prose without the prefix.** ACPL-mapped Elo is a **heuristic**, not FIDE/Lichess/CCRL.
+
+#### ACPL track (iteration)
+
+- Self-play (or fixed agent recipe) → PGN → Stockfish analyzes each move → average centipawn loss.
+- Mapping (documented heuristic): \(\mathrm{Elo}_{acpl} \approx 2855 - 10 \times \mathrm{ACPL}\), with project floor/cap as implemented in `eval_bot_acpl.py`.
+- **Judge:** Stockfish at **fixed depth** (not movetime) for cross-machine stability; pin binary under `models/teacher/stockfish/` and record version + depth in every run manifest.
+- Multi-game runs preferred for σ; report range / CI when \(n\) is small.
+
+#### Match track (gates)
+
+- Engine-vs-engine under a frozen protocol (time and/or nodes — see Search protocol).
+- Prefer minimal **UCI** (Serial on device later; process UCI on PC now) for cutechess-cli / similar.
+- Output: W/D/L, `elo_match`, confidence interval; store full PGN.
+
+### Opponents / ladder
+
+**Primary ladder** — frozen recipes (extend `NOTES/agents/*.md`); never silently change opponent strength between runs:
+
+| Rung | Example opponent | Purpose |
+| ---- | ---------------- | ------- |
+| 0 | Random / legal random | Smoke “moves legal” |
+| 1 | Sunfish (fixed depth/recipe) | Weak open-source baseline |
+| 2 | HCE @ fixed recipe (e.g. d2, qsearch policy explicit) | Internal heuristic baseline |
+| 3 | Prior SARDINE checkpoint / pilot NNUE recipe | Regression vs self |
+| 4 | Limited Stockfish (level or tight node/time cap) | Mid ladder toward gate |
+| 5 | Gate peer set (documented engines / levels for ≥1700 claim) | Ship criterion |
+
+**Teacher ceiling checks** — sparse, not every commit:
+
+- Include **teacher-eval @ depth 1** (frozen Lc0 net, e.g. labeling net `791556` or documented alternative) as a reference bot.
+- Purpose: “are we near the label ceiling?” not daily CI (Lc0 is slow).
+
+### Search protocol under test
+
+| Mode | Use when | Spec |
+| ---- | -------- | ---- |
+| **Fixed time/move** | Match gates, product-like comparison | e.g. 100 ms and/or **1 s**/move; same TC for all engines in a session; log host CPU |
+| **Fixed node budget** | Fair search-stack comparison, Urusov-class reference | e.g. ~20 kN/move (tune once and freeze); report wall time separately |
+| **Fixed depth** | Smoke, agent cards, ACPL self-play recipes | e.g. d1 / d2 ± quiescence flags in recipe file — **not** the sole ≥1700 claim |
+
+Default **gate recipe** must be one explicit line in the run manifest (eval net, depth or TC or nodes, qsearch on/off). Research may use a matrix; the gate does not.
+
+### Performance suite
+
+One JSON schema for PC and later Wio:
+
+```text
+metric, value, unit, platform ∈ {pc, wio}, recipe_id, commit, timestamp, host_or_device, extra{}
+```
+
+**PC metrics (now):**
+
+- Evals/s: HCE, NNUE (named checkpoint), optional teacher
+- Nodes/s and time-to-depth at fixed depths
+- Self-play ply/s smoke under a recipe
+- Optional: TT hit rate, qsearch node share (debug search explosions)
+
+**Wio metrics (when ported):**
+
+- Same names with `platform=wio`
+- `-O3` vs `-Os` wall-clock comparison
+- Move time under ~1 s budget; peak RAM if measurable
+
+Bulk logs under `bench/runs/<timestamp>/` or `plots/` (large binaries gitignored as needed).
+
+### Parity & correctness
+
+| Gate | When | What |
+| ---- | ---- | ---- |
+| **Golden FEN vectors** | Now / every net export | Frozen FENs → encoder indices + NNUE score; version goldens with `checkpoint_id` |
+| **PC↔device parity** | After C port | Same vectors on device; bitwise or documented atol/rtol (int8 path) |
+| **Teacher correlation** | After every production train | On labeled **val** (`expected_reward` only): MSE, Spearman/Pearson; fail or warn on regression thresholds |
+
+Unit tests (perft, features, …) remain mandatory and orthogonal.
+
+### Automation & frequency
+
+| Cadence | Action |
+| ------- | ------ |
+| **On demand** | CLI/scripts from project root; every run writes a **manifest** (config hash, recipe, commit, paths to JSON/PGN) |
+| **Pre-release / weekly** | Full package: multi-game ACPL + match ladder rung(s) + microbench + teacher correlation if a new net shipped |
+| CI | Prefer **pytest + cheap goldens**; do **not** require full SF/Lc0 match suites on every PR unless a light smoke is affordable |
+
+### Artifacts & reporting
+
+| Artifact | Content |
+| -------- | ------- |
+| **JSON** | Metrics + config (ACPL, match summary, microbench, teacher-correlation scores) |
+| **PGN** | Games for ACPL/match |
+| **Dashboard** | Generated plots over time (ACPL/Elo, nodes/s, val MSE) from the JSON history — for reports / ICTP; regenerate from stored JSON, do not hand-edit |
+
+Naming: include recipe id and date; distinguish `elo_acpl_heuristic` vs `elo_match` in all tables.
+
+### Elo ship gate (dual)
+
+| Level | Criterion | Effect |
+| ----- | --------- | ------ |
+| **Don't ship broken** | ACPL / smoke match collapses vs last good recipe (threshold TBD in runbook) | Block release; investigate |
+| **Claim ≥1700** | **`elo_match`** under frozen TC/nodes + opponent set; CI does not rule out 1700 | Only then treat blueprint Elo target as met |
+| **Device claim** | Same match (or accepted proxy) on Wio @ ~1 s/move after PC↔device parity | Final product claim |
+
+ACPL-mapped Elo **alone** is insufficient for the ≥1700 claim.
+
+### Code layout
+
+| Layer | Location |
+| ----- | -------- |
+| Library | `src/tinymlinternship/bot_eval/` (ACPL, paths, future match helpers, metric schema) |
+| CLIs | `scripts/eval_bot_acpl.py`, `eval_game_elo.py`, future `bench_*.py` / match runners — thin wrappers |
+| Recipes | `NOTES/agents/*.md` (+ machine-readable twin if needed) |
+| Outputs | `plots/`, `bench/runs/`, golden vectors next to tests or `tests/goldens/` |
+
+### Implementation order (practical)
+
+1. Pin ACPL judge to **SF fixed depth**; standardize run manifest fields.  
+2. Scripted **PC microbench** (evals/s, nodes/s) → shared JSON metric schema.  
+3. Freeze **ladder recipes**; document gate recipe.  
+4. Golden FEN vectors for current pilot net; teacher correlation on labeled val when production labels exist.  
+5. Match harness (UCI or in-process) for `elo_match`; enable dual ship rule.  
+6. Post-port: PC↔device parity, Wio rows in the metric schema, device gate.
+
+### Relation to training data
+
+Bench eval quality (teacher correlation) uses the **same** uniform target as training: teacher **`expected_reward`** (see ASSETS §Uniformity). Do not score the student against Lc0 chunk `best_q` or ChessBench-only labels in production reports.
 
 ---
 
