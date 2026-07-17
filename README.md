@@ -13,19 +13,22 @@
 - project notes: [NOTES/notes.md](_notes.md)
 - pipeline assets: [ASSETS.md](ASSETS.md)
 
-**Engine self-play demos (depth 2):**
+**Engine self-play demos** (demo reel = HCE then NNUE at that depth):
 
-| Eval | GIF |
-|------|-----|
-| Demo reel | ![depth-2 demo](images/games/depth2_game_demo.gif) |
-| HCE (no qsearch) | ![HCE d2](images/hce_d2_game.gif) |
-| NNUE `pilot_W128_844` | ![NNUE d2](images/nnue_d2_game.gif) |
+| Eval                  | depth 1                                                   | depth 2                                                   |
+| --------------------- | --------------------------------------------------------- | --------------------------------------------------------- |
+| Demo reel             | <img src="images/games/depth1_game_demo.gif" width="200"> | <img src="images/games/depth2_game_demo.gif" width="200"> |
+| HCE (no qsearch)      | <img src="images/hce_d1_game.gif" width="200">            | <img src="images/hce_d2_game.gif" width="200">            |
+| NNUE `pilot_W128_844` | <img src="images/nnue_d1_game.gif" width="200">           | <img src="images/nnue_d2_game.gif" width="200">           |
 
 ```bash
 # Reproduce GIFs
 pip install -e ".[viz]"
+py -3.12 scripts/record_engine_game.py --eval hce --depth 1 --no-quiescence --headless --output images/hce_d1_game.gif
 py -3.12 scripts/record_engine_game.py --eval hce --depth 2 --no-quiescence --headless --output images/hce_d2_game.gif
+py -3.12 scripts/record_engine_game.py --eval nnue --depth 1 --headless --output images/nnue_d1_game.gif
 py -3.12 scripts/record_engine_game.py --eval nnue --depth 2 --headless --output images/nnue_d2_game.gif
+# Demo reels = concatenate HCE + NNUE GIFs for that depth → images/games/depth{1,2}_game_demo.gif
 ```
 
 ---
