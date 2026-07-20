@@ -1,8 +1,9 @@
 #!/usr/bin/env python3
-"""Smoke-train bucketed NNUE on ChessBench parquet splits (not production path).
+"""Smoke-train bucketed NNUE on labeled parquet splits.
 
-Production training uses nnue-pytorch + Lichess PGN + Lc0 on-the-fly labels.
-See NOTES/SARDINE Engine Blueprint.md §Training pipeline.
+Works with ChessBench (precomputed features) or production labeled sets
+(FEN + expected_reward; encode_dual at load time). Full production scale
+still targets nnue-pytorch + large Lichess/Lc0 — see blueprint §Training.
 """
 
 from __future__ import annotations

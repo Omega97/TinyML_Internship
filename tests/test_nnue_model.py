@@ -61,3 +61,28 @@ def test_chessbench_dataset_loads_row():
     assert item["white_features"].shape == (FEATURE_DIM,)
     assert 0 <= item["bucket_id"] < NUM_BUCKETS
     assert -1.0 <= item["target"] <= 1.0
+
+
+def test_dataset_encodes_from_fen(tmp_path: Path):
+    """Production labeled rows (fen only) encode features on the fly."""
+    import pandas as pd
+
+    path = tmp_path / "labeled.parquet"
+    pd.DataFrame(
+        [
+            {
+                "fen": chess.STARTING_FEN,
+                "bucket_id": 7,
+                "stm_white": True,
+                "expected_reward": 0.0,
+            }
+        ]
+    ).to_parquet(path, index=False)
+
+    ds = ChessbenchDataset(path)
+    item = ds[0]
+    assert item["white_features"].shape == (FEATURE_DIM,)
+    assert item["black_features"].shape == (FEATURE_DIM,)
+    assert item["white_features"].sum().item() > 0
+    assert item["bucket_id"] == 7
+    assert item["target"] == 0.0

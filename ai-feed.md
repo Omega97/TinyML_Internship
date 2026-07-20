@@ -1,364 +1,270 @@
-# Design options: §Benchmark Infrastructure
+# AI feed — SARDINE pipeline map
 
-## LOCKED (2026-07-16)
+_Snapshot: 2026-07-20. Progress vs blueprint (`TODOs.md`); code map for agents._
+
+---
+
+## Progress status (build pipeline A–J)
 
 ```text
-A2, B3, C2, D2+D4, E2+E3, F4, G2+G3+G4, H2+H4, I2+I3, J3, K2
+A  Feature encoder (PC)     ████████████████████  DONE (844-dim; device parity open)
+B  Search skeleton (PC)     ████████████░░░░░░░░  PARTIAL  v0.3 (αβ + qsearch + MVV-LVA)
+C  Train bucketed NNUE      ████████░░░░░░░░░░░░  MINI SET  C–E smoke; full volume + nnue-pytorch open
+D  Queen-split ablation     ░░░░░░░░░░░░░░░░░░░░  NOT STARTED
+E  Incremental accumulators ░░░░░░░░░░░░░░░░░░░░  NOT STARTED (device)
+F  Port C / Wio             ░░░░░░░░░░░░░░░░░░░░  NOT STARTED
+G  Full search stack        ██░░░░░░░░░░░░░░░░░░  qsearch only; TT/LMR/NMP/ID open
+H  Elo gate ≥1700           ░░░░░░░░░░░░░░░░░░░░  NOT STARTED (d1 ACPL heuristic only)
+I  Iterate if miss gate     ░░░░░░░░░░░░░░░░░░░░  —
+J  v2 polish                ░░░░░░░░░░░░░░░░░░░░  —
 ```
 
-Written into [NOTES/SARDINE Engine Blueprint.md](NOTES/SARDINE%20Engine%20Blueprint.md) §**Benchmark Infrastructure** (supersedes old Bot Evaluation Tool Selection table).
+| Area | Now | Next bottleneck |
+| ---- | --- | --------------- |
+| **Encoder** | ✅ 844 dual-POV, 8 buckets | Device parity (C) |
+| **Search** | ✅ v0.3 αβ + capture qsearch | TT, nodes/s, killers, ID |
+| **Data** | ✅ Mini labeled + merge (5306/214) | Full Lichess dump + re-label |
+| **NNUE train** | ✅ Pilot ChessBench + smoke production path | nnue-pytorch / scale |
+| **Bot (PC)** | ✅ HCE / NNUE / Lc0 eval + self-play GIFs | True human PvP UI; UCI |
+| **Device** | ❌ | After stronger PC net + search |
 
-| Pick | Meaning |
-| ---- | ------- |
-| A2→A3 | Strength + PC perf now; device later, same schema |
-| B3 | ACPL for iteration; match Elo for gates |
-| C2 | Stockfish **fixed depth** as ACPL judge |
-| D2+D4 | Opponent ladder + sparse teacher@d1 checks |
-| E2+E3 | Time/move **and** node-budget protocols |
-| F4 | Unified PC/Wio metric JSON schema |
-| G2+G3+G4 | Goldens, PC↔device parity, teacher correlation |
-| H2+H4 | On-demand manifested runs + weekly/pre-release full gate |
-| I2+I3 | JSON/PGN + generated dashboard plots |
-| J3 | Dual gate: ACPL “not broken” + match ≥1700 claim |
-| K2 | `bot_eval` library + thin scripts |
+**Tests:** 106 passed (2026-07-20).  
+**Checkpoints:** `models/checkpoints/nnue/pilot_W128_844/`, `smoke_prod_W128_844/`.  
+**Source of truth for checkboxes:** [TODOs.md](TODOs.md) · blueprint [NOTES/SARDINE Engine Blueprint.md](NOTES/SARDINE%20Engine%20Blueprint.md) · assets [ASSETS.md](ASSETS.md).
 
 ---
 
-_Original options below (for history). Context: expands full benchmarking (strength + speed + parity + gates)._  
-_Related: [ASSETS.md](ASSETS.md) · `scripts/eval_bot_acpl.py` · agent recipes in `NOTES/agents/`._
-
----
-
-## What “benchmark infrastructure” must cover
-
-SARDINE needs more than a one-shot Elo guess. A robust bench stack should answer:
-
-1. **Is the bot stronger than last week?** (playing strength)
-2. **Is search/eval fast enough for ~1 s/move on target hardware?** (throughput / latency)
-3. **Do PC and device agree?** (parity — later, once C port exists)
-4. **Did training labels / NNUE actually improve leaves?** (eval quality vs teacher)
-5. **When do we ship vs iterate?** (gates vs blueprint ≥1700)
-
-Design choices below fix *how* we measure those, not the NNUE architecture itself.
-
----
-
-## Decision A — Scope of the benchmark suite
-
-### A1: Strength-only
-- **Description**: Only playing-strength metrics (ACPL and/or match Elo). No nodes/s or latency suite.
-- **Pros**: Simple; matches current scripts.
-- **Cons**: Misses Wio feasibility; strong-but-slow bots look fine until port.
-- **Notes**: Too thin for “infrastructure.”
-
-### A2: Strength + PC performance (Recommended)
-- **Description**: Playing strength **and** PC benchmarks: nodes/s, evals/s, time-to-depth, optional TT hit stats. Device parity deferred until C port.
-- **Pros**: Covers day-to-day iteration now; performance budgets inform search/NNUE width.
-- **Cons**: PC numbers ≠ Wio; must re-measure on device later.
-- **Notes**: Fits current Python engine + future C port.
-
-### A3: Full stack (strength + PC + device + parity)
-- **Description**: A2 plus Wio latency, `-O3`/`-Os`, encoder/NNUE parity tests, Serial UCI gate.
-- **Pros**: Complete vs blueprint.
-- **Cons**: Much of this is blocked on C port; writing it as “must have now” stalls progress.
-- **Notes**: Good as **v1 end-state**; implement in phases.
-
-### A4: Eval-quality only (teacher MSE / correlation)
-- **Description**: Bench = val MSE / correlation vs teacher `expected_reward`; no games.
-- **Pros**: Fast regression for training.
-- **Cons**: MSE ≠ Elo; ignores search.
-- **Notes**: Useful as a **sub-suite**, not the whole infrastructure.
-
----
-
-## Decision B — Primary playing-strength method
-
-### B1: ACPL heuristic only (current default)
-- **Description**: Self-play PGN → Stockfish analyzes moves → ACPL → `Elo ≈ 2855 − 10×ACPL` (floor/cap as now).
-- **Pros**: Already implemented (`eval_bot_acpl.py`); cheap; no pairing schedule.
-- **Cons**: Not real match Elo; high variance; self-play style can distort ACPL; not comparable to Lichess/CCRL.
-- **Notes**: Blueprint table already chose something like this (A1).
-
-### B2: Match Elo only (cutechess / UCI round-robin)
-- **Description**: Engine-vs-engine games with fixed time or depth; Elo from W/D/L (BayesElo / Ordo / cutechess).
-- **Pros**: Standard; credible ≥1700 gate story.
-- **Cons**: Needs stable UCI (or adapter); more games for tight CI; slower iteration.
-- **Notes**: Blueprint already wants minimal UCI before formal gate.
-
-### B3: Hybrid — ACPL for iteration, matches for gates (Recommended)
-- **Description**: Day-to-day: ACPL (+ optional short match vs Sunfish/HCE). Milestone / Elo gate: fixed match protocol vs reference engines.
-- **Pros**: Fast feedback + honest ship criterion.
-- **Cons**: Two pipelines to maintain; must not confuse “ACPL Elo” with match Elo in reports.
-- **Notes**: Label outputs clearly (`elo_acpl_heuristic` vs `elo_match`).
-
-### B4: Human / Lichess bot rating
-- **Description**: Deploy as Lichess bot or play rated humans for rating.
-- **Pros**: Real-world signal.
-- **Cons**: Slow, noisy, not reproducible CI; needs network & account.
-- **Notes**: Optional v2 demo, not v1 infrastructure core.
-
----
-
-## Decision C — ACPL judge configuration (if B1 or B3)
-
-### C1: Stockfish fixed movetime (current)
-- **Description**: e.g. `--sf-movetime-ms 100` per move analysis.
-- **Pros**: Simple, already used.
-- **Cons**: Strength of analysis depends on machine; less reproducible across PCs.
-- **Notes**: Document SF version + movetime in every JSON.
-
-### C2: Stockfish fixed depth (Recommended if keeping ACPL)
-- **Description**: e.g. depth 12–16 for every move; same on all machines (slower but stabler).
-- **Pros**: More comparable across hardware.
-- **Cons**: Wall time scales with positions; still not “truth.”
-- **Notes**: Pair with pinned SF binary path (`models/teacher/stockfish/…`).
-
-### C3: Dual judge (SF + second engine)
-- **Description**: Report ACPL under two judges; flag large disagreement.
-- **Pros**: Detects judge noise.
-- **Cons**: 2× cost; little gain early.
-- **Notes**: Overkill until gate season.
-
----
-
-## Decision D — Match opponents / ladder (if B2 or B3)
-
-### D1: Weak ladder only (Sunfish, random, HCE)
-- **Description**: Only engines clearly below target; prove “not broken.”
-- **Pros**: Easy wins; good smoke.
-- **Cons**: Cannot claim ≥1700.
-- **Notes**: Matches blueprint early baseline + Sunfish calibration.
-
-### D2: Ladder to gate (weak → mid → gate peers) (Recommended)
-- **Description**: Fixed ladder, e.g. Sunfish → HCE@d2 → pilot NNUE@d1 → Stockfish level / limited-strength → (later) Dog-class if available. Gate = score vs a defined reference set under fixed TC.
-- **Pros**: Interpretable progression; gate is a protocol, not a vibe.
-- **Cons**: Need frozen opponent recipes (like `NOTES/agents/*.md`).
-- **Notes**: Never move opponent strength silently between runs.
-
-### D3: Self-play generations only
-- **Description**: New net vs previous checkpoint only.
-- **Pros**: Good for RL-style iteration.
-- **Cons**: Drift; no absolute Elo.
-- **Notes**: Add as **extra** track, not sole track.
-
-### D4: Teacher-eval 1-ply as permanent opponent
-- **Description**: Always include “Lc0 teacher @ depth 1” (or frozen teacher net) as a reference bot.
-- **Pros**: Ties strength to label ceiling discussion (`ai-feed` teacher notes).
-- **Cons**: Slow if teacher is Lc0; use only for sparse checkpoints.
-- **Notes**: Valuable for “are we near teacher leaf quality?”
-
----
-
-## Decision E — Search protocol under test (fair comparison)
-
-### E1: Fixed depth only
-- **Description**: All bots compared at depth 1 and/or 2 (current demos).
-- **Pros**: Reproducible; no time variance.
-- **Cons**: Ignores real ~1 s budget; favors cheap evals unfairly at same depth.
-- **Notes**: Keep for **smoke** and agent cards.
-
-### E2: Fixed time per move (Recommended for strength gates)
-- **Description**: e.g. 100 ms or 1 s/move on PC; same TC for all engines in a match.
-- **Pros**: Closer to product goal; mixes eval speed + search skill.
-- **Cons**: PC-dependent unless capped nodes; need careful process isolation.
-- **Notes**: Log CPU model in manifest.
-
-### E3: Fixed node budget
-- **Description**: e.g. 20k nodes/move (Urusov-class reference).
-- **Pros**: Hardware-fairer than wall time; good for search-stack comparison.
-- **Cons**: Needs accurate node counting; NNUE vs HCE cost differs in wall time.
-- **Notes**: Excellent **secondary** metric alongside E2.
-
-### E4: Recipe matrix (depth × qsearch × eval)
-- **Description**: Publish a small grid: `{hce,d1,no-q}`, `{nnue,d1}`, `{nnue,d2,q}`, … as frozen agent files.
-- **Pros**: Avoids apples-to-oranges; already started in `NOTES/agents/`.
-- **Cons**: Many cells; pick a **default gate recipe** explicitly.
-- **Notes**: Combine with E2: matrix for research, one recipe for the gate.
-
----
-
-## Decision F — Performance / systems benchmarks
-
-### F1: Ad-hoc timing prints
-- **Description**: Occasional `time.perf_counter` around search.
-- **Pros**: Zero infra.
-- **Cons**: Not comparable; easy to lie to yourself.
-
-### F2: Scripted PC microbench suite (Recommended now)
-- **Description**: Fixed FEN set → report: evals/s (HCE, NNUE, teacher), nodes/s @ depth d, time-to-depth, game ply/s for self-play smoke.
-- **Pros**: Cheap regression; informs W vs 128/256 and qsearch blowups (seen with HCE).
-- **Cons**: Still PC-only.
-- **Notes**: Store JSON under `plots/` or `bench/` with git-ignored large logs.
-
-### F3: Device-first (Wio only)
-- **Description**: Defer all perf until on-device.
-- **Pros**: Measures what matters for ship.
-- **Cons**: Blocks optimization loop on PC for months.
-- **Notes**: Wrong primary choice today.
-
-### F4: PC suite now + device suite later (same metrics schema) (Recommended end-state)
-- **Description**: Same JSON schema (`metric`, `value`, `platform`, `commit`, `recipe`); fill `platform=wio` when ready.
-- **Pros**: Continuous history across port.
-- **Cons**: Slight schema design upfront.
-- **Notes**: Best with A2→A3 evolution.
-
----
-
-## Decision G — Parity & correctness gates
-
-### G1: Unit tests only (current)
-- **Description**: perft, encoder tests, tactical features, etc.
-- **Pros**: Already strong (~100 tests).
-- **Cons**: Does not catch PC↔device drift or silent eval scale bugs.
-
-### G2: Golden FEN eval vectors (Recommended)
-- **Description**: Freeze N FENs → expected encoder indices + NNUE fp32 score (+ later int8). Fail CI if drift.
-- **Pros**: Catches training export and port bugs early.
-- **Cons**: Must regenerate goldens when net changes (version goldens with checkpoint id).
-- **Notes**: Separate goldens per checkpoint.
-
-### G3: PC↔device bitwise / tolerance parity
-- **Description**: Same as G2 but device must match PC within atol/rtol (int8 may be exact if identical math).
-- **Pros**: Required for trustworthy on-device Elo claims.
-- **Cons**: After C port only.
-- **Notes**: Part of F port checklist.
-
-### G4: Teacher correlation suite
-- **Description**: On labeled val set, report MSE / Spearman of student vs `expected_reward`.
-- **Pros**: Direct train-quality metric; uniform with data policy.
-- **Cons**: Not playing strength.
-- **Notes**: Run after every production train.
-
----
-
-## Decision H — Automation & frequency
-
-### H1: Manual only (current blueprint D1/E1 style)
-- **Description**: Run scripts by hand after big changes.
-- **Pros**: No CI cost.
-- **Cons**: Drift; “we forgot to bench.”
-
-### H2: On-demand CLI + saved manifests (Recommended)
-- **Description**: One entry script or documented commands; every run writes JSON/PGN under `plots/` or `bench/runs/<timestamp>/` with config hash.
-- **Pros**: Reproducible without full CI.
-- **Cons**: Discipline required.
-- **Notes**: Extends what you already do with `*_gate_acpl.json`.
-
-### H3: CI on every PR (unit + microbench smoke)
-- **Description**: pytest + tiny ACPL (1 game) or evals/s smoke in CI.
-- **Pros**: Guards regressions.
-- **Cons**: SF/Lc0 in CI is heavy on Windows runners; may skip heavy engines in CI.
-- **Notes**: Keep heavy SF ACPL **nightly / manual**.
-
-### H4: Scheduled full gate (weekly / pre-release)
-- **Description**: Longer match + ACPL multi-game + microbench.
-- **Pros**: True milestone signal.
-- **Cons**: Needs stable machine or cloud.
-- **Notes**: Pair with B3.
-
----
-
-## Decision I — Artifacts & reporting
-
-### I1: Print to terminal only
-- **Pros**: Fast. **Cons**: Lost history.
-
-### I2: JSON + PGN per run (Recommended)
-- **Description**: Machine-readable metrics + games; optional markdown table in daily notes.
-- **Pros**: Diffable; already partial (`plots/*_gate_acpl.json`).
-- **Cons**: Need naming convention.
-- **Notes**: Include: `commit`, `recipe`, `teacher/net`, `sf_version`, `n_games`, `metrics`.
-
-### I3: Dashboard (HTML/plots always generated)
-- **Description**: Auto plots for Elo/ACPL over time, nodes/s over time.
-- **Pros**: Nice for report/ICTP.
-- **Cons**: Extra maintenance.
-- **Notes**: Optional; generate from I2 JSON later.
-
-### I4: Single “leaderboard.md” checked into git
-- **Description**: Human-updated or script-updated table of best configs.
-- **Pros**: Visible.
-- **Cons**: Merge conflicts; keep generated section or append-only.
-- **Notes**: Good for internship report.
-
----
-
-## Decision J — Elo gate definition (≥1700)
-
-### J1: ACPL-mapped Elo ≥ 1700
-- **Description**: Ship if heuristic Elo from ACPL crosses 1700.
-- **Pros**: Easy with current tools.
-- **Cons**: Heuristic can lie (you already saw huge σ / self-play quirks).
-- **Notes**: Weak sole criterion.
-
-### J2: Match Elo ≥ 1700 vs defined references (Recommended for “real” gate)
-- **Description**: Protocol: N games, TC, opponents list, sprt or fixed games; BayesElo ≥ 1700 with CI.
-- **Pros**: Defensible.
-- **Cons**: Needs UCI + time; more work.
-- **Notes**: Aligns with cutechess-cli vision in blueprint.
-
-### J3: Dual gate — ACPL smoke + match ship
-- **Description**: Block train merge if ACPL collapses; **ship** only on match protocol.
-- **Pros**: Best of B3.
-- **Cons**: Two thresholds to document.
-- **Notes**: Recommended if B3 chosen.
-
-### J4: Device gate only
-- **Description**: ≥1700 only counts on Wio under 1 s/move.
-- **Pros**: True product goal.
-- **Cons**: Late signal; need PC proxy gates earlier.
-- **Notes**: Final bar; keep PC proxies before port.
-
----
-
-## Decision K — Repo layout for bench code
-
-### K1: Keep scripts only (`scripts/eval_*.py`)
-- **Pros**: Minimal. **Cons**: Grows messy.
-
-### K2: Library + scripts (Recommended)
-- **Description**: `src/tinymlinternship/bot_eval/` (exists) expands; scripts stay thin CLIs; optional `bench/` for run outputs (gitignored bulk).
-- **Pros**: Testable; reusable.
-- **Cons**: Small refactor.
-
-### K3: External tool-only (cutechess + engines)
-- **Pros**: Standard. **Cons**: Weak for ACPL/microbench/encoder parity; still need Python glue.
-
----
-
-## Recommended configuration (starting point)
-
-| Decision | Pick | One-line why |
-| -------- | ---- | ------------ |
-| **A** Scope | **A2** → evolve to **A3** | Strength + PC perf now; device later |
-| **B** Strength method | **B3** | ACPL iterate; matches for real Elo |
-| **C** ACPL judge | **C2** | Fixed SF depth more portable than movetime |
-| **D** Opponents | **D2** (+ optional **D4** sparse) | Ladder + teacher ceiling checks |
-| **E** Search protocol | **E4** recipes + **E2** for gates | Fair product-like TC; fixed depth for smokes |
-| **F** Perf | **F2** / **F4** schema | Scripted PC suite; same JSON later on Wio |
-| **G** Parity | **G1+G2** now; **G3** at port; **G4** after train | Goldens + teacher MSE |
-| **H** Automation | **H2** (+ **H4** pre-release) | Manifested runs without heavy CI |
-| **I** Artifacts | **I2** (+ **I4** summary) | JSON/PGN history |
-| **J** Gate | **J3** | ACPL don’t-ship-broken; match for ≥1700 claim |
-| **K** Layout | **K2** | bot_eval lib + scripts |
-
----
-
-## How to reply
-
-Send a line like:
+## Main components (architecture)
 
 ```text
-A2, B3, C2, D2, E4, F2, G2, H2, I2, J3, K2
+                    ┌─────────────────────────────────────────┐
+                    │              DATA PIPELINE              │
+  raw PGN/chunks ──►│ download → extract FEN → label (Lc0)    │
+                    │ → merge train/val + manifest            │
+                    └──────────────────┬──────────────────────┘
+                                       │ expected_reward ∈ [-1,1]
+                                       ▼
+                    ┌─────────────────────────────────────────┐
+                    │                 TRAIN                   │
+  fen (+ features)─►│ ChessbenchDataset → BucketedNNUE        │
+                    │ train_nnue.py → checkpoint best.pt      │
+                    └──────────────────┬──────────────────────┘
+                                       │
+           ┌───────────────────────────┼───────────────────────────┐
+           ▼                           ▼                           ▼
+    ┌─────────────┐           ┌─────────────────┐          ┌──────────────┐
+    │  FEATURES   │           │     ENGINE      │          │     BOT      │
+    │ encode_dual │◄──────────│ search + eval   │─────────►│ self-play /  │
+    │ bucket_id   │           │ hce|nnue|lc0    │          │ ACPL / GIF   │
+    └─────────────┘           └─────────────────┘          └──────────────┘
+           │                           │
+           └──────────── Wio / C ──────┘  (not started)
 ```
 
-Optional notes per letter (e.g. `E2 for gates only, E1 for daily smoke`).  
-After you choose, the next step is to draft **§Benchmark Infrastructure** in `NOTES/SARDINE Engine Blueprint.md` from those decisions (not before).
+| Package / area | Role |
+| -------------- | ---- |
+| `src/tinymlinternship/features/` | Sparse 844 encoder, buckets, tactical bits |
+| `src/tinymlinternship/data/` | Lc0 parse, ChessBench preprocess, ASSETS schema/merge helpers |
+| `src/tinymlinternship/nnue/` | Model + dataset loader |
+| `src/tinymlinternship/engine/` | Search, eval backends, perft |
+| `src/tinymlinternship/bot_eval/` | Stockfish ACPL → heuristic Elo |
+| `src/tinymlinternship/visualization/` | Pygame board, GIF export, engine game loop |
+| `src/tinymlinternship/config/settings.py` | Paths (data, teacher, checkpoints) |
+| `scripts/` | CLI entrypoints for the above |
+| `legacy/pre-sardine/` | Pre-SARDINE value-net / Arduino — **not** active path |
+| `models/teacher/` | Lc0 binary + nets (labeling + optional eval) |
+| `models/checkpoints/nnue/` | Trained student nets |
+| `data/raw/`, `data/processed/` | Datasets |
 
 ---
 
-## Explicitly out of scope for this decision set
+## 1 · Dataset creation
 
-- Changing NNUE architecture or training loss  
-- Replacing the **uniform `expected_reward`** data policy  
-- Full SPSA search tuning (uses bench outputs later, but is not the bench design itself)
+End-to-end product: unlabeled FENs → teacher `expected_reward` → merged `train.parquet` / `val.parquet` + `manifest.json`.
+
+### Scripts (`scripts/`)
+
+| File | Role |
+| ---- | ---- |
+| `download_lc0.py` | Download Lc0 training chunks (~1–2 GB) → `data/raw/lc0/` |
+| `download_data.py` | Kaggle / Lichess smoke (`games.csv`) — **not** production NNUE volume |
+| `download_chessbench.py` | ChessBench `.bag` (encoder/train smoke only) |
+| `download_teacher.py` | Install Lc0 binary + networks under `models/teacher/` |
+| `download_hf_teacher.py` | HF value teachers (optional / study; not production labels) |
+| `lichess_pgn_to_fen.py` | PGN → FEN + `bucket_id` / piece_count / has_queen (pre-label) |
+| `prepare_lc0_dataset.py` | Lc0 chunks → filtered `positions.parquet` |
+| `prepare_chessbench_dataset.py` | ChessBench bag → parquet w/ precomputed features + rewards |
+| `label_positions.py` | UCI Lc0 WDL → uniform `expected_reward` (White POV) |
+| `merge_training_sets.py` | Merge labeled blocks → train/val by `game_id` + `manifest.json` |
+| `stats_lc0_processed.py` | Bucket/ply stats on Lc0 chunks (QA pre-label) |
+| `smoke_test_lc0_chunk.py` | Parse one chunk smoke |
+| `smoke_test_teacher.py` | Teacher WDL on startpos |
+| `plot_piece_count_distribution.py` | Bucket design study (piece-count hist) |
+| `study_chessbench.py` | ChessBench exploration helper |
+
+### Libraries (`src/tinymlinternship/`)
+
+| File | Role |
+| ---- | ---- |
+| `data/schema.py` | ASSETS columns, validate rewards, split-by-game, manifest |
+| `data/lc0_parser.py` | Parse Lc0 training chunk format |
+| `data/lc0_preprocess.py` | Filters (ply, game length, buckets) |
+| `data/lc0_shards.py` | Shard/index helpers for raw Lc0 |
+| `data/chessbench_preprocess.py` | Bag row → FEN + features + reward |
+| `features/encoder.py` | `encode_dual` / `encode_perspective` (used when features not stored) |
+| `features/bucket.py` | `bucket_id`, piece_count, has_queen |
+| `features/index_map.py`, `mirror.py`, `tactical.py` | 844-dim layout |
+| `engine/eval_lc0.py` | Teacher WDL → expected_reward helpers (shared formula) |
+| `config/settings.py` | Default data / teacher paths |
+
+### Typical artifacts
+
+```text
+data/raw/lc0/ … , data/raw/lichess_smoke50.pgn
+data/processed/lichess/positions.parquet   # pre-label
+data/processed/lc0/positions.parquet
+data/processed/labeled/lichess_labeled.parquet
+data/processed/labeled/lc0_labeled.parquet
+data/processed/labeled/train.parquet
+data/processed/labeled/val.parquet
+data/processed/labeled/manifest.json
+```
+
+### Tests
+
+`tests/test_data.py`, `test_dataset_schema.py`, `test_lc0_parser.py`, `test_lc0_preprocess.py`, `test_download_lc0.py`, `test_chessbench_preprocess.py`, `test_features.py`, `test_tactical.py`
+
+---
+
+## 2 · Training (produce NNUE)
+
+Student: bucketed NNUE **844 → W → 8 experts → tanh**, target = `expected_reward`.
+
+### Scripts
+
+| File                        | Role                                                                  |
+| --------------------------- | --------------------------------------------------------------------- |
+| `train_nnue.py`             | **Main** PyTorch smoke/pilot train → `models/checkpoints/nnue/<run>/` |
+| `plot_nnue_architecture.py` | Architecture diagram (docs / presentation)                            |
+
+_Not in-repo yet (blueprint): nnue-pytorch fork, gradual L1 prune, PTQ int8 export._
+
+### Libraries
+
+| File | Role |
+| ---- | ---- |
+| `nnue/model.py` | `BucketedNNUE` (shared L1, CReLU, 8 heads) |
+| `nnue/dataset.py` | Parquet loader: precomputed features **or** FEN → `encode_dual` |
+| `nnue/__init__.py` | Public exports |
+| `features/*` | Feature dim / encoder used at load time |
+| `config/settings.py` | `NNUE_CHECKPOINTS_DIR`, default checkpoint path |
+
+### Checkpoints (examples)
+
+| Path | Notes |
+| ---- | ----- |
+| `models/checkpoints/nnue/pilot_W128_844/` | ChessBench pilot, val_mse **0.056** (wired in engine default) |
+| `models/checkpoints/nnue/smoke_prod_W128_844/` | Mini production labels, 2 ep, val_mse **0.247** |
+
+### Tests
+
+`tests/test_nnue_model.py` (forward, dataset ChessBench + FEN path)
+
+---
+
+## 3 · Bot & inference (engine play / “PvP”)
+
+Today = **PC engine**: static eval + alpha-beta search. Primary “play” is **engine self-play** and **single-position search**. There is **no dedicated human-vs-bot CLI/UI** yet; closest interactive path is pygame playback of a generated game (`record_engine_game.py`).
+
+### Scripts — play / record
+
+| File                      | Role                                                                                    |
+| ------------------------- | --------------------------------------------------------------------------------------- |
+| `run_engine.py`           | **Inference CLI**: FEN (+ moves) → best move / score (`--eval hce nnue lc0`, `--depth`) |
+| `record_engine_game.py`   | Engine **self-play** → pygame + GIF + PGN (`--eval`, `--depth`, qsearch flags)          |
+| `record_teacher_game.py`  | Self-play with Lc0 teacher eval (baseline strength viz)                                 |
+| `record_hf_game.py`       | Self-play with HF value net (study)                                                     |
+| `sunfish_selfplay_pgn.py` | Sunfish baseline games for ACPL calibration                                             |
+
+### Scripts — strength / gate
+
+| File | Role |
+| ---- | ---- |
+| `eval_bot_acpl.py` | Self-play (or PGN) → Stockfish ACPL → heuristic Elo |
+| `eval_game_elo.py` | Per-player Elo estimate from one game record |
+| `bench_teacher_move.py` | Teacher move latency bench |
+| `bench_teacher_nets.py` | Compare teacher nets |
+
+### Libraries — search & eval
+
+| File | Role |
+| ---- | ---- |
+| `engine/search.py` | Alpha-beta, quiescence, MVV-LVA, `search_best_move` |
+| `engine/eval_factory.py` | `make_eval_fn` / `EVAL_CHOICES` (`hce`, `nnue`, `lc0`) |
+| `engine/eval_hce.py` | Hand-crafted evaluation (default) |
+| `engine/eval_nnue.py` | Load checkpoint → centipawns for search |
+| `engine/eval_lc0.py` | Live Lc0 teacher as eval backend |
+| `engine/eval_chess_lite.py` | HF chess_lite-style value (optional) |
+| `engine/perft.py` | Move-gen correctness |
+| `engine/__init__.py` | Engine public API / version |
+| `nnue/model.py` | Forward pass used by `eval_nnue` |
+| `features/encoder.py` | Position → sparse 844 for NNUE |
+| `bot_eval/acpl.py` | ACPL / Elo heuristic math |
+| `bot_eval/stockfish_path.py` | Resolve Stockfish binary |
+| `visualization/playback.py` | `play_engine_game` game loop |
+| `visualization/pygame_board.py` | Board render |
+| `visualization/gif_export.py` | GIF export |
+| `visualization/game_paths.py` | Output path helpers |
+| `config/settings.py` | `NNUE_CHECKPOINT_DEFAULT`, etc. |
+
+### Quick entrypoints
+
+```bash
+# One position
+py -3.12 scripts/run_engine.py --eval nnue --depth 2 --fen "..."
+
+# Self-play GIF (closest to “watch the bot play”)
+py -3.12 scripts/record_engine_game.py --eval nnue --depth 1 --headless --output images/nnue_d1_game.gif
+
+# Strength gate (16 games typical)
+py -3.12 scripts/eval_bot_acpl.py --eval nnue --depth 1 --games 16
+```
+
+### Tests
+
+`tests/test_engine.py`, `test_eval_nnue.py`, `test_eval_lc0.py`, `test_perft.py`, `test_bot_eval_acpl.py`, `test_visualization.py`
+
+---
+
+## Explicitly out of these three buckets (but related)
+
+| Area | Files |
+| ---- | ----- |
+| Docs / progress | `TODOs.md`, `Goal.md`, `PROJECT.md`, `ASSETS.md`, `NOTES/*`, daily `YYYY-MM-DD.md` |
+| Presentation | `scripts/build_sardine_presentation.py`, `verify_presentation.py`, `presentations/` |
+| Legacy TinyML / Arduino | `legacy/pre-sardine/` |
+| Device port | _none active_ (blueprint E–F) |
+
+---
+
+## Mini production path (commands that already ran)
+
+```bash
+# Label
+py -3.12 scripts/label_positions.py --input data/processed/lichess/positions.parquet ...
+py -3.12 scripts/label_positions.py --input data/processed/lc0/positions.parquet ...
+
+# Merge
+py -3.12 scripts/merge_training_sets.py \
+  -i data/processed/labeled/lichess_labeled.parquet data/processed/labeled/lc0_labeled.parquet \
+  -o data/processed/labeled --val-fraction 0.05 --seed 42
+
+# Smoke train
+py -3.12 scripts/train_nnue.py \
+  --train data/processed/labeled/train.parquet \
+  --val data/processed/labeled/val.parquet \
+  --epochs 2 --batch-size 256 --run-name smoke_prod_W128_844
+
+# Infer
+py -3.12 scripts/run_engine.py --eval nnue --nnue-checkpoint models/checkpoints/nnue/pilot_W128_844/best.pt --depth 1
+```

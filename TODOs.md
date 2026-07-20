@@ -1,6 +1,6 @@
 # SARDINE Blueprint — Progress
 
-_Checkpoint map vs NOTES/SARDINE Engine Blueprint.md only. Last updated: 2026-07-16 (uniform `expected_reward` labels; lichess_pgn_to_fen + schema tooling)._
+_Checkpoint map vs NOTES/SARDINE Engine Blueprint.md only. Last updated: 2026-07-20 (mini production C–E: label + merge + smoke train; pytest 106)._
 
 ---
 
@@ -50,10 +50,12 @@ Architecture: shared L1 **844 → W** with $W \in \{128, 256\}$ (dense train + *
 - [x] Teacher scelto: **Lc0** (`expected_reward` White POV from WDL, on-the-fly UCI); fallback Stockfish WDL — [NOTES/Models.md](NOTES/Models.md) · [ASSETS.md](ASSETS.md) §Uniformity
 - [x] Teacher installato — `models/teacher/` (lc0 v0.32.1 + reti); `scripts/download_teacher.py`, `smoke_test_teacher.py` OK
 - [x] `label_positions.py` — scaffold + smoke; **uniform target = `expected_reward` only** (same formula for every source block)
-- [ ] Label **all** production blocks (Lichess + Lc0) with the **same** teacher net → separate files OK; no `best_q` / ChessBench as train target
+- [x] Label **mini** production blocks (Lichess **2371** + Lc0 **3149**) with teacher **`791556`** → `lichess_labeled` / `lc0_labeled`; no `best_q` as train target
+- [ ] Label **full-volume** production blocks after Lichess dump / large extract (same teacher; multi-session)
 - [x] Schema/merge tooling — `schema.py`, `merge_training_sets.py` (game-level split + single-teacher check)
+- [x] Merge mini set → `data/processed/labeled/{train,val}.parquet` + `manifest.json` (5306 / 214, seed 42, 2026-07-20)
 - [ ] **nnue-pytorch** fork/adapt — 844-dim bucketed, gradual L1 prune, 100 ep fixed
-- [x] PyTorch **smoke** pilot (shared L1 + 8 expert heads) — `train_nnue.py`, `pilot_W128_844` val_mse 0.056
+- [x] PyTorch **smoke** pilot (shared L1 + 8 expert heads) — ChessBench `pilot_W128_844` val_mse **0.056**; production mini `smoke_prod_W128_844` val_mse **0.247** (2 ep, encode-from-fen)
 - [ ] Calibrated **PTQ int8** export + tanh LUT (histogram weights, scale onto [-127,127])
 - [ ] Measure fp32→int8 gap — QAT fallback if MSE > 0.01 or Elo drop > 30
 - [ ] L1 gradual pruning 70–80% **during training**; sparse flash export

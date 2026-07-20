@@ -31,7 +31,25 @@ from tinymlinternship.data.schema import (
     stm_white_from_fen,
     validate_rewards_series,
 )
-from tinymlinternship.engine.eval_lc0 import Lc0Teacher
+from tinymlinternship.engine.eval_lc0 import (
+    Lc0Teacher,
+    wdl_to_expected_reward_white,
+)
+
+
+def _terminal_wdl_and_reward(board: chess.Board) -> tuple[tuple[int, int, int], float] | None:
+    """Synthetic STM WDL + White-POV reward for positions where Lc0 may omit WDL."""
+    if board.is_checkmate():
+        # Side to move is mated.
+        return (0, 0, 1000), (-1.0 if board.turn == chess.WHITE else 1.0)
+    if (
+        board.is_stalemate()
+        or board.is_insufficient_material()
+        or board.can_claim_threefold_repetition()
+        or board.can_claim_fifty_moves()
+    ):
+        return (0, 1000, 0), 0.0
+    return None
 
 
 def smoke_frame(*, moves: int = 2) -> pd.DataFrame:
@@ -90,8 +108,12 @@ def label_frame(
     n = len(df)
     for i, fen in enumerate(df["fen"].astype(str).tolist(), start=1):
         board = chess.Board(fen)
-        win, draw, loss = teacher.evaluate_wdl(board)
-        reward = teacher.evaluate_expected_reward(board)
+        terminal = _terminal_wdl_and_reward(board)
+        if terminal is not None:
+            (win, draw, loss), reward = terminal
+        else:
+            win, draw, loss = teacher.evaluate_wdl(board)
+            reward = wdl_to_expected_reward_white(board, win, draw, loss)
         rewards.append(float(reward))
         wins.append(int(win))
         draws.append(int(draw))
