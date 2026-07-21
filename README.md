@@ -19,8 +19,8 @@
 | Eval                  | depth 1                                                   | depth 2                                                   |
 | --------------------- | --------------------------------------------------------- | --------------------------------------------------------- |
 | Demo reel             | <img src="images/games/depth1_game_demo.gif" width="200"> | <img src="images/games/depth2_game_demo.gif" width="200"> |
-| HCE (no qsearch)      | <img src="images/hce_d1_game.gif" width="200">            | <img src="images/hce_d2_game.gif" width="200">            |
-| NNUE `pilot_W128_844` | <img src="images/nnue_d1_game.gif" width="200">           | <img src="images/nnue_d2_game.gif" width="200">           |
+| HCE (no qsearch)      | <img src="images/games/hce_d1_game.gif" width="200">      | <img src="images/games/hce_d2_game.gif" width="200">      |
+| NNUE `pilot_W128_844` | <img src="images/games/nnue_d1_game.gif" width="200">     | <img src="images/games/nnue_d2_game.gif" width="200">     |
 
 ```bash
 # Reproduce GIFs
