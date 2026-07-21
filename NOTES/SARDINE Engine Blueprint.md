@@ -36,7 +36,8 @@ flowchart TD
     B --> C["Train bucketed NNUE<br/>Lichess + Lc0 · Lc0 latest net labels<br/>dense L1 W=128/256 · gradual prune 70–80%<br/>games ≥ 16 · nnue-pytorch · sparse int8 export"]
     C --> C1["Teacher-only depth=1 baseline<br/>playing strength vs weak engines"]
     C1 --> D["Queen-split ablation<br/>per-bucket eval MSE vs piece-count baseline"]
-    D --> E["Incremental accumulators<br/>on device"]
+    D --> D2["Later: optimal bucketing<br/>task-vector diversity search<br/>(see Output buckets)"]
+    D2 --> E["Incremental accumulators<br/>on device"]
     E --> F["Port search + NNUE to C<br/>benchmark -O3 vs -Os"]
     F --> G["Full search stack + tuning<br/>quiescence · futility · LMR · null-move ·<br/>killer moves · lazy eval · iterative deepening · SPSA"]
     G --> H{"Elo gate<br/>≥ 1700?"}
@@ -212,6 +213,18 @@ Ablation plan: train queen-split vs pure piece-count buckets once pipeline exist
 Informed by `piece_count_distribution_10k.xlsx` (games ≥ 16 moves). Training keeps the **natural bucket distribution** from Lichess PGNs — no stratified resampling.
 
 #todo testing with fewer/different buckets (queen split vs only piece count)
+
+### Later: optimal feature combinations & task vectors
+
+*After* the queen-split ablation and a working base NNUE — not on the critical path to the first Elo gate. Full notes: [Thesis.md](Thesis.md).
+
+**Idea:** freeze shared L1 from a single base model; for each candidate partition $f : s_{\mathrm{board}} \mapsto i_{\mathrm{bucket}}$, fine-tune only L2 + output **one sweep** per bucket and record normalized **delta (task) vectors** $\delta_i = \theta_i - \theta_{\mathrm{base}}$ (fine-tuned layers only). Score $f$ by how **diverse** the $\delta_i$ are (mean angular distance / cosine, with a penalty if any pair is nearly collinear). Partition must be **complete and non-overlapping**, buckets roughly uniform in sample count.
+
+**Candidate features for $f$:** piece count, queen presence, bishop/rook pair, king zones, material imbalance, pawn structure, mobility, etc. Search over combinations (greedy / random / GA) rather than exhaustive enumeration.
+
+**Research question (Ansuini):** do expert deltas live in a low-dimensional linear submanifold of weight space? If so, task vectors between heads may compress experts with little performance loss ([Ilharco et al., 2022](https://arxiv.org/abs/2212.04089); related: lottery ticket, permutation-aware layer distance).
+
+**Practical role:** use the diversity score to **choose or refine the bucket scheme** when iterating on routing (pipeline step “optimal bucketing” / Elo-gate iterate on bucket scheme) — not as a replacement for MSE / playing-strength validation.
 
 ### Policy (v1)
 
