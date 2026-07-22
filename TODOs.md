@@ -4,6 +4,13 @@ _Checkpoint map vs NOTES/SARDINE Engine Blueprint.md only. Last updated: 2026-07
 
 ---
 
+- Ispezionare link del supervisore Zennaro su [Systematic Pruning](https://ieeexplore.ieee.org/abstract/document/11603432)
+    
+- Idee con Ansuini:
+	Task vectors (in weight space / representation space) T1, T2, …, T8 have specific vectors in the weight space. Is it possible / useful to define task vectors that bring you from one head to another with minimal information/performance loss? This may be the case if the head vectors live in a linear submanifold of low dimensionality (are we so lucky? Maybe not!)
+
+---
+
 ## Build pipeline
 
 Stesso ordine del diagramma _Build Pipeline_ nel blueprint.
