@@ -7,6 +7,7 @@
 
 - Presentation: [SARDINE_ICTP_2026-07.pdf](presentations/SARDINE_ICTP_2026-07.pdf)
 - Engine blueprint: [SARDINE Engine Blueprint.md](NOTES/SARDINE%20Engine%20Blueprint.md)
+- Thesis ideas: [Thesis.md](NOTES/Thesis)
 - Online models: [Models.md](NOTES/Models.md)
 - Kaggle challenge: [FIDE & Google Efficient Chess AI Challenge](https://www.kaggle.com/competitions/fide-google-efficiency-chess-ai-challenge)
 - Project details: [PROJECT.md](PROJECT.md)
@@ -70,8 +71,9 @@ pip install -e ".[viz]"
 py -3.12 scripts/record_engine_game.py
 ```
 
-
-![nnue_architecture](sardine_nnue_architecture.png)
+<div align="center">
+    <img src="plots/sardine_nnue_architecture.png" width="600">
+</div>
 
 See [NOTES/Commands.md](NOTES/Commands.md) for all commands.
 

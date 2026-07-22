@@ -1,102 +1,208 @@
-
 # SARDINE Project
 
+**SARDINE** — *Small Artificial RAM-restricted Deep Intelligent Neural Engine*
 
-## **Scope & Milestones**
+Chess engine for the **Wio Terminal**: neural evaluation + alpha-beta search, maximizing **Elo per byte** under **192 KB RAM** / **~500 KB flash**. No cloud, no GPU. Target: playable bot (ideally on *Lichess*).
 
-1. Follow the [export pipeline](export_pipeline.md) to get a minimal NNUE-like policy network running inference on XIAO (no search). Measure latency/power on random positions.
-2. Add shallow search 
-3. distillation/pruning 
-4. Elo testing 
-5. power optimization
-6. Full system (input/output).
+| Doc | Role |
+| --- | ---- |
+| [NOTES/SARDINE Engine Blueprint.md](NOTES/SARDINE%20Engine%20Blueprint.md) | Spec, architecture, pipeline, design decisions |
+| [TODOs.md](TODOs.md) | Checkpoint checklist vs blueprint |
+| [NOTES/Thesis.md](NOTES/Thesis.md) | Later research: task vectors / optimal bucketing |
+| [ASSETS.md](ASSETS.md) | Paths, teachers, uniformity of labels |
 
----
-
-## **Data & Training**
-
-- Large chess datasets for distillation.
-  -  [Lichess database](https://database.lichess.org/)
-    
-- Small chess datasets for testing.
-  - [small Kaggle database](https://www.kaggle.com/datasets/datasnaek/chess)
+_Last progress sync: 2026-07-21 (from TODOs + daily notes)._
 
 ---
 
-## **Models**
+## Targets
 
-### Value functions
+| Parameter | Decision |
+| --------- | -------- |
+| **Elo** | ≥ **1700** (minimum gate; higher is better) |
+| **Move time** | Best move within **~1 s** |
+| **Search** | Alpha-beta (not MCTS — no policy net in v1) |
+| **Eval** | Bucketed micro **NNUE** (policy head maybe v2) |
+| **Device** | Wio Terminal · pure **C** core after PC bring-up |
+| **RAM / Flash** | TT-dominant 128–160 KB · sparse int8 weights in flash |
 
-#### Minimal Model
-- **Architecture**: `768 → 32 → 32 → 1` or even smaller like `768 → 16 → 16 → 1` or `768 → 8 → 8 → 1` for ultra-tiny baselines.
-- **Input**: Simple piece-square tables or sparse 768-bit "A-style" features; HalfKP possible but overkill here. 
-- **Output**: Position evaluation in centipawns (float scalar).
-- **Size**: ~25K params for `768 → 32 → 32 → 1`; <10K params only with narrower layers (e.g. ~8K for `768 → 8 → 8 → 1`). 
-- **Why**: Fits on MCUs like XIAO/ESP32, fast 4-bit quantized inference, ideal first prototype or distillation baseline. 
-- **Use case**: Baseline eval for shallow search; beats random play minimally.
-- **Links**: [NNUE docs](https://official-stockfish.github.io/docs/nnue-pytorch-wiki/docs/nnue.html), [Chessprogramming NNUE](https://www.chessprogramming.org/NNUE), [MCU-Max](https://chessengines.blogspot.com/2024/02/chess-engine-mcu-max-10.html). [chessengines.blogspot](https://chessengines.blogspot.com/2024/02/chess-engine-mcu-max-10.html)
-
-#### Small NNUE
-- **Architecture**: `768 → 64 → 32 → 1` or `HalfKP → 64 → 32 → 1` (classic compact style). 
-- **Input**: HalfKP (king + piece relative positions) — sparse, efficient incremental updates. 
-- **Output**: Position evaluation in centipawns (float scalar).
-- **Size**: ~50K dense params; effective size small due to sparse input (~0.1% active features).
-- **Why**: Sweet spot for TinyML/MCUs; strong vs random, runs with shallow search on low-power hardware. 
-- **Use case**: Practical embedded chess engine prototype.
-- **Links**: [nnue-pytorch](https://github.com/official-stockfish/nnue-pytorch), [Sunfish NNUE](https://github.com/kennyfrc/sunfishNNUE), [Casanchess](https://github.com/casanche/casanchess). [github](https://github.com/kennyfrc/sunfishNNUE)
-
-#### Good / Medium NNUE (Target for good performance)
-- **Architecture**: `768 → 256 → 32 → 1`, `1024 → 128 → 32 → 1`, or Stockfish-like `1024x2 → 8 → 32 → 1`. 
-- **Input**: HalfKP or improved bucketed features for better accuracy. 
-- **Output**: Position evaluation in centipawns (float scalar).
-- **Size**: 100K–few million params; still CPU/MCU viable when quantized.
-- **Why**: Matches strong open-source tiny engines; 1600–2000+ Elo with light search. 
-- **Use case**: Competitive embedded engine with decent strength.
-- **Links**: [Bullet trainer](https://github.com/jw1912/bullet), [Stockfish NNUE](https://www.chessprogramming.org/Stockfish_NNUE), [nnue-pytorch](https://github.com/official-stockfish/nnue-pytorch). [github](https://github.com/official-stockfish/nnue-pytorch)
-
-_Note: there is no direct "policy NNUE" equivalent in chess engines for tiny/MCU use._
+Node-budget reference: Urusov ESP32 (~20 kNps, heuristics-only) for search throughput without NNUE.
 
 ---
 
-### Policy Functions
+## Overall progress
 
-#### Policy-chess
-- **Architecture**: Conv net (8x8x8 board input → policy softmax over legal moves).
-- **Input**: Board state as 8x8x8 channels.
-- **Output**: Probability distribution over ~4k possible moves (softmax).
-- **Size**: ~100K–500K parameters (simple conv layers).
-- **Why**: Smallest full-chess policy net; TF Lite convertible for edge chips.
-- **Edge fit**: Good for ESP32/RPi; quantize to 4/8-bit.
-- **Links**: [GitHub](https://github.com/Zeta36/Policy-chess).
+| Scope | Bar | % | Note |
+| ----- | --- | - | ---- |
+| **v1 → Elo gate** | `████░░░░░░` | **~38%** | Encoder + PC search skeleton + mini train path; no device, no full search stack, no gate |
+| **Device ship** | `░░░░░░░░░░` | **0%** | Wio port not started |
 
-#### Reddit Small NN
-- **Architecture**: Direct move inference policy-style net.
-- **Input**: Board state → move distribution.
-- **Output**: Policy over legal moves.
-- **Size**: 15M params (quantizable to ~4M at 4-bit).
-- **Why**: Plays full chess, 2ms/move on CPU.
-- **Edge fit**: Moderate; export to ONNX/TFLite needed.
-- **Links**: [Reddit](https://www.reddit.com/r/chess/comments/1rv86hw/i_trained_a_small_neural_network_to_play_chess_on/).
-
-#### Minichess DRL Agent
-- **Architecture**: Shared value/policy net for 5x5 minichess.
-- **Input**: 5x5 board → policy distro.
-- **Output**: Move probabilities.
-- **Size**: <100K parameters.
-- **Why**: MCU-ready but mini variant only.
-- **Edge fit**: Excellent for tiny chips.
-- **Links**: [arXiv](https://arxiv.org/pdf/2112.13666.pdf).
-
-#### Tiny DRL Chess (Thesis)
-- **Architecture**: Tiny NN with policy head for constrained agents.
-- **Input**: Board state → policy distribution.
-- **Output**: Move probabilities.
-- **Size**: <50K parameters.
-- **Why**: Designed specifically for edge computing.
-- **Edge fit**: Perfect for MCU deployment.
-- **Links**: [TU Wien PDF](https://repositum.tuwien.at/bitstream/20.500.12708/227472/1/Tayari%20Hakim%20-%202026%20-%20Tiny%20Deep%20Reinforcement%20Learni...).
-- https://arxiv.org/pdf/2410.23753v1
+Rough weights: A–C heavy early wins; E–H still open.
 
 ---
 
-#core 
+## Build pipeline progress
+
+Same order as the blueprint *Build Pipeline*. Detail in [TODOs.md](TODOs.md).
+
+| Step                                         | Bar          | %       | Status                                                                                        |
+| -------------------------------------------- | ------------ | ------- | --------------------------------------------------------------------------------------------- |
+| **A** · Feature encoder (PC + device parity) | `█████████░` | **88%** | 844-dim dual POV + 8 buckets ✅ · device parity with F                                         |
+| **B** · Search skeleton on PC                | `████████░░` | **75%** | Engine v0.3 (αβ + qsearch + MVV-LVA + NNUE hook + d1 ACPL) ✅ · TT / nodes/s ❌                 |
+| **C** · Train bucketed NNUE                  | `██████░░░░` | **55%** | Teacher Lc0, mini labels + merge + smoke train ✅ · full volume / nnue-pytorch / prune / PTQ ❌ |
+| **C1** · Teacher-only depth=1 baseline       | `██░░░░░░░░` | **20%** | Tooling exists · systematic teacher@d1 ladder not done                                        |
+| **D** · Queen-split ablation                 | `░░░░░░░░░░` | **0%**  | After production train + decent val                                                           |
+| **D2** · Optimal bucketing (task vectors)    | `░░░░░░░░░░` | **0%**  | Later research — [Thesis.md](NOTES/Thesis.md); off critical path                              |
+| **E** · Incremental accumulators             | `░░░░░░░░░░` | **0%**  | Device / search path                                                                          |
+| **F** · Port search + NNUE to C (Wio)        | `░░░░░░░░░░` | **0%**  | After playable PC stack                                                                       |
+| **G** · Full search stack + tuning           | `███░░░░░░░` | **25%** | αβ + capture qsearch + MVV-LVA ✅ · futility/LMR/null/ID/TT/killers/SPSA ❌                     |
+| **H** · Elo gate ≥ 1700                      | `░░░░░░░░░░` | **0%**  | Minimal UCI + match protocol                                                                  |
+| **I** · Iterate if gate missed               | `—`          | **—**   | SCReLU · QAT · TT / buckets (on demand)                                                       |
+| **J** · v2 after gate                        | `░░░░░░░░░░` | **0%**  | UCI polish · policy head · book · fallbacks if needed                                         |
+
+```text
+Pipeline (v1 critical path)
+
+  A █████████░ 88%  ──►  B ████████░░ 75%  ──►  C ██████░░░░ 55%
+                                                      │
+                                                      ▼
+                                               C1 ██░░░░░░░░ 20%
+                                                      │
+                                                      ▼
+                                               D  ░░░░░░░░░░  0%
+                                                      │
+                            (D2 later · research)     ▼
+                                               E  ░░░░░░░░░░  0%
+                                                      │
+                                                      ▼
+                                               F  ░░░░░░░░░░  0%
+                                                      │
+                                                      ▼
+                                               G  ███░░░░░░░ 25%
+                                                      │
+                                                      ▼
+                                               H  ░░░░░░░░░░  0%   Elo ≥ 1700?
+                                                  yes ──► J v2
+                                                  no  ──► I iterate ──► G
+```
+
+---
+
+## Architecture (v1)
+
+Canonical diagrams and decisions: [SARDINE Engine Blueprint](NOTES/SARDINE%20Engine%20Blueprint.md).
+
+```text
+844 sparse features (own POV)  ──┐
+                                 ├──► shared L1  844 → W   (W ∈ {128, 256})
+844 sparse features (opp POV)  ──┘         │
+                                    dual accumulators (int16)
+                                           │
+                                    concat → 2W
+                                           │
+                              bucket router (piece count + queen-split)
+                                           │
+                              expert head i:  2W → 1   (×8)
+                                           │
+                              tanh LUT → expected reward ∈ [-1, +1]
+```
+
+| Piece | Choice |
+| ----- | ------ |
+| **Features** | **844** = 716 base (piece-square, king mirror, castling, EP) + **128** tactical (under-attack + king-attackers) |
+| **L1** | Dense train → **gradual prune 70–80%** → sparse **int8** in flash; shared across experts |
+| **Experts** | 8 output heads; router by piece count + queen presence (see blueprint bucket table) |
+| **Activations** | CReLU hidden · **tanh LUT** output (no runtime tanh) |
+| **Search (target)** | αβ + quiescence · futility · LMR · null-move · lazy eval · iterative deepening · killers (d>4) · SPSA on search only |
+| **Search (now)** | **v0.3** fixed-depth αβ + capture quiescence + MVV-LVA; HCE default; NNUE via `--eval nnue` |
+| **Policy** | **Search-only v1**; lightweight head off accumulator deferred to **v2** |
+| **Runtime** | PC bring-up first (Python/C++ skeleton) → pure **C** on Wio; TFT + Serial; minimal UCI for Elo tests |
+
+---
+
+## Data & training
+
+| Item | Decision |
+| ---- | -------- |
+| **Target label** | Teacher **`expected_reward`** only (WDL → \(W-L\)), White POV — not centipawns, not chunk `best_q` |
+| **Teacher** | **Lc0** latest best net via UCI; fallback Stockfish WDL |
+| **Positions** | **Lichess** human games (diversity) + **Lc0** training games (volume); games ≥ 16 moves |
+| **Buckets** | Natural distribution — no stratified resampling |
+| **Framework (target)** | **nnue-pytorch** adapted to 844-dim bucketed MoE |
+| **Framework (now)** | Custom PyTorch (`scripts/train_nnue.py`) — pilot + mini production smoke |
+| **Quantization** | **PTQ int8** first; QAT only if MSE gap > 0.01 or Elo drop > 30 |
+| **Smoke data** | Kaggle `games.csv` / ChessBench — wiring only, not production train |
+
+**Current mini production set** (2026-07-20): Lichess 2371 + Lc0 3149 labeled with teacher `791556` → merge **5306 / 214** train/val · smoke `smoke_prod_W128_844` val_mse **0.247** (2 ep). Pilot ChessBench `pilot_W128_844` val_mse **0.056**.
+
+Sources: [database.lichess.org](https://database.lichess.org/) · Lc0 training data · [NOTES/Datasets.md](NOTES/Datasets.md) · [NOTES/Models.md](NOTES/Models.md).
+
+---
+
+## Models
+
+### Production target (SARDINE NNUE)
+
+| | |
+| --- | --- |
+| **Arch** | Shared L1 `844 → W` + 8 experts `2W → 1`, dual perspective, bucket router |
+| **W** | Empirically **128** or **256** (latency vs strength on Wio) |
+| **Output** | Expected reward in \([-1,+1]\) via tanh LUT |
+| **Size goal** | Sparse L1 (~20–30% non-zero) + 8 dense heads — fit flash budget |
+| **Use** | Leaf eval under alpha-beta on Wio |
+
+Training / export path: dense train → gradual prune → calibrated int8 + LUT. See blueprint §Evaluation / §Quantization.
+
+### Eval / search baselines (now)
+
+| Recipe | Role |
+| ------ | ---- |
+| **HCE** | Default handcrafted eval for engine bring-up |
+| **NNUE pilot** | `pilot_W128_844` — ChessBench smoke, wired to search |
+| **NNUE mini-prod** | `smoke_prod_W128_844` — teacher-labeled mini set (pipeline proof) |
+| **Sunfish / ladder** | Opponents for ACPL and match tracks (blueprint §Benchmark) |
+
+Depth-1 ACPL (16g, heuristic Elo): NNUE pilot ~**1465** · HCE / Sunfish weak — not the ≥1700 match claim.
+
+### Deferred / reserve (not v1 critical path)
+
+| Track | When |
+| ----- | ---- |
+| Policy guidance head off shared accumulator | v2, after Elo gate |
+| Compact transformer (~210K) | Last-resort policy fallback |
+| Task-vector optimal bucketing | After queen-split ablation ([Thesis.md](NOTES/Thesis.md)) |
+| Tactical MoE (`inCheck`, threats) | v1.x / v2 if switching cost warrants it |
+
+Historical survey of external value/policy nets lives in notes/archive; **SARDINE is eval-NNUE + search**, not a standalone policy MCU net.
+
+---
+
+## Explicitly deferred (v1)
+
+MCTS · tactical MoE heads · autoencoder warm-start · separate pattern tables · opening book · Grapheus/QAT by default · MicroChess stack surfing / bare-metal patterns · full UCI polish.
+
+---
+
+## Fallback ladder (if Elo slips)
+
+| Level | Trigger | Action |
+| ----- | ------- | ------ |
+| 1 | Eval > 3 ms | Reduce \(W\) 256→128 or prune harder |
+| 2 | Depth < 6 | TT 128→64 KB |
+| 3 | Elo < 1600 | Aggressive pruning / SPSA |
+| 4 | Still < 1600 | Remove MoE → single expert |
+| 5 | Still < 1500 | Heuristics-only eval |
+| 6 | Timeboxed | Material-only |
+
+L1–2 autonomous; L3+ supervisor sign-off (blueprint).
+
+---
+
+## Related research (not blocking)
+
+- Supervisor link: [Systematic Pruning](https://ieeexplore.ieee.org/abstract/document/11603432) (Zennaro)
+- Task vectors / low-dim expert subspace (Ansuini) — [Thesis.md](NOTES/Thesis.md)
+
+---
+
+#core

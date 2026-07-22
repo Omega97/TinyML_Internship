@@ -35,7 +35,7 @@ flowchart TD
     A["Feature encoder<br/>PC + device parity"] --> B["Search skeleton in C++ on PC<br/>perft · eval hooks · TT format benchmark"]
     B --> C["Train bucketed NNUE<br/>Lichess + Lc0 · Lc0 latest net labels<br/>dense L1 W=128/256 · gradual prune 70–80%<br/>games ≥ 16 · nnue-pytorch · sparse int8 export"]
     C --> C1["Teacher-only depth=1 baseline<br/>playing strength vs weak engines"]
-    C1 --> D["Queen-split ablation<br/>per-bucket eval MSE vs piece-count baseline"]
+    C1 --> D["Bucket ablation (optional)<br/>4 piece-count vs other split types 8<br/>per-bucket eval MSE"]
     D --> D2["Later: optimal bucketing<br/>task-vector diversity search<br/>(see Output buckets)"]
     D2 --> E["Incremental accumulators<br/>on device"]
     E --> F["Port search + NNUE to C<br/>benchmark -O3 vs -Os"]
@@ -64,7 +64,7 @@ flowchart TD
          C2["Opponent accumulator<br/>W values, their POV"]
      end
      D["Concatenate<br/>own ‖ opponent → 2W-dim"]
-     E{"Bucket Router<br/>routes to 1 of 8 experts"}
+     E{"Bucket Router<br/>routes to 1 of 4 experts"}
      F["Selected NNUE expert head<br/>2W → 1"]
      G["Eval score in [-1,+1]"]
      A1 --> B
@@ -87,7 +87,7 @@ flowchart TD
      style G fill:#f1efe8,stroke:#5f5e5a,stroke-width:1px
 ```
 
-The L1 accumulator (green) is computed once per position and **shared across all 8 expert nets** — only the output head selected by the bucket router (orange) changes. Train the L1 dense at $W \in \{128, 256\}$, applying **gradual pruning during training** up to 70–80% sparsity; store only non-zero weights in flash. Incremental add/sub updates on the accumulator are bucket-agnostic.
+The L1 accumulator (green) is computed once per position and **shared across all 4 expert nets** — only the output head selected by the bucket router (orange) changes. Train the L1 dense at $W \in \{128, 256\}$, applying **gradual pruning during training** up to 70–80% sparsity; store only non-zero weights in flash. Incremental add/sub updates on the accumulator are bucket-agnostic.
 
 ---
 
@@ -123,104 +123,55 @@ Implementazione: `index_map.py`, `encoder.py`, `mirror.py`, `tactical.py`, `buck
 
 Separate pattern tables: skip for v1. Geometric zeros (impossible pawn ranks, king mirroring) plus L1 gradual pruning during training already capture the cheapest compression wins; a handcrafted pattern cache adds flash complexity for uncertain gain until the Elo gap is measured.
 
+
 ### NNUE Architecture
 
-```mermaid
-flowchart TD
-     subgraph INPUT["📥INPUT_LAYER"]
-         X["844 sparse features<br/>(piece-square + castling + EP + tactical)"]
-     end
-     subgraph ACC["⚡SHARED_ACCUMULATOR_L1"]
-         W["Weights: 844 × W (128 or 256)<br/>dense train → gradual prune 70–80%<br/>non-zero only in Flash (int8)<br/>update: lazy add/sub"]
-         MAC["MAC computation<br/>temp dtype: int32<br/>(sparse: only non-zero weights)"]
-         A1["Own-POV accumulator<br/>W × int16 (RAM)"]
-         A2["Opponent-POV accumulator<br/>W × int16 (RAM)"]
-         C1["CReLU: clamp 0..127<br/>own POV, int8[W]"]
-         C2["CReLU: clamp 0..127<br/>opp POV, int8[W]"]
-         W --> MAC
-         MAC --> A1 --> C1
-         MAC --> A2 --> C2
-     end
-     subgraph CONCAT["🔗 DUAL PERSPECTIVE"]
-         D["Concat: W + W = 2W<br/>(own POV + opponent POV,<br/>by side to move)"]
-     end
-     subgraph ROUTER["🪣BUCKET_ROUTER"]
-         R{"piece count + queen presence<br/>→ selects 1 of 8 experts"}
-     end
-     subgraph EXPERTS["🧠EXPERT_HEADS_×8"]
-         E0["Expert 0<br/>2W → 1<br/><i>endgame</i>"]
-         ELLIPSIS["⋮<br/>Experts 1–6"]
-         E7["Expert 7<br/>2W → 1<br/><i>early opening</i>"]
-         EW["Weights: 2W × 1 per expert<br/>dtype: int8"]
-         E0 --- EW
-         E7 --- EW
-     end
-     subgraph OUT["📊EVALUATION"]
-         LUT["tanh LUT (Flash)<br/>int32 → expected reward<br/>~256–512 entries, ~1–2 KB"]
-         Y["Scalar eval score<br/>(side to move perspective)"]
-         LUT --> Y
-     end
-     X -->|"own-side features"| W
-     X -->|"opponent-side features"| W
-     C1 --> D
-     C2 --> D
-     D --> R
-     R -->|"selected expert"| E0
-     R --> ELLIPSIS
-     R --> E7
-     EW --> LUT
-     style INPUT fill:#e8f4f8,stroke:#2196F3,stroke-width:2px
-     style ACC fill:#e8f5e9,stroke:#4CAF50,stroke-width:2px
-     style CONCAT fill:#fff3e0,stroke:#FF9800,stroke-width:2px
-     style ROUTER fill:#fff9c4,stroke:#FFC107,stroke-width:2px
-     style EXPERTS fill:#ede7f6,stroke:#673AB7,stroke-width:2px
-     style OUT fill:#e0f2f1,stroke:#009688,stroke-width:2px
-```
+<div align="center">
+    <img src="plots/sardine_nnue_architecture.png" width="600">
+</div>
+
 
 ### Evaluation
 
-Bucketed micro NNUE: `844 → W → 1` with $W \in \{128, 256\}$, dual-perspective, 8 output weight sets (experts) selected by position bucket.
+Bucketed micro NNUE: `844 → W → 1` with $W \in \{128, 256\}$, dual-perspective, **4** output weight sets (experts) selected by **piece-count** bucket.
 
-**L1 shared layer:** train dense ($844 \times W$), applying **gradual pruning during training** up to 70–80% sparsity. Export and store **only non-zero weights** in flash (sparse index + int8 value). All 8 NNUE expert nets share this pruned L1; expert heads differ only in the $2W \rightarrow 1$ output weights. Pick $W$ empirically (128 vs 256) from eval latency on Wio and depth=1 / Elo baselines.
+**L1 shared layer:** train dense ($844 \times W$), applying **gradual pruning during training** up to 70–80% sparsity. Export and store **only non-zero weights** in flash (sparse index + int8 value). All 4 NNUE expert nets share this pruned L1; expert heads differ only in the $2W \rightarrow 1$ output weights. Pick $W$ empirically (128 vs 256) from eval latency on Wio and depth=1 / Elo baselines.
 
 Activations: CReLU on the shared hidden layer ($844 \rightarrow W$); tanh on the final scalar output ($2W \rightarrow 1$ per expert). The tanh is never computed at runtime — apply a precomputed lookup table indexed by the clipped int16 dot-product, mapping to **expected reward** in $[-1, +1]$ (side to move perspective). LUT lives in flash (~1–2 KB for 256–512 entries); training in `nnue-pytorch` uses tanh so export matches inference.
 
 Shared accumulator: all experts share the same first hidden layer. The accumulator depends only on board features, not on which output bucket is active — compute it once per position, then route to the correct output head. Matches Stockfish-style bucketed NNUE; incremental add/sub updates stay bucket-agnostic.
 
+**STM reorder:** L1 produces two POV vectors — White and Black accumulators — always in fixed color order. Before the expert head, reorder them so the **first** vector is the **side to move (STM)** and the **second** is the opponent. That keeps the expert head perspective-invariant: training and inference always see “my side ‖ their side,” not “white ‖ black.” When White is to move, the order is white then black; when Black is to move, it swaps.
+
+**Concatenate (STM ‖ Opp):** stack the reordered pair into one **2W**-dim vector and feed that single vector to the selected expert (`2W → 1`). Concatenation is what turns dual-perspective L1 into the input the output head expects; no extra learned layer — just `cat([stm_h, opp_h])`.
+
 Autoencoder warm-start: skip for v1.
 
-Tactical MoE (`inCheck`, capture threat): defer to v1.x/v2. Bucket switches are already infrequent along a typical game (piece count mostly decreases), so the current 8-bucket scheme is not leaving large gains on the table — no urgency to add tactical heads earlier.
+Tactical MoE (`inCheck`, capture threat): defer to v1.x/v2. Bucket switches are already infrequent along a typical game (piece count mostly decreases), so the default 4-bucket piece-count scheme is not leaving large gains on the table — no urgency to add tactical heads earlier.
 
 ### Output buckets
 
-Balanced training buckets (based on number of pieces $p$, kings included) with queen-split (for now) in middlegame/opening bands:
+**Default (v1):** **4 buckets** by **piece count only** ($p$ = number of pieces on the board, kings included). 
 
 | Bucket | Condition | Phase |
 | --- | --- | --- |
 | 0 | $p \le 12$ | endgame |
-| 1 | $p \in [13,21]$, no queen | late middlegame |
-| 2 | $p \in [13,21]$, queen present | late middlegame |
-| 3 | $p \in [22,27]$, no queen | middlegame |
-| 4 | $p \in [22,27]$, queen present | middlegame |
-| 5 | $p \in [28,31]$, no queen | opening |
-| 6 | $p \in [28,31]$, queen present | opening |
-| 7 | $p = 32$ | early opening |
+| 1 | $p \in [13,21]$ | late middlegame |
+| 2 | $p \in [22,27]$ | middlegame |
+| 3 | $p \in [28,32]$ | opening |
 
-Queen presence is high-leverage in buckets 1–4. Buckets 0 and 7 barely need the split.
-
-Ablation plan: train queen-split vs pure piece-count buckets once pipeline exists. Compare per-bucket eval MSE on a teacher-labeled validation set (natural bucket mix like training) — not pooled MSE alone. Escalate to playing-strength tests only if per-bucket results are ambiguous or contradictory.
+Fewer heads → less flash for expert weights and simpler training/validation.
 
 Informed by `piece_count_distribution_10k.xlsx` (games ≥ 16 moves). Training keeps the **natural bucket distribution** from Lichess PGNs — no stratified resampling.
 
-#todo testing with fewer/different buckets (queen split vs only piece count)
 
 ### Later: optimal feature combinations & task vectors
 
-*After* the queen-split ablation and a working base NNUE — not on the critical path to the first Elo gate. Full notes: [Thesis.md](Thesis.md).
+*After* a working base NNUE — not on the critical path to the first Elo gate. Full notes: [Thesis.md](Thesis.md).
 
 **Idea:** freeze shared L1 from a single base model; for each candidate partition $f : s_{\mathrm{board}} \mapsto i_{\mathrm{bucket}}$, fine-tune only L2 + output **one sweep** per bucket and record normalized **delta (task) vectors** $\delta_i = \theta_i - \theta_{\mathrm{base}}$ (fine-tuned layers only). Score $f$ by how **diverse** the $\delta_i$ are (mean angular distance / cosine, with a penalty if any pair is nearly collinear). Partition must be **complete and non-overlapping**, buckets roughly uniform in sample count.
 
-**Candidate features for $f$:** piece count, queen presence, bishop/rook pair, king zones, material imbalance, pawn structure, mobility, etc. Search over combinations (greedy / random / GA) rather than exhaustive enumeration.
+**Candidate features for $f$:** piece count, king location, queen presence, bishop/rook pair, material imbalance, pawn structure, mobility, etc. Search over combinations (greedy / random / GA) rather than exhaustive enumeration.
 
 **Research question (Ansuini):** do expert deltas live in a low-dimensional linear submanifold of weight space? If so, task vectors between heads may compress experts with little performance loss ([Ilharco et al., 2022](https://arxiv.org/abs/2212.04089); related: lottery ticket, permutation-aware layer distance).
 
@@ -328,7 +279,7 @@ Move ordering is about the order in which a chess engine tries moves at each nod
 | Lc0 training games  | Supplemento / volume          | Subset filtrato (~1–2 GB locale, non il corpus completo); formato training-data / `.bin` Lc0                                                        |
 | Kaggle  `games.csv` | Smoke test / statistiche      | Già via  `scripts/download_data.py`;  `non` per training NNUE (partite deboli, label outcome)                                                        |
 | Filtro              | Games  ≥ 16 mosse             | Allineato a  `piece_count_distribution_10k.xlsx`                                                                                                     |
-| Resampling          | Natural distribution          | No stratified resampling — queen-split ( `bucket_id()` ) solo per routing; vedi tabella Output buckets                                              |
+| Resampling          | Natural distribution          | No stratified resampling — routing via piece-count `bucket_id()` (4 buckets default); vedi tabella Output buckets                                   |
 
 **Teacher v1 (deciso):** Lc0 value head — **latest best network** da [training.lczero.org](https://training.lczero.org/) via `lc0` UCI; `expected_reward = W − L` da WDL nativo. Label on-the-fly (`position fen …` + `eval`). Fallback: Stockfish `UCI_ShowWDL`. Vedi [Models.md](Models.md) · [Datasets.md](Datasets.md).
 
