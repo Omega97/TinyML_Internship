@@ -18,9 +18,9 @@ Basically, what I will try next is the following: training of a single NNUE (L1 
     <img src="images/arrows.png" width="300">
 </div>
 
-Be careful: tiling of the position space must be complete and with no overlaps (like a function $f : s_{board} \rightarrow i_{bucket}$) , and the bucket must probably be of (more or less) uniform size.
+Be careful: tiling of the position space must be complete and with no overlaps (like a function $g : s_{board} \rightarrow i_{bucket}$) , and the bucket must probably be of (more or less) uniform size.
 
-bucket i = set of all board states in the database with index $f(s)==i$
+bucket i = set of all board states in the database with index $g(s)==i$
 
 expert model i trained on bucket i (**one sweep**) produces a delta vector. 
 
@@ -30,116 +30,104 @@ Score for f = some sort of average angular distance (**cosine similarity**) betw
 Note: the deltas should point in all directions by default. If they don't, the training was probably not complete.
 
 ---
----
 
-# AI-Formalized Experimental Plan: Task Vectors & Optimal Bucketing
+**==Important idea for the thesis== (Omar + Ansuini):** freeze shared L1 from a single base value function model $\hat f$; for each candidate partition $g : s_{\mathrm{board}} \mapsto i_{\mathrm{bucket}}$ , fine-tune only L2 + output **one sweep** per bucket and record normalized **delta (task) vectors** $\delta_i = \theta_i - \theta_{\mathrm{base}}$ (fine-tuned layers only). Score $f$ by how **diverse** the $\delta_i$ are (mean angular distance / cosine, with a penalty if any pair is nearly collinear). Partition must be **complete and non-overlapping**, buckets roughly uniform in sample count.
 
-## 1. Core Hypothesis
+==Idea==: Alternatively, perform one sweep of the dataset of $(s_i, v_i)$ pairs to compute (once) the deltas $\delta_i = \nabla_w \; \mathcal L_{acc}(\hat f(s_{base}), v_i)$ , defined as the gradient of the loss wrt the value function weights. Then, train a dispatcher $g(s_{board})$ (FFNN, no hidden layer, softmax activation) to partition the dataset so to maximize the average intra-cluster distance $S$ (minus the average within-cluster distance). The point is to have a simple dispatcher that is optimized to group board positions in maximally-diverse clusters. 
+The probabilistic nature of the softmax makes the training possible, but during inference we get rid of that block, and only pick the highest-value activation to assign the class (same result but faster).
 
-Task vectors (as defined in [Ilharco et al., 2022]) in weight space or representation space for different experts may lie on a low-dimensional linear subspace. If this holds, it would imply that expert heads can be efficiently represented and manipulated with minimal information/performance loss.
-
-**Question to test**: Do the delta vectors between experts live in a linear submanifold of low dimensionality?
-
-**Related concepts**:
-- Task vectors (Ilharco et al., 2022): `τ_t = θ_ft - θ_pre` where `θ_pre` is a pre-trained model and `θ_ft` is a fine-tuned version on task `t`
-- Distance between layers in parameter space (with permutation invariance considerations)
-- Lottery Ticket Hypothesis (Frankle & Carbin, 2018)
+**Candidate features for $g$:** the entire board, piece count, king location, queen presence, bishop/rook pair, material imbalance, pawn structure, mobility, etc. Search over combinations (greedy / random / GA) rather than exhaustive enumeration.
 
 ---
 
-## 2. Experimental Protocol
+Base model $\hat{f}_{\text{base}} = (W_{L1}, W_{L2}, W_{\text{out}})$ 
+**Freeze L1 weights** $W_{L1}$ (shared representation fixed).
 
-### 2.1 Phase 1: Train Base Model
+distance $d(\delta_i, \delta_j)$
 
-Train a **single shared NNUE**:
-- **Shared L1**: `844 → W` dense (W ∈ {128, 256})
-- **Shared L2**: `2W → H` (single hidden layer, or directly to output)
-- **Output**: `H → 1` with tanh output
+number of buckets/experts $B$ 
 
-**Loss**: MSE vs teacher `expected_reward` (Lc0 BT4 labels).
+**Bucket function** $g : \mathcal{S} \rightarrow \{1, 2, \dots, B\}$ where:
 
-**Result**: Base model `θ_base` with parameters `(W_L1, W_L2, W_out)`.
+Diversity metric $S(\mathcal{D})$, for example intra-cluster distance between centroid $c_i$
+$$S(\mathcal{D}) = \frac{1}{\binom{B}{2}} \sum_{i<j} d(c_i, c_j)$$
 
-### 2.2 Phase 2: Define Bucket Function
+---
+---
 
-We seek a function:
+# Tesi di Laurea: Task Vectors per l'Apprendimento Multi-Expert in Reti NNUE
 
-$$f : \mathcal{S} \rightarrow \{0, 1, \dots, B-1\}$$
 
-where:
-- $\mathcal{S}$ is the set of all board states
-- $B$ is the number of buckets (experts)
-- The partition must be **complete** and **non-overlapping**:
-  - $\bigcup_i f^{-1}(i) = \mathcal{S}$
-  - $f^{-1}(i) \cap f^{-1}(j) = \emptyset \quad \forall i \neq j$
+## 1. Idea Centrale
 
-**Candidate features for $f$**:
-- Number of pieces (`p`, 3-32)
-- Queen presence (`q ∈ {0,1}`)
-- Bishop pair presence (`bp ∈ {0,1}`)
-- Rook pair presence (`rp ∈ {0,1}`)
-- King position (compressed to 8 or 5 zones)
-- Material imbalance
-- Pawn structure (isolated/doubled counts)
-- Mobility (number of legal moves)
-- Any hand-crafted feature computable cheaply
+Partendo da un **modello base** NNUE addestrato su tutte le posizioni, proponiamo di creare un insieme di **esperti specializzati**, dove ogni esperto viene addestrato su un sottoinsieme (bucket) di posizioni. La sfida è trovare la **partizione ottimale** dello spazio degli stati tale che gli esperti risultanti siano massimamente **diversi** e complementari.
 
-Each candidate defines a different **partition** of the state space.
-
-**Uniform bucket size**: Buckets should contain approximately equal numbers of training samples to avoid biased training.
-
-### 2.3 Phase 3: Fine-Tune Experts (One Sweep)
-
-For each bucket `i`:
-
-1. **Freeze** the shared L1 weights (`W_L1`) — this keeps the representation space fixed.
-2. **Fine-tune** only the L2 (`W_L2`) and Output (`W_out`) weights on bucket `i`'s training data.
-3. Train for **exactly one epoch** (one sweep) on that bucket.
-
-**Result**: Fine-tuned model `θ_i = (W_L1, W_L2 + ΔL2_i, W_out + Δout_i)`.
-
-**Delta vector**: $\delta_i = \theta_i - \theta_{base}$ (projected only on the fine-tuned layers).
+L'ipotesi chiave è che i **task vectors** (vettori nello spazio dei pesi che rappresentano il cambiamento indotto dal fine-tuning su un bucket) possano essere usati come segnale guida per progettare la partizione. Bucket che producono task vectors **ortogonali** tra loro genereranno esperti con specializzazioni complementari.
 
 ---
 
-## 3. Selecting Optimal Feature Combinations
+## 2. Definizioni e Notazione
 
-### 3.1 Objective
+- $\mathcal{S}$: spazio di tutte le posizioni scacchistiche.
+- $B$: numero di bucket/esperti.
+- $g: \mathcal{S} \rightarrow \{1, \dots, B\}$: funzione di partizione.
+- $\theta_{\text{base}}$: pesi del modello base, addestrato su tutto il dataset.
+- $\theta_i$: pesi dell'esperto $i$, ottenuto fine-tuning di $W_{L2}$ e $W_{out}$ (con $W_{L1}$ **congelato**) sul bucket $i$ per **un singolo sweep**.
+- $\delta_i = \theta_i - \theta_{\text{base}}$: task vector per l'esperto $i$.
 
-Given a candidate partition function `f`, define a **score** that measures how "well-separated" the delta vectors are.
+---
 
-**We want**: δ vectors for different buckets to be **as different as possible** (maximally diverse experts), but ideally lying on a low-dimensional subspace.
+## 3. Metrica di Diversità
 
-### 3.2 Loss/Score Function
+Definiamo la metrica $S(\mathcal{D})$ che quantifica la diversità dei task vectors indotti da una partizione:
 
-**Score(f) = average angular distance between δ_i and δ_j**
+$$S(\mathcal{D}) = \frac{1}{\binom{B}{2}} \sum_{i=1}^{B} \sum_{j=i+1}^{B} d(\delta_i, \delta_j)$$
 
-$$\text{Score}(f) = \frac{1}{\binom{B}{2}} \sum_{i < j} d(\delta_i, \delta_j)$$
+dove $d(\delta_i, \delta_j)$ è la **distanza del coseno**:
 
-where:
+$$d_{\text{cos}}(\delta_i, \delta_j) = 1 - \frac{\delta_i \cdot \delta_j}{\|\delta_i\| \|\delta_j\|}$$
 
-$$d(\delta_i, \delta_j) = \frac{\delta_i \cdot \delta_j}{\|\delta_i\| \|\delta_j\|} \quad \text{(cosine similarity)}$$
+L'obiettivo è **massimizzare $S(\mathcal{D})$**, ovvero trovare una partizione che produca task vectors il più possibile ortogonali.
 
-or, if using Euclidean:
+---
 
-$$d(\delta_i, \delta_j) = \|\delta_i - \delta_j\|^2$$
+## 4. Due Approcci per la Ricerca della Partizione Ottimale
 
-**But careful**: If the smallest distance is very small, the score should be low (penalize clusters of similar δ vectors).
+### Approccio A: Ricerca Euristica su Feature Semplici
+- Definire un insieme di **feature candidate** per $g$: materiale, presenza di donne, coppia di alfieri/torri, posizione del re, struttura pedonale, mobilità, etc.
+- Per ogni combinazione di feature, costruire una griglia (discretizzazione) e valutare $S(\mathcal{D})$.
+- Selezionare la partizione con $S$ massimo (ricerca greedy/genetica/randomizzata).
 
-**Proposed**: Weighted average that penalizes the minimum distance:
+### Approccio B: Apprendimento del Dispatcher (End-to-End)
+- Addestrare una rete leggera $g_\phi(s)$ (MLP con softmax) per **apprendere la partizione** ottimale.
+- Il gradiente di $\phi$ viene stimato per massimizzare $S(\mathcal{D})$ (ottimizzazione bilevel con tecniche tipo REINFORCE o Gumbel-Softmax).
+- **Inferenza**: si usa $g_\phi$ in modalità **argmax**, scartando la softmax per velocità.
 
-$$\text{Score}(f) = \frac{1}{\binom{B}{2}} \sum_{i < j} d(\delta_i, \delta_j) \times \min_{i<j} d(\delta_i, \delta_j)^{-1}$$
+---
 
-or simpler:
+## 5. Metodologia Sperimentale
 
-$$\text{Score}(f) = \text{mean distance} - \lambda \cdot \text{min distance}$$
+1. **Addestramento Base**: Addestrare $\theta_{\text{base}}$ su un grande dataset di posizioni.
+2. **Generazione Task Vectors**: Per una data partizione, per ogni bucket:
+   - Congelare $W_{L1}$.
+   - Fine-tuning di $W_{L2}$ e $W_{out}$ per un singolo sweep.
+   - Registrare $\delta_i = \theta_i - \theta_{\text{base}}$.
+3. **Ottimizzazione**: Applicare approccio A o B per trovare la partizione che massimizza $S(\mathcal{D})$.
+4. **Validazione**: Valutare le performance degli esperti su dataset di hold-out e confrontare con il modello base.
 
-### 3.3 Search Strategy
+---
 
-Exhaustive search over all feature combinations may be infeasible if the feature space is large. Instead:
+## 6. Risultati Attesi e Contributi
 
-1. **Greedy forward selection**: Start with empty set, iteratively add the feature that maximizes Score(f).
-2. **Random search**: Sample random feature subsets and evaluate Score(f).
-3. **Genetic algorithm**: Evolve feature subsets toward higher Score(f).
+1. Una nuova metrica basata su task vectors per quantificare la diversità tra esperti.
+2. Due metodologie (euristica e appresa) per ottimizzare la partizione dello spazio degli stati.
+3. Evidenza empirica sulla struttura lineare dei task vectors in NNUE.
+4. Un modello multi-expert che supera le performance del singolo modello base.
+
+---
+
+## 7. Collegamento con l'Idea Iniziale (World Models / TinyML)
+
+Il principio alla base di questo lavoro — **aggiornamento incrementale e diversificazione delle rappresentazioni** — è lo stesso che abbiamo identificato come potenziale ponte tra NNUE e World Models. Questa tesi potrebbe quindi servire come **caso di studio** per una metodologia più ampia, applicabile anche all'ottimizzazione di World Models per deploy su microcontrollori.
 
 ---
