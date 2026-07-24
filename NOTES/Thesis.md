@@ -18,9 +18,9 @@ Basically, what I will try next is the following: training of a single NNUE (L1 
     <img src="images/arrows.png" width="300">
 </div>
 
-Be careful: tiling of the position space must be complete and with no overlaps (like a function $g : s_{board} \rightarrow i_{bucket}$) , and the bucket must probably be of (more or less) uniform size.
+Be careful: tiling of the position space must be complete and with no overlaps (like a function $g_\phi : s_{board} \rightarrow i_{bucket}$) , and the bucket must probably be of (more or less) uniform size.
 
-bucket i = set of all board states in the database with index $g(s)==i$
+bucket i = set of all board states in the database with index $g_\phi(s)==i$
 
 expert model i trained on bucket i (**one sweep**) produces a delta vector. 
 
@@ -31,103 +31,66 @@ Note: the deltas should point in all directions by default. If they don't, the t
 
 ---
 
-**==Important idea for the thesis== (Omar + Ansuini):** freeze shared L1 from a single base value function model $\hat f$; for each candidate partition $g : s_{\mathrm{board}} \mapsto i_{\mathrm{bucket}}$ , fine-tune only L2 + output **one sweep** per bucket and record normalized **delta (task) vectors** $\delta_i = \theta_i - \theta_{\mathrm{base}}$ (fine-tuned layers only). Score $f$ by how **diverse** the $\delta_i$ are (mean angular distance / cosine, with a penalty if any pair is nearly collinear). Partition must be **complete and non-overlapping**, buckets roughly uniform in sample count.
+## Notation
 
-==Idea==: Alternatively, perform one sweep of the dataset of $(s_i, v_i)$ pairs to compute (once) the deltas $\delta_i = \nabla_w \; \mathcal L_{acc}(\hat f(s_{base}), v_i)$ , defined as the gradient of the loss wrt the value function weights. Then, train a dispatcher $g(s_{board})$ (FFNN, no hidden layer, softmax activation) to partition the dataset so to maximize the average intra-cluster distance $S$ (minus the average within-cluster distance). The point is to have a simple dispatcher that is optimized to group board positions in maximally-diverse clusters. 
-The probabilistic nature of the softmax makes the training possible, but during inference we get rid of that block, and only pick the highest-value activation to assign the class (same result but faster).
 
-**Candidate features for $g$:** the entire board, piece count, king location, queen presence, bishop/rook pair, material imbalance, pawn structure, mobility, etc. Search over combinations (greedy / random / GA) rather than exhaustive enumeration.
+The dataset is composed of state-value pairs $(s_i, v_i)$ 
+States live in state space $\mathcal S$
+Values live in value space, $[-1, 1]$ in this case.
 
----
+Base model $f_\theta$ , where $\theta = (W_{L1}, W_{L2}, W_{\text{out}})$ and $w = (W_{L2}, W_{\text{out}})$ 
+Weights $w$ live in weight space $\mathcal W$
+**Freeze L1 weights** $W_{L1}$ (shared representation fixed), and only the $w$ weights are free.
 
-Base model $\hat{f}_{\text{base}} = (W_{L1}, W_{L2}, W_{\text{out}})$ 
-**Freeze L1 weights** $W_{L1}$ (shared representation fixed).
+Number of buckets/experts $B$ 
+**Bucket function** $g_\phi : \mathcal{S} \rightarrow \{1, 2, \dots, B\}$ where:
+Partitioning $\mathcal{D}=\{\mathcal{D}_1​,\mathcal{D}_2​,…,\mathcal{D}_B​\}$ given by $g_\phi$, used interchangeably as either an actual partitioning, or a product of probabilities.
 
-distance $d(\delta_i, \delta_j)$
-
-number of buckets/experts $B$ 
-
-**Bucket function** $g : \mathcal{S} \rightarrow \{1, 2, \dots, B\}$ where:
-
+Distance $d(\delta_i, \delta_j)$ , for example, the cosine similarity $d(\delta_i, \delta_j) = 1 - \frac{\delta_i \; \cdot \; \delta_j}{\|\delta_i\| \, \| \delta_j \|}$
 Diversity metric $S(\mathcal{D})$, for example intra-cluster distance between centroid $c_i$
 $$S(\mathcal{D}) = \frac{1}{\binom{B}{2}} \sum_{i<j} d(c_i, c_j)$$
-
----
----
-
-# Tesi di Laurea: Task Vectors per l'Apprendimento Multi-Expert in Reti NNUE
-
-
-## 1. Idea Centrale
-
-Partendo da un **modello base** NNUE addestrato su tutte le posizioni, proponiamo di creare un insieme di **esperti specializzati**, dove ogni esperto viene addestrato su un sottoinsieme (bucket) di posizioni. La sfida è trovare la **partizione ottimale** dello spazio degli stati tale che gli esperti risultanti siano massimamente **diversi** e complementari.
-
-L'ipotesi chiave è che i **task vectors** (vettori nello spazio dei pesi che rappresentano il cambiamento indotto dal fine-tuning su un bucket) possano essere usati come segnale guida per progettare la partizione. Bucket che producono task vectors **ortogonali** tra loro genereranno esperti con specializzazioni complementari.
+Task vectors $\delta_i = \nabla_w \; \mathcal L_{acc}(f_\theta(s_{i}), v_i)$ live in weight space $\mathcal W$
 
 ---
 
-## 2. Definizioni e Notazione
+**Candidate input features for $g$:** the entire board, piece count, king location, queen presence, bishop/rook pair, material imbalance, pawn structure, mobility, etc. Search over combinations (greedy / random / GA) rather than exhaustive enumeration.
 
-- $\mathcal{S}$: spazio di tutte le posizioni scacchistiche.
-- $B$: numero di bucket/esperti.
-- $g: \mathcal{S} \rightarrow \{1, \dots, B\}$: funzione di partizione.
-- $\theta_{\text{base}}$: pesi del modello base, addestrato su tutto il dataset.
-- $\theta_i$: pesi dell'esperto $i$, ottenuto fine-tuning di $W_{L2}$ e $W_{out}$ (con $W_{L1}$ **congelato**) sul bucket $i$ per **un singolo sweep**.
-- $\delta_i = \theta_i - \theta_{\text{base}}$: task vector per l'esperto $i$.
+Insight: of course, clustering alone isn't enough because we need to train a dispatcher that can assign the positions to the right buckets.
 
----
+**==Important idea for the thesis== (Omar + Ansuini):** freeze shared L1 from a single base value function model $f_\theta$; for each candidate partition $g_\phi : s_{\mathrm{board}} \mapsto i_{\mathrm{bucket}}$ , fine-tune only L2 + output **one sweep** per bucket and record normalized **delta (task) vectors** $\delta_i = \theta_i - \theta_{\mathrm{base}}$ (fine-tuned layers only). Score $f_\theta$ by how **diverse** the $\delta_i$ are (mean angular distance / cosine, with a penalty if any pair is nearly collinear). Partition must be **complete and non-overlapping**, buckets roughly uniform in sample count.
 
-## 3. Metrica di Diversità
+==**Idea**==: Alternatively, perform one sweep of the dataset of $(s_i, v_i)$ pairs to compute (once) the deltas $\delta_i = \nabla_w \; \mathcal L_{acc}(f_\theta(s_{i}), v_i)$ , defined as the gradient of the loss wrt the value function weights. Then, train a dispatcher $g_\phi(s_{board})$ (FFNN, no hidden layer, softmax activation) to partition the dataset so to maximize the average intra-cluster distance $S$ (minus the average within-cluster distance). The point is to have a simple dispatcher that is optimized to group board positions in maximally-diverse clusters. 
+The probabilistic nature of the softmax makes the training possible, but during inference we get rid of that block, and only pick the highest-value activation to assign the class (same result but faster). ==Importantly==, however, the gradienti of the dispatcher $\nabla_\phi \, S(\mathcal D)$ cannot be computed exactly, as it requires a sum over all possible partitions $\mathcal D$, and therefore it has to be approximated.
 
-Definiamo la metrica $S(\mathcal{D})$ che quantifica la diversità dei task vectors indotti da una partizione:
-
-$$S(\mathcal{D}) = \frac{1}{\binom{B}{2}} \sum_{i=1}^{B} \sum_{j=i+1}^{B} d(\delta_i, \delta_j)$$
-
-dove $d(\delta_i, \delta_j)$ è la **distanza del coseno**:
-
-$$d_{\text{cos}}(\delta_i, \delta_j) = 1 - \frac{\delta_i \cdot \delta_j}{\|\delta_i\| \|\delta_j\|}$$
-
-L'obiettivo è **massimizzare $S(\mathcal{D})$**, ovvero trovare una partizione che produca task vectors il più possibile ortogonali.
+**==Candidate solution==**: In a way, we have to perform clustering in weight space $\mathcal W$, but the bucketing function can only see the state space $\mathcal S$. Would the following simple approach make sense? 
+1. Perform clustering in value space 
+2. Train a classifier in state-space based on the clustering 
+Take the trained classifier at face value. It's not perfect, but should do the job, which is to *have a function that distinguishes between maximally diverse board states*. 
+If we want to be fancy, instead of working directly in state space, we work on a lower-dimentional embedding space instead. For instance, we can use the L1 layer.
 
 ---
 
-## 4. Due Approcci per la Ricerca della Partizione Ottimale
+### Proposed Solution: Two-Stage Proxy Clustering for Expert Dispatching
 
-### Approccio A: Ricerca Euristica su Feature Semplici
-- Definire un insieme di **feature candidate** per $g$: materiale, presenza di donne, coppia di alfieri/torri, posizione del re, struttura pedonale, mobilità, etc.
-- Per ogni combinazione di feature, costruire una griglia (discretizzazione) e valutare $S(\mathcal{D})$.
-- Selezionare la partizione con $S$ massimo (ricerca greedy/genetica/randomizzata).
+**Objective** To construct a dispatcher function $g_\phi$ that partitions the state space $\mathcal{S}$ into $B$ discrete buckets, maximizing the divergence of the resulting task vectors in the weight space $\mathcal{W}$. Because the dispatcher can only observe $\mathcal{S}$ while the optimization target resides in $\mathcal{W}$, computing the exact gradient $\nabla_\phi \, S(\mathcal{D})$ is intractable. To bypass this, we propose a decoupled, two-step heuristic.
 
-### Approccio B: Apprendimento del Dispatcher (End-to-End)
-- Addestrare una rete leggera $g_\phi(s)$ (MLP con softmax) per **apprendere la partizione** ottimale.
-- Il gradiente di $\phi$ viene stimato per massimizzare $S(\mathcal{D})$ (ottimizzazione bilevel con tecniche tipo REINFORCE o Gumbel-Softmax).
-- **Inferenza**: si usa $g_\phi$ in modalità **argmax**, scartando la softmax per velocità.
+**Methodology**
 
----
+- **Step 1: Clustering the Task Vectors** - We first compute the instance-specific task vectors $\delta_i = \nabla_w \; \mathcal{L}_{acc}(f_\theta(s_i), v_i)$ for each data point. Then, by **clustering** them, we generate a set of pseudo-labels, a partition $\mathcal D$ that explicitly groups the board states into maximally diverse clusters.
+    
+- **Step 2: Training the Dispatcher** - We then train a separate, **lightweight** classifier $g_\phi$ to predict these generated cluster assignments. To improve generalization and reduce computational overhead, $g_\phi$ will not operate on the raw, high-dimensional state space $\mathcal{S}$. Instead, we will map the inputs to a lower-dimensional embedding space, specifically utilizing the activations from the base model's frozen L1 layer as the input features for the dispatcher.
 
-## 5. Metodologia Sperimentale
+<div align="center">
+    <img src="plots/thesis_dispatcher_architecture.png" width="600">
+</div>
 
-1. **Addestramento Base**: Addestrare $\theta_{\text{base}}$ su un grande dataset di posizioni.
-2. **Generazione Task Vectors**: Per una data partizione, per ogni bucket:
-   - Congelare $W_{L1}$.
-   - Fine-tuning di $W_{L2}$ e $W_{out}$ per un singolo sweep.
-   - Registrare $\delta_i = \theta_i - \theta_{\text{base}}$.
-3. **Ottimizzazione**: Applicare approccio A o B per trovare la partizione che massimizza $S(\mathcal{D})$.
-4. **Validazione**: Valutare le performance degli esperti su dataset di hold-out e confrontare con il modello base.
+**Inference**: 
+1. Compute the sparse binary representation of the board state
+2. Forward pass on L1
+3. Pass the activations to the *cluster assignment logits block* (no need for the softmax block)
+4. Argmax on the logits to select the appropriate **expert head**
+5. Forward pass on the expert head (L2 + value)
 
----
-
-## 6. Risultati Attesi e Contributi
-
-1. Una nuova metrica basata su task vectors per quantificare la diversità tra esperti.
-2. Due metodologie (euristica e appresa) per ottimizzare la partizione dello spazio degli stati.
-3. Evidenza empirica sulla struttura lineare dei task vectors in NNUE.
-4. Un modello multi-expert che supera le performance del singolo modello base.
-
----
-
-## 7. Collegamento con l'Idea Iniziale (World Models / TinyML)
-
-Il principio alla base di questo lavoro — **aggiornamento incrementale e diversificazione delle rappresentazioni** — è lo stesso che abbiamo identificato come potenziale ponte tra NNUE e World Models. Questa tesi potrebbe quindi servire come **caso di studio** per una metodologia più ampia, applicabile anche all'ottimizzazione di World Models per deploy su microcontrollori.
+**Conclusion** This approach successfully decouples the weight-space clustering objective from the state-space routing mechanism. Taking the trained classifier at face value yields a highly functional dispatcher capable of assigning board positions to maximally diverse expert models without requiring end-to-end differentiable clustering.
 
 ---
