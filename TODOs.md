@@ -1,6 +1,6 @@
 # SARDINE Blueprint — Progress
 
-_Checkpoint map vs NOTES/SARDINE Engine Blueprint.md only. Last updated: 2026-07-20 (mini production C–E: label + merge + smoke train; pytest 106)._
+_Checkpoint map vs NOTES/SARDINE Engine Blueprint.md only. Last updated: 2026-07-22 (reassessment cleanup; buckets stay **8** until §D)._
 
 ---
 
@@ -72,11 +72,14 @@ Architecture: shared L1 **844 → W** with $W \in \{128, 256\}$ (dense train + *
 
 ---
 
-### D · Queen-split ablation
+### D · Bucket ablation (decides scheme)
 
-- [ ] Per-bucket eval MSE vs piece-count-only baseline (teacher-labeled val set, natural bucket mix)
+_Interim (reassessment G3, 2026-07-22): **keep 8-bucket queen-split in code** until this section decides. Blueprint default table lists 4 piece-count-only as a candidate baseline — do not silent-migrate._
+
+- [ ] Per-bucket eval MSE: **8 queen-split** vs **4 piece-count-only** (and other splits if useful) on teacher-labeled val (natural mix)
 - [ ] Define "decisive vs ambiguous" threshold (e.g. >5% relative MSE change per bucket = decisive; 2–5% or mixed-direction buckets = ambiguous → escalate)
 - [ ] Playing-strength test — **only if** per-bucket results are ambiguous or contradictory
+- [ ] Lock final `NUM_BUCKETS` + router; sync blueprint, `bucket.py`, train/export, docs
 
 ---
 

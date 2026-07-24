@@ -227,17 +227,18 @@ py -3.12 scripts/train_nnue.py --epochs 10 --run-name pilot_W128_844
 | **Lc0 T1-256** | `models/teacher/networks/t1-256x10-distilled-swa-2432500.pb.gz` | Stronger/slower alternative |
 | **Lc0 BT4** | `models/teacher/networks/BT4-1024x15x32h-swa-6147500.pb.gz` | Quality ref (very slow) |
 | **Teacher manifest** | `models/teacher/manifest.json` | Installed binary + default network record |
-| **Stockfish** | `models/teacher/stockfish/stockfish.exe` | ACPL / Elo gate judge |
+| **Stockfish** | **PATH / `STOCKFISH_PATH` / `--stockfish`** (not shipped in-repo) | ACPL / Elo gate judge |
 | **Sunfish** | `models/teacher/sunfish/` | Weak baseline for ACPL calibration |
-| **chess_lite (HF)** | `models/teacher/hf/chess_lite/chess_lite.pth` | Fast PyTorch baseline (weak play) |
-| **Artoria Zero small (HF)** | `models/teacher/hf/artoria-zero/small/checkpoint.pt` | HF transformer baseline |
+| **chess_lite (HF)** | `models/teacher/hf/chess_lite/chess_lite.pth` (re-download; weights not shipped) | Fast PyTorch baseline (weak play) |
+| **Artoria Zero small (HF)** | `models/teacher/hf/artoria-zero/small/checkpoint.pt` (re-download) | HF transformer baseline |
 
 Install teachers:
 
 ```bash
 py -3.12 scripts/download_teacher.py      # lc0 + networks
-py -3.12 scripts/download_hf_teacher.py   # chess_lite + artoria-small
+py -3.12 scripts/download_hf_teacher.py   # optional HF study nets (not production labels)
 py -3.12 scripts/smoke_test_teacher.py
+# Stockfish: install system-wide, then set STOCKFISH_PATH or use PATH
 ```
 
 External sources: [Lc0 training / nets](https://training.lczero.org/) · [lczero.org storage](https://storage.lczero.org/) · [chess_lite](https://huggingface.co/satana123/chess_lite) · [Artoria Zero](https://huggingface.co/Shinapri/artoria-zero).
@@ -335,7 +336,7 @@ Lichess PGN + Lc0 chunks
     → nnue-pytorch / train_nnue.py
     → models/checkpoints/nnue/
     → run_engine.py / record_engine_game.py  (--eval nnue)
-    → eval_bot_acpl.py       (judge: models/teacher/stockfish)
+    → eval_bot_acpl.py       (judge: Stockfish on PATH / STOCKFISH_PATH)
 ```
 
 **Smoke / pilot only (do not confuse with production):**

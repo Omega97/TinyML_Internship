@@ -1,4 +1,4 @@
-# SARDINE Project
+# Project: SARDINE
 
 **SARDINE** — *Small Artificial RAM-restricted Deep Intelligent Neural Engine*
 
@@ -7,201 +7,98 @@ Chess engine for the **Wio Terminal**: neural evaluation + alpha-beta search, ma
 | Doc | Role |
 | --- | ---- |
 | [NOTES/SARDINE Engine Blueprint.md](NOTES/SARDINE%20Engine%20Blueprint.md) | Spec, architecture, pipeline, design decisions |
-| [TODOs.md](TODOs.md) | Checkpoint checklist vs blueprint |
+| [TODOs.md](TODOs.md) | Checkpoint checklist vs blueprint (**progress source of truth**) |
+| Daily notes | Session plan + execution log under `DAILY-NOTES/` (**local / gitignored**) |
+| [ASSETS.md](ASSETS.md) | Paths, teachers, label uniformity |
+| [Goal.md](Goal.md) | Short mission statement |
+| [ai-feed.md](ai-feed.md) | Slim code map for agents |
 | [NOTES/Thesis.md](NOTES/Thesis.md) | Later research: task vectors / optimal bucketing |
-| [ASSETS.md](ASSETS.md) | Paths, teachers, uniformity of labels |
 
-_Last progress sync: 2026-07-21 (from TODOs + daily notes)._
-
----
-
-## Targets
-
-| Parameter | Decision |
-| --------- | -------- |
-| **Elo** | ≥ **1700** (minimum gate; higher is better) |
-| **Move time** | Best move within **~1 s** |
-| **Search** | Alpha-beta (not MCTS — no policy net in v1) |
-| **Eval** | Bucketed micro **NNUE** (policy head maybe v2) |
-| **Device** | Wio Terminal · pure **C** core after PC bring-up |
-| **RAM / Flash** | TT-dominant 128–160 KB · sparse int8 weights in flash |
-
-Node-budget reference: Urusov ESP32 (~20 kNps, heuristics-only) for search throughput without NNUE.
+_Last reassessment: 2026-07-22 (decisions A4,B3,C2,D1,E3,F1,G3,H2,I1,J1)._
 
 ---
 
-## Overall progress
+## Overview
+
+Build a complete, playable chess bot that runs **entirely on-device** on the Seeed Wio Terminal. Primary path: PC bring-up (Python search + training) → pure **C** core on device. Spec: blueprint.
+
+## Goals
+
+- **Primary:** ≥ **1700 Elo** on-device (match gate), best move within **~1 s**
+- **Secondary:** Reproducible train → export → device pipeline; minimal UCI for engine-vs-engine tests
+- **Non-goals (v1):** MCTS · policy net · opening book · full UCI polish · tactical MoE · Grapheus/QAT by default · MicroChess stack surfing
+
+## Key design decisions
+
+| Topic | Decision |
+| ----- | -------- |
+| **Search** | Alpha-beta (not MCTS); PC skeleton first, then C on Wio |
+| **Eval** | Bucketed micro NNUE: shared L1 `844 → W` ($W \in \{128,256\}$), dual POV, expert heads `2W → 1` |
+| **Buckets (interim G3)** | **Code ships 8** (piece count + queen-split). Blueprint default table is **4** piece-count-only. **Keep 8 until §D ablation** decides; do not silent-migrate |
+| **Labels** | Teacher **`expected_reward`** only (Lc0 WDL → White POV $[-1,+1]$) — never mix `best_q` / game result |
+| **Train framework (target)** | nnue-pytorch adapted; **now:** `scripts/train_nnue.py` (pilot + mini prod) |
+| **Quantization** | PTQ int8 first; QAT only if MSE/Elo gap too large |
+| **Stockfish (ACPL judge)** | **System PATH / `STOCKFISH_PATH` only** — no in-repo binary |
+| **HF study nets** | Code kept; **weights not shipped** (re-download if needed) |
+| **Legacy pre-SARDINE** | **Removed** (2026-07-22) |
+| **ChessBench** | Smoke / pilot wiring only — not production train |
+| **Daily notes** | `DAILY-NOTES/` only, **gitignored** |
+
+## Development guidelines
+
+- **Python:** 3.12; `pip install -e ".[train,viz]"` as needed
+- **Tests:** `py -3.12 -m pytest tests/ -q` after code changes
+- **Progress:** update `TODOs.md` checkboxes; write a daily note under `DAILY-NOTES/YYYY-MM/` each work session
+- **Labels:** follow [ASSETS.md](ASSETS.md) uniformity rule
+- **No scope creep:** defer blueprint non-goals until Elo gate
+
+## Current status & roadmap
 
 | Scope | Bar | % | Note |
 | ----- | --- | - | ---- |
-| **v1 → Elo gate** | `████░░░░░░` | **~38%** | Encoder + PC search skeleton + mini train path; no device, no full search stack, no gate |
+| **v1 → Elo gate** | `████░░░░░░` | **~38%** | Encoder + PC search + mini train path; no device, no full search stack, no match gate |
 | **Device ship** | `░░░░░░░░░░` | **0%** | Wio port not started |
 
-Rough weights: A–C heavy early wins; E–H still open.
+| Step | Bar | % | Status |
+| ---- | --- | - | ------ |
+| **A** · Feature encoder | `█████████░` | **88%** | 844 dual POV + 8 buckets ✅ · device parity with F |
+| **B** · Search skeleton PC | `████████░░` | **75%** | v0.3 αβ + qsearch + MVV-LVA + NNUE hook · TT / nodes/s ❌ |
+| **C** · Train bucketed NNUE | `██████░░░░` | **55%** | Mini labels + merge + smoke train ✅ · full volume / nnue-pytorch / prune / PTQ ❌ |
+| **C1** · Teacher@d1 baseline | `██░░░░░░░░` | **20%** | Tooling exists · systematic ladder not done |
+| **D** · Bucket ablation | `░░░░░░░░░░` | **0%** | Decides 8 queen-split vs 4 piece-count (and peers) |
+| **D2** · Optimal bucketing | `░░░░░░░░░░` | **0%** | Later — Thesis.md |
+| **E–F** · Accumulators / C port | `░░░░░░░░░░` | **0%** | After stronger PC net + search |
+| **G** · Full search stack | `███░░░░░░░` | **25%** | qsearch + MVV-LVA ✅ · rest open |
+| **H** · Elo gate ≥1700 | `░░░░░░░░░░` | **0%** | ACPL heuristic only today |
 
----
+**Critical path (next):** longer mini-set train → d1 ACPL → full Lichess volume + re-label → nnue-pytorch/prune/PTQ → TT/nodes/s → search polish → device.
 
-## Build pipeline progress
+**Known issues:** NNUE d2 ACPL collapse vs d1 (2026-07-20 notes); val set thin for per-bucket metrics; blueprint 4-bucket table vs code 8-bucket until D.
 
-Same order as the blueprint *Build Pipeline*. Detail in [TODOs.md](TODOs.md).
+## Deliverables
 
-| Step                                         | Bar          | %       | Status                                                                                        |
-| -------------------------------------------- | ------------ | ------- | --------------------------------------------------------------------------------------------- |
-| **A** · Feature encoder (PC + device parity) | `█████████░` | **88%** | 844-dim dual POV + 8 buckets ✅ · device parity with F                                         |
-| **B** · Search skeleton on PC                | `████████░░` | **75%** | Engine v0.3 (αβ + qsearch + MVV-LVA + NNUE hook + d1 ACPL) ✅ · TT / nodes/s ❌                 |
-| **C** · Train bucketed NNUE                  | `██████░░░░` | **55%** | Teacher Lc0, mini labels + merge + smoke train ✅ · full volume / nnue-pytorch / prune / PTQ ❌ |
-| **C1** · Teacher-only depth=1 baseline       | `██░░░░░░░░` | **20%** | Tooling exists · systematic teacher@d1 ladder not done                                        |
-| **D** · Queen-split ablation                 | `░░░░░░░░░░` | **0%**  | After production train + decent val                                                           |
-| **D2** · Optimal bucketing (task vectors)    | `░░░░░░░░░░` | **0%**  | Later research — [Thesis.md](NOTES/Thesis.md); off critical path                              |
-| **E** · Incremental accumulators             | `░░░░░░░░░░` | **0%**  | Device / search path                                                                          |
-| **F** · Port search + NNUE to C (Wio)        | `░░░░░░░░░░` | **0%**  | After playable PC stack                                                                       |
-| **G** · Full search stack + tuning           | `███░░░░░░░` | **25%** | αβ + capture qsearch + MVV-LVA ✅ · futility/LMR/null/ID/TT/killers/SPSA ❌                     |
-| **H** · Elo gate ≥ 1700                      | `░░░░░░░░░░` | **0%**  | Minimal UCI + match protocol                                                                  |
-| **I** · Iterate if gate missed               | `—`          | **—**   | SCReLU · QAT · TT / buckets (on demand)                                                       |
-| **J** · v2 after gate                        | `░░░░░░░░░░` | **0%**  | UCI polish · policy head · book · fallbacks if needed                                         |
+| Priority | Deliverable |
+| -------- | ----------- |
+| **P0** | Playable PC engine + production-labeled train set + NNUE checkpoint |
+| **P0** | Search stack + TT; Elo **match** path toward ≥1700 |
+| **P0** | C port on Wio @ ~1 s/move with parity |
+| **P1** | Minimal UCI; bucket ablation (D); PTQ export |
+| **P2** | Policy head / book / thesis bucketing (after gate) |
 
-```text
-Pipeline (v1 critical path)
+## Reassessment cleanup (2026-07-22)
 
-  A █████████░ 88%  ──►  B ████████░░ 75%  ──►  C ██████░░░░ 55%
-                                                      │
-                                                      ▼
-                                               C1 ██░░░░░░░░ 20%
-                                                      │
-                                                      ▼
-                                               D  ░░░░░░░░░░  0%
-                                                      │
-                            (D2 later · research)     ▼
-                                               E  ░░░░░░░░░░  0%
-                                                      │
-                                                      ▼
-                                               F  ░░░░░░░░░░  0%
-                                                      │
-                                                      ▼
-                                               G  ███░░░░░░░ 25%
-                                                      │
-                                                      ▼
-                                               H  ░░░░░░░░░░  0%   Elo ≥ 1700?
-                                                  yes ──► J v2
-                                                  no  ──► I iterate ──► G
-```
-
----
-
-## Architecture (v1)
-
-Canonical diagrams and decisions: [SARDINE Engine Blueprint](NOTES/SARDINE%20Engine%20Blueprint.md).
-
-```text
-844 sparse features (own POV)  ──┐
-                                 ├──► shared L1  844 → W   (W ∈ {128, 256})
-844 sparse features (opp POV)  ──┘         │
-                                    dual accumulators (int16)
-                                           │
-                                    concat → 2W
-                                           │
-                              bucket router (piece count + queen-split)
-                                           │
-                              expert head i:  2W → 1   (×8)
-                                           │
-                              tanh LUT → expected reward ∈ [-1, +1]
-```
-
-| Piece | Choice |
-| ----- | ------ |
-| **Features** | **844** = 716 base (piece-square, king mirror, castling, EP) + **128** tactical (under-attack + king-attackers) |
-| **L1** | Dense train → **gradual prune 70–80%** → sparse **int8** in flash; shared across experts |
-| **Experts** | 8 output heads; router by piece count + queen presence (see blueprint bucket table) |
-| **Activations** | CReLU hidden · **tanh LUT** output (no runtime tanh) |
-| **Search (target)** | αβ + quiescence · futility · LMR · null-move · lazy eval · iterative deepening · killers (d>4) · SPSA on search only |
-| **Search (now)** | **v0.3** fixed-depth αβ + capture quiescence + MVV-LVA; HCE default; NNUE via `--eval nnue` |
-| **Policy** | **Search-only v1**; lightweight head off accumulator deferred to **v2** |
-| **Runtime** | PC bring-up first (Python/C++ skeleton) → pure **C** on Wio; TFT + Serial; minimal UCI for Elo tests |
-
----
-
-## Data & training
-
-| Item | Decision |
-| ---- | -------- |
-| **Target label** | Teacher **`expected_reward`** only (WDL → \(W-L\)), White POV — not centipawns, not chunk `best_q` |
-| **Teacher** | **Lc0** latest best net via UCI; fallback Stockfish WDL |
-| **Positions** | **Lichess** human games (diversity) + **Lc0** training games (volume); games ≥ 16 moves |
-| **Buckets** | Natural distribution — no stratified resampling |
-| **Framework (target)** | **nnue-pytorch** adapted to 844-dim bucketed MoE |
-| **Framework (now)** | Custom PyTorch (`scripts/train_nnue.py`) — pilot + mini production smoke |
-| **Quantization** | **PTQ int8** first; QAT only if MSE gap > 0.01 or Elo drop > 30 |
-| **Smoke data** | Kaggle `games.csv` / ChessBench — wiring only, not production train |
-
-**Current mini production set** (2026-07-20): Lichess 2371 + Lc0 3149 labeled with teacher `791556` → merge **5306 / 214** train/val · smoke `smoke_prod_W128_844` val_mse **0.247** (2 ep). Pilot ChessBench `pilot_W128_844` val_mse **0.056**.
-
-Sources: [database.lichess.org](https://database.lichess.org/) · Lc0 training data · [NOTES/Datasets.md](NOTES/Datasets.md) · [NOTES/Models.md](NOTES/Models.md).
-
----
-
-## Models
-
-### Production target (SARDINE NNUE)
-
-| | |
-| --- | --- |
-| **Arch** | Shared L1 `844 → W` + 8 experts `2W → 1`, dual perspective, bucket router |
-| **W** | Empirically **128** or **256** (latency vs strength on Wio) |
-| **Output** | Expected reward in \([-1,+1]\) via tanh LUT |
-| **Size goal** | Sparse L1 (~20–30% non-zero) + 8 dense heads — fit flash budget |
-| **Use** | Leaf eval under alpha-beta on Wio |
-
-Training / export path: dense train → gradual prune → calibrated int8 + LUT. See blueprint §Evaluation / §Quantization.
-
-### Eval / search baselines (now)
-
-| Recipe | Role |
-| ------ | ---- |
-| **HCE** | Default handcrafted eval for engine bring-up |
-| **NNUE pilot** | `pilot_W128_844` — ChessBench smoke, wired to search |
-| **NNUE mini-prod** | `smoke_prod_W128_844` — teacher-labeled mini set (pipeline proof) |
-| **Sunfish / ladder** | Opponents for ACPL and match tracks (blueprint §Benchmark) |
-
-Depth-1 ACPL (16g, heuristic Elo): NNUE pilot ~**1465** · HCE / Sunfish weak — not the ≥1700 match claim.
-
-### Deferred / reserve (not v1 critical path)
-
-| Track | When |
-| ----- | ---- |
-| Policy guidance head off shared accumulator | v2, after Elo gate |
-| Compact transformer (~210K) | Last-resort policy fallback |
-| Task-vector optimal bucketing | After queen-split ablation ([Thesis.md](NOTES/Thesis.md)) |
-| Tactical MoE (`inCheck`, threats) | v1.x / v2 if switching cost warrants it |
-
-Historical survey of external value/policy nets lives in notes/archive; **SARDINE is eval-NNUE + search**, not a standalone policy MCU net.
-
----
-
-## Explicitly deferred (v1)
-
-MCTS · tactical MoE heads · autoencoder warm-start · separate pattern tables · opening book · Grapheus/QAT by default · MicroChess stack surfing / bare-metal patterns · full UCI polish.
-
----
-
-## Fallback ladder (if Elo slips)
-
-| Level | Trigger | Action |
-| ----- | ------- | ------ |
-| 1 | Eval > 3 ms | Reduce \(W\) 256→128 or prune harder |
-| 2 | Depth < 6 | TT 128→64 KB |
-| 3 | Elo < 1600 | Aggressive pruning / SPSA |
-| 4 | Still < 1600 | Remove MoE → single expert |
-| 5 | Still < 1500 | Heuristics-only eval |
-| 6 | Timeboxed | Material-only |
-
-L1–2 autonomous; L3+ supervisor sign-off (blueprint).
-
----
-
-## Related research (not blocking)
-
-- Supervisor link: [Systematic Pruning](https://ieeexplore.ieee.org/abstract/document/11603432) (Zennaro)
-- Task vectors / low-dim expert subspace (Ansuini) — [Thesis.md](NOTES/Thesis.md)
+| Decision | Action |
+| -------- | ------ |
+| A4 | Hard-deleted `legacy/pre-sardine/` |
+| B3 | Stockfish via PATH / env only |
+| C2 | Removed `models/teacher/hf/` weights; code kept |
+| D1 | Cleared local `terminals/` |
+| E3 | Daily notes only under `DAILY-NOTES/` (gitignored); moved 07-20/07-21 there |
+| F1 | Kept ChessBench smoke path |
+| G3 | Stay on **8** buckets until ablation D |
+| H2 | PROJECT = status; Goal short; Report archived; ai-feed slimmed |
+| I1 | Removed empty `core/`, `evaluation/`, `datasets/`, `models/` packages + stale pyc |
+| J1 | Kept all `images/games/` demos |
 
 ---
 
