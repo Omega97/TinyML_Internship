@@ -3,7 +3,7 @@
 
 ---
  
-## Idee con Ansuini
+## Idee con il prof. Ansuini
 
 "Task vectors (in weight space / representation space) T1, T2, …, T8 have specific vectors in the weight space. Is it possible / useful to define task vectors that bring you from one head to another with minimal information/performance loss? This may be the case if the head vectors live in a linear submanifold of low dimensionality (are we so lucky? Maybe not!)"
 
@@ -15,7 +15,7 @@
 Basically, what I will try next is the following: training of a single NNUE (L1 + L2 + Output layer), then fine-tune the L2 and Output layers for every head, but with a twist; find a set of features of the board states (number of pieces, queen or no queen, bishop pair, rook pair, king position, ... `-> (30/32, 1, 0, 1, 5/8, 1/8, ...)` etc...). We re-do the fine-tuning on various combinations of features to obtain various **normalized delta vectors** (after minus before fine-tuning). We pick the sets of partitions
 
 <div align="center">
-    <img src="images/arrows.png" width="300">
+    <img src="../images/arrows.png" width="300">
 </div>
 
 Be careful: tiling of the position space must be complete and with no overlaps (like a function $g_\phi : s_{board} \rightarrow i_{bucket}$) , and the bucket must probably be of (more or less) uniform size.
@@ -81,7 +81,7 @@ If we want to be fancy, instead of working directly in state space, we work on a
 - **Step 2: Training the Dispatcher** - We then train a separate, **lightweight** classifier $g_\phi$ to predict these generated cluster assignments. To improve generalization and reduce computational overhead, $g_\phi$ will not operate on the raw, high-dimensional state space $\mathcal{S}$. Instead, we will map the inputs to a lower-dimensional embedding space, specifically utilizing the activations from the base model's frozen L1 layer as the input features for the dispatcher.
 
 <div align="center">
-    <img src="plots/thesis_dispatcher_architecture.png" width="600">
+    <img src="../plots/thesis_dispatcher_architecture.png" width="600">
 </div>
 
 **Inference**: 
