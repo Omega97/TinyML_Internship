@@ -197,7 +197,7 @@ Fonte: [google-deepmind/searchless_chess](https://github.com/google-deepmind/sea
 
 | Modello | Path previsto | Note |
 |---------|---------------|------|
-| Stockfish + WDL | `models/teacher/stockfish/stockfish.exe` | Fallback veloce; WDL post-hoc |
+| Stockfish + WDL | PATH / `STOCKFISH_PATH` (not in-repo) | ACPL judge; WDL fallback |
 | Artoria mid/large | `models/teacher/hf/artoria-zero/{mid,large}/` | Solo small installato |
 
 ### SARDINE NNUE (target) — ❌ vuoto

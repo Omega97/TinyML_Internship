@@ -6,6 +6,8 @@ Small Artificial RAM-restricted Deep Intelligent Neural Engine
 
 A modular chess engine plan for the Wio Terminal. **Locked decisions:** [[SARDINE Engine Blueprint]].
 
+> **Historical / superseded in parts.** Prefer the Blueprint for current truth. Interim (2026-07-22): implementation still uses **8-bucket queen-split (B-C)** until ablation §D; Blueprint 4-bucket table is the piece-count baseline for that study.
+
 Sources: [Ideas 💡.md](Ideas%20💡.md), [NNUE.md](NNUE.md), [Models.md](Models.md), [Kaggle FIDE Challenge](https://www.kaggle.com/competitions/fide-google-efficiency-chess-ai-challenge), [Performance.md](Performance.md), `piece_count_distribution_10k.xlsx`.
 
 ---

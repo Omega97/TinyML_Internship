@@ -151,7 +151,9 @@ Tactical MoE (`inCheck`, capture threat): defer to v1.x/v2. Bucket switches are 
 
 ### Output buckets
 
-**Default (v1):** **4 buckets** by **piece count only** ($p$ = number of pieces on the board, kings included). 
+> **Interim implementation (2026-07-22 reassessment G3):** code and checkpoints use **8 buckets (piece count + queen-split)** until pipeline step **D (bucket ablation)** locks the scheme. The 4-bucket table below remains the **piece-count-only baseline** for that ablation (and a simpler flash default if ablation prefers it). Do not silent-migrate without updating `bucket.py`, labels, and docs together.
+
+**Default candidate (v1 table):** **4 buckets** by **piece count only** ($p$ = number of pieces on the board, kings included). 
 
 | Bucket | Condition | Phase |
 | --- | --- | --- |
@@ -169,9 +171,12 @@ Informed by `piece_count_distribution_10k.xlsx` (games ≥ 16 moves). Training k
 
 *After* a working base NNUE — not on the critical path to the first Elo gate. Full notes: [Thesis.md](Thesis.md).
 
-**Idea:** freeze shared L1 from a single base model; for each candidate partition $f : s_{\mathrm{board}} \mapsto i_{\mathrm{bucket}}$, fine-tune only L2 + output **one sweep** per bucket and record normalized **delta (task) vectors** $\delta_i = \theta_i - \theta_{\mathrm{base}}$ (fine-tuned layers only). Score $f$ by how **diverse** the $\delta_i$ are (mean angular distance / cosine, with a penalty if any pair is nearly collinear). Partition must be **complete and non-overlapping**, buckets roughly uniform in sample count.
+**==Important idea for the thesis== (Omar + Ansuini):** freeze shared L1 from a single base model $\hat f$; for each candidate partition $g : s_{\mathrm{board}} \mapsto i_{\mathrm{bucket}}$ , fine-tune only L2 + output **one sweep** per bucket and record normalized **delta (task) vectors** $\delta_i = \theta_i - \theta_{\mathrm{base}}$ (fine-tuned layers only). Score $f$ by how **diverse** the $\delta_i$ are (mean angular distance / cosine, with a penalty if any pair is nearly collinear). Partition must be **complete and non-overlapping**, buckets roughly uniform in sample count.
 
-**Candidate features for $f$:** piece count, king location, queen presence, bishop/rook pair, material imbalance, pawn structure, mobility, etc. Search over combinations (greedy / random / GA) rather than exhaustive enumeration.
+==Idea==: Alternatively, perform one sweep of the dataset of $(s_i, v_i)$ pairs to compute (once) the deltas $\delta_i = \nabla_w \; \mathcal L_{acc}(\hat f(s_{base}), v_i)$ , defined as the gradient of the loss wrt the value function weights. Then, train a dispatcher $g(s_{board})$ (FFNN, no hidden layer, softmax activation) to partition the dataset so to minimize $\mathcal L_{var} \propto Var_{w-c} - Var_{i-c}$ within-class variance plus some negative intra-cluster variance. The point is to have a simple dispatcher that is optimized to group board positions in maximally-diverse clusters. 
+The probabilistic nature of the softmax makes the training possible, but during inference we get rid of that block, and only pick the highest-value activation to assign the class (same result but faster).
+
+**Candidate features for $g$:** the entire board, piece count, king location, queen presence, bishop/rook pair, material imbalance, pawn structure, mobility, etc. Search over combinations (greedy / random / GA) rather than exhaustive enumeration.
 
 **Research question (Ansuini):** do expert deltas live in a low-dimensional linear submanifold of weight space? If so, task vectors between heads may compress experts with little performance loss ([Ilharco et al., 2022](https://arxiv.org/abs/2212.04089); related: lottery ticket, permutation-aware layer distance).
 
