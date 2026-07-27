@@ -7,7 +7,7 @@
 
 - Presentation: [SARDINE_ICTP_2026-07.pdf](presentations/SARDINE_ICTP_2026-07.pdf)
 - Engine blueprint: [SARDINE Engine Blueprint.md](NOTES/SARDINE%20Engine%20Blueprint.md)
-- Thesis ideas: [Thesis.md](NOTES/Thesis)
+- Thesis ideas: [Thesis.md](NOTES/Thesis.md)
 - Online models: [Models.md](NOTES/Models.md)
 - Kaggle challenge: [FIDE & Google Efficient Chess AI Challenge](https://www.kaggle.com/competitions/fide-google-efficiency-chess-ai-challenge)
 - Status / design dashboard: [PROJECT.md](PROJECT.md)
