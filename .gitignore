@@ -21,6 +21,8 @@ data/processed/
 *.pt
 *.tflite
 *.onnx
+*.nnue
+src/cfish/nn-62ef826d1a6d.nnue
 
 # Other
 PRIVATE
