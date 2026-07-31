@@ -14,7 +14,7 @@ Chess engine for the **Wio Terminal**: neural evaluation + alpha-beta search, ma
 | [ai-feed.md](ai-feed.md) | Slim code map for agents |
 | [NOTES/Thesis.md](NOTES/Thesis.md) | Later research: task vectors / optimal bucketing |
 
-_Last reassessment: 2026-07-22 (decisions A4,B3,C2,D1,E3,F1,G3,H2,I1,J1)._
+Inspiration from [Kaggle Challenge](https://www.kaggle.com/competitions/fide-google-efficiency-chess-ai-challenge/writeups/linrock-my-solution-cfish-nnue-data-1st), [repo](https://github.com/linrock/minifish)
 
 ---
 

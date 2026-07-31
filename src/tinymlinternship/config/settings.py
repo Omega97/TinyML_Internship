@@ -29,19 +29,11 @@ LC0_NETWORK_PRESETS: dict[str, Path] = {
     "bt4": LC0_NETWORK_BT4,
 }
 
+# HF study teachers (weights not shipped; re-download via scripts/download_hf_teacher.py)
 HF_TEACHER_DIR = TEACHER_DIR / "hf"
 CHESS_LITE_WEIGHTS = HF_TEACHER_DIR / "chess_lite" / "chess_lite.pth"
 ARTORIA_SMALL_CKPT = HF_TEACHER_DIR / "artoria-zero" / "small" / "checkpoint.pt"
 ARTORIA_SMALL_CONFIG = HF_TEACHER_DIR / "artoria-zero" / "small" / "config.json"
-
-# Pre-SARDINE archive (legacy export pipeline)
-LEGACY_DIR = PROJECT_ROOT / "legacy" / "pre-sardine"
-LEGACY_MODELS_DIR = LEGACY_DIR / "models"
-CHECKPOINTS_DIR = LEGACY_MODELS_DIR / "checkpoints"
-EXPORTED_DIR = LEGACY_MODELS_DIR / "exported"
-ARDUINO_DIR = LEGACY_MODELS_DIR / "arduino"
-ARDUINO_MODELS_DIR = ARDUINO_DIR / "models"
-WIO_SKETCH_DIR = LEGACY_DIR / "Arduino" / "Wio_TinyValueTest"
 
 # Example specific files
 LICHESS_CSV = RAW_DATA_DIR / "games.csv"

@@ -73,24 +73,13 @@ class _TerminalProgress:
 
 
 def _resolve_stockfish(path: str | None) -> str:
-    if path:
-        p = Path(path)
-        if not p.is_file():
-            raise SystemExit(f"Stockfish binary not found: {p}")
-        return str(p.resolve())
-    env = os.environ.get("STOCKFISH_PATH")
-    if env and Path(env).is_file():
-        return str(Path(env).resolve())
-    for candidate in (
-        PROJECT_ROOT / "models" / "teacher" / "stockfish" / "stockfish.exe",
-        Path(r"C:\Program Files\Stockfish\stockfish.exe"),
-    ):
-        if candidate.is_file():
-            return str(candidate.resolve())
-    raise SystemExit(
-        "Stockfish not found — install Stockfish and pass --stockfish PATH, "
-        "or set STOCKFISH_PATH (see https://stockfishchess.org/download/)."
-    )
+    """Delegate to library resolver (PATH / STOCKFISH_PATH / --stockfish)."""
+    from tinymlinternship.bot_eval.stockfish_path import resolve_stockfish
+
+    try:
+        return resolve_stockfish(path)
+    except FileNotFoundError as exc:
+        raise SystemExit(str(exc)) from exc
 
 
 def _print_report(
