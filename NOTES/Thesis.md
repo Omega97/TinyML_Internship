@@ -17,6 +17,7 @@
     
 - **Step 2: Training the Dispatcher** - We then train a separate, **lightweight** classifier $g_\phi$ to predict these generated cluster assignments. To improve generalization and reduce computational overhead, $g_\phi$ will not operate on the raw, high-dimensional state space $\mathcal{S}$. Instead, we will map the inputs to a lower-dimensional embedding space, specifically utilizing the activations from the base model's frozen L1 layer as the input features for the dispatcher.
 
+**Note**: worth considering whether to cluster the task vectors or directly the L1 activations (_requiring similar model updates_ vs _positions that look similar_).
 
 #### Inference
 

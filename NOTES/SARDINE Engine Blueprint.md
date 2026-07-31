@@ -50,47 +50,6 @@ flowchart TD
 
 ---
 
-## MoE + NNUE Architecture
-
-```mermaid
-flowchart TD
-     subgraph A_row["Feature encoding"]
-         A1["Own-side features<br/>844-dim, own king mirrored"]
-         A2["Opponent-side features<br/>844-dim, board mirrored for opp"]
-     end
-     B["Shared L1 FFNN (white POV)<br/>844 → W (128 or 256)<br/>dense train · gradual-pruned sparse<br/>same weights, called twice"]
-     subgraph C_row["Accumulators"]
-         C1["My accumulator<br/>W values, own POV"]
-         C2["Opponent accumulator<br/>W values, their POV"]
-     end
-     D["Concatenate<br/>own ‖ opponent → 2W-dim"]
-     E{"Bucket Router<br/>routes to 1 of 4 experts"}
-     F["Selected NNUE expert head<br/>2W → 1"]
-     G["Eval score in [-1,+1]"]
-     A1 --> B
-     A2 --> B
-     B --> C1
-     B --> C2
-     C1 --> D
-     C2 --> D
-     D --> E
-     E --> F
-     F --> G
-     style A1 fill:#e6f1fb,stroke:#185fa5,stroke-width:1px
-     style C1 fill:#e6f1fb,stroke:#185fa5,stroke-width:1px
-     style A2 fill:#e1f5ee,stroke:#0f6e56,stroke-width:1px
-     style C2 fill:#e1f5ee,stroke:#0f6e56,stroke-width:1px
-     style B fill:#eeedfe,stroke:#534ab7,stroke-width:1px
-     style D fill:#eeedfe,stroke:#534ab7,stroke-width:1px
-     style E fill:#eeedfe,stroke:#534ab7,stroke-width:1px
-     style F fill:#eeedfe,stroke:#534ab7,stroke-width:1px
-     style G fill:#f1efe8,stroke:#5f5e5a,stroke-width:1px
-```
-
-The L1 accumulator (green) is computed once per position and **shared across all 4 expert nets** — only the output head selected by the bucket router (orange) changes. Train the L1 dense at $W \in \{128, 256\}$, applying **gradual pruning during training** up to 70–80% sparsity; store only non-zero weights in flash. Incremental add/sub updates on the accumulator are bucket-agnostic.
-
----
-
 ## Design Decisions
 
 

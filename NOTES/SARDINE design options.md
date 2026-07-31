@@ -65,7 +65,7 @@ flowchart LR
 
 | ID | Option | Description | Active features | Notes |
 |----|--------|-------------|-----------------|-------|
-| **F-A** | **Basic 768** | `(piece, square, color)` binary — standard NNUE | ~32 / 768 | Already in [featurizer.py](../src/tinymlinternship/datasets/featurizer.py) |
+| **F-A** | **Basic 768** | `(piece, square, color)` binary — standard NNUE | ~32 / 768 | Superseded by 844 encoder in [encoder.py](../src/tinymlinternship/features/encoder.py) |
 | **F-B** | **Pruned 704** | Zero impossible pawn ranks + mirrored king coords | ~32 / 704 | FIDE 2nd place; better compression ([Ideas 💡.md](Ideas%20💡.md)) |
 | **F-C** | **HalfKP** | King-relative piece features; sparse, bucketed by king square | ~0.1% active | Best eval quality; complex incremental update on MCU |
 | **F-D** | **24-plane dense** | Planes for transformer / CNN path (`8×8×24`) | 64 tokens × 24 | For non-NNUE architectures only |

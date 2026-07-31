@@ -210,54 +210,20 @@ Fonte: [google-deepmind/searchless_chess](https://github.com/google-deepmind/sea
 
 Architettura target: `844 → W (128/256) → 2W → 1` × 8 bucket.
 
-### Legacy pre-SARDINE — archivio (768-dim, centipawn)
+### Legacy pre-SARDINE — rimosso (768-dim, centipawn)
 
-**Checkpoints PyTorch** — `legacy/pre-sardine/models/checkpoints/`
-
-| File | Size |
-|------|------|
-| `tiny_value_wio.pt` | 53 KB |
-| `tiny_value_wio_nano_int8.pt` | 53 KB |
-| `tiny_value_wio_tiny_int8.pt` | 104 KB |
-| `tiny_value_wio_small_int8.pt` | 209 KB |
-| `tiny_value_wio_medium_int8.pt` | 430 KB |
-| `tiny_value_wio_big_int8.pt` | 857 KB |
-| `tiny_value_wio_huge_int8.pt` | 1.7 MB |
-| `tiny_value_wio_sparse80_int8.pt` | 53 KB |
-| `tiny_chess_policy_lab.pt` | 16.8 MB |
-| `tiny_chess_policy_lab_full.pt` | 16.8 MB |
-
-**Export** — `legacy/pre-sardine/models/exported/`
-
-| File | Size |
-|------|------|
-| `tiny_value_wio_*_int8.bin` | 12–427 KB |
-| `tiny_chess_policy_lab.onnx` + `.onnx.data` | ~16.8 MB |
-| `tiny_chess_policy_lab.ts.pt` | 16.8 MB |
-| `my_tiny_model.ts.pt` | 60 B |
-
-**Headers Wio (int8 embed)** — `legacy/pre-sardine/models/arduino/models/`
-
-| File | Size |
-|------|------|
-| `tiny_value_wio_int8_model.h` | 79 KB |
-| `tiny_value_wio_tiny_int8_model.h` | 156 KB |
-| `tiny_chess_policy_model.h` | 100 MB |
-| `tiny_chess_onnx_data.h` | 100 MB |
-| `my_tiny_model.h` | 374 B |
-
-Sketch: `legacy/pre-sardine/Arduino/Wio_TinyValueTest/`. **Non usare per SARDINE v1** (encoder 844, expected reward).
+`legacy/pre-sardine/` (checkpoints nano→huge, export ONNX/int8, sketch `Wio_TinyValueTest`) è stato **eliminato** il 2026-07-22. Recuperabile solo da git history. **Non usare per SARDINE v1** (encoder 844, expected reward).
 
 ### Riepilogo
 
 | Categoria | Path root | Installato | Uso SARDINE v1 |
 |-----------|-----------|------------|----------------|
 | Lc0 teacher (fast default) | `models/teacher/` | ✅ 3 reti + lc0 | Bot depth 1–2, demo GIF; **latest best net per training** |
-| HF teacher (chess_lite) | `models/teacher/hf/` | ✅ 2 checkpoint | Smoke latency; gioco debole a depth-1 |
+| HF teacher (chess_lite) | `models/teacher/hf/` | via `download_hf_teacher.py` | Smoke latency; gioco debole a depth-1 |
 | ChessBench (SF 16) | `data/raw/chessbench/` | ✅ test split | **Smoke only** — pilot PyTorch, non produzione |
 | Lichess PGN | `data/raw/lichess/` | ❌ | Primary training positions (futuro) |
 | SARDINE NNUE | `models/` | 🔄 pilot | Produzione post-nnue-pytorch |
-| Legacy value/policy | `legacy/pre-sardine/models/` | ✅ archivio | Riferimento storico |
+| Legacy value/policy | `legacy/pre-sardine/` | ❌ rimosso | Solo git history |
 
 
 ---

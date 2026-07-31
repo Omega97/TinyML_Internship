@@ -179,7 +179,7 @@ py -3.12 -m pytest -v
 1. Boards Manager (`Ctrl+Shift+B`) → install **Seeed SAMD Boards**
 2. **Tools → Board → Seeed Wio Terminal**
 3. **Tools → Port →** your COM port
-4. Open `legacy/pre-sardine/Arduino/Wio_TinyValueTest/Wio_TinyValueTest.ino` → Verify → Upload
+4. Open the active Wio sketch when the SARDINE C-port lands (old `Wio_TinyValueTest` lived under deleted `legacy/pre-sardine/`)
 
 More setup notes: [arduino.md](Arduino.md).
 

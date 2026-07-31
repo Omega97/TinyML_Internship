@@ -4,7 +4,7 @@ Quick snippets to run **active** SARDINE code (feature encoder, tests). Run from
 
 **Convention:** `py -3.12` on Windows (`python3` on Linux/macOS).
 
-Spec: [SARDINE.md](SARDINE%20Engine%20Blueprint.md) · Legacy export pipeline: `legacy/pre-sardine/`
+Spec: [SARDINE Engine Blueprint](SARDINE%20Engine%20Blueprint.md)
 
 ---
 
@@ -92,15 +92,10 @@ py -3.12 scripts/plot_piece_count_distribution.py
 
 ---
 
-## Legacy pre-SARDINE (archive)
+## Legacy pre-SARDINE (removed)
 
-Old Wio value-net scripts live under `legacy/pre-sardine/`. Example:
-
-```bash
-py -3.12 legacy/pre-sardine/scripts/run_model.py --help
-```
-
-Full legacy reference: [Commands.md](Commands.md) (export pipeline, Arduino headers).
+`legacy/pre-sardine/` was hard-deleted (2026-07-22). Recover only from git history.
+Older export-pipeline notes: [Commands.md](Commands.md).
 
 ---
 

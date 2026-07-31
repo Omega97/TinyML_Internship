@@ -14,8 +14,8 @@ _Aggiornato: 2026-07-10_
 | Categoria          | Path root                                                     | Stato         | Uso principale                     |
 | ------------------ | ------------------------------------------------------------- | ------------- | ---------------------------------- |
 | Teacher Lc0        | [`models/teacher/`](../models/teacher/)                       | ✅ installato  | Label training, bot baseline, demo |
-| Teacher HF         | [`models/teacher/hf/`](../models/teacher/hf/)                 | ✅ installato  | Smoke inferenza veloce             |
-| Stockfish 18       | [`models/teacher/stockfish/`](../models/teacher/stockfish/)   | ✅ installato  | ACPL gate, analisi mosse           |
+| Teacher HF         | `models/teacher/hf/`                 | ✅ installato  | Smoke inferenza veloce             |
+| Stockfish 18       | `models/teacher/stockfish/`   | ✅ installato  | ACPL gate, analisi mosse           |
 | Sunfish            | [`models/teacher/sunfish/`](../models/teacher/sunfish/)       | ✅ clone       | Calibrazione depth-1 (ACPL)        |
 | NNUE SARDINE       | [`models/checkpoints/nnue/`](../models/checkpoints/nnue/)     | ✅ 2 run pilot | Engine `--eval nnue`               |
 
@@ -49,8 +49,8 @@ _Aggiornato: 2026-07-10_
 
 | Modello | Path | Size | Fonte HF | Note |
 |---------|------|------|----------|------|
-| **chess_lite** | [`models/teacher/hf/chess_lite/chess_lite.pth`](../models/teacher/hf/chess_lite/chess_lite.pth) | 39 MB | [satana123/chess_lite](https://huggingface.co/satana123/chess_lite) | ~2 ms/eval, gioco debole d1 |
-| **artoria-small** | [`models/teacher/hf/artoria-zero/small/checkpoint.pt`](../models/teacher/hf/artoria-zero/small/checkpoint.pt) | 101 MB | [Shinapri/artoria-zero](https://huggingface.co/Shinapri/artoria-zero) | Config in `small/config.json` |
+| **chess_lite** | `models/teacher/hf/chess_lite/chess_lite.pth` | 39 MB | [satana123/chess_lite](https://huggingface.co/satana123/chess_lite) | ~2 ms/eval, gioco debole d1 |
+| **artoria-small** | `models/teacher/hf/artoria-zero/small/checkpoint.pt` | 101 MB | [Shinapri/artoria-zero](https://huggingface.co/Shinapri/artoria-zero) | Config in `small/config.json` |
 
 **Codice:** `eval_chess_lite.py` · **Play:** `scripts/record_hf_game.py --model auto`
 
@@ -60,7 +60,7 @@ _Aggiornato: 2026-07-10_
 
 | Artefatto | Path | Size | Note |
 |-----------|------|------|------|
-| Binario | [`models/teacher/stockfish/stockfish.exe`](../models/teacher/stockfish/stockfish.exe) | 109 MB | SF 18 avx2 |
+| Binario | `models/teacher/stockfish/stockfish.exe` | 109 MB | SF 18 avx2 |
 
 **Uso:** `scripts/eval_bot_acpl.py` (ACPL su self-play), non teacher per training NNUE.
 
@@ -103,7 +103,7 @@ Encoder **844-dim** (716 base + 128 tattico). Checkpoint di produzione per `--ev
 - [agents/nnue-w128-844-d1.md](agents/nnue-w128-844-d1.md) — depth 1, qsearch off
 - [agents/nnue-w128-844-d2.md](agents/nnue-w128-844-d2.md) — depth 2
 
-**Demo:** [`images/nnue_d2_game.gif`](../images/nnue_d2_game.gif) · architettura: [`plots/sardine_nnue_architecture.png`](../plots/sardine_nnue_architecture.png)
+**Demo:** [`images/nnue_d2_game.gif`](../images/games/nnue_d2_game.gif) · architettura: [`plots/sardine_nnue_architecture.png`](../plots/sardine_nnue_architecture.png)
 
 ```bash
 py -3.12 scripts/run_engine.py --eval nnue --nnue-checkpoint models/checkpoints/nnue/pilot_W128_844/best.pt --depth 2
@@ -137,19 +137,14 @@ Primo pilot su encoder **716-dim** (pre-tactical). Non usare con l'engine 844-di
 | **HCE** | euristica built-in | **275.0** | `plots/hce_d1_gate_acpl.json` |
 | **Sunfish** | repo `models/teacher/sunfish/` | **818.3** | `plots/sunfish_d1_gate_acpl.json` |
 
-**HCE depth-2 demo:** [`images/hce_d2_game.gif`](../images/hce_d2_game.gif) · scheda [agents/hce-d2-qsearch.md](agents/hce-d2-qsearch.md)
+**HCE depth-2 demo:** [`images/hce_d2_game.gif`](../images/games/hce_d2_game.gif) · scheda [agents/hce-d2-qsearch.md](agents/hce-d2-qsearch.md)
 
 ---
 
-## Legacy pre-SARDINE (archivio)
+## Legacy pre-SARDINE (rimosso)
 
 Encoder **768-dim**, output centipawn — **non compatibile** con pipeline SARDINE 844.
-
-| Categoria | Path |
-|-----------|------|
-| Checkpoints PyTorch | [`legacy/pre-sardine/models/checkpoints/`](../legacy/pre-sardine/models/checkpoints/) |
-| Export int8 / ONNX | [`legacy/pre-sardine/models/exported/`](../legacy/pre-sardine/models/exported/) |
-| Headers Arduino/Wio | [`legacy/pre-sardine/models/arduino/models/`](../legacy/pre-sardine/models/arduino/models/) |
+`legacy/pre-sardine/` (checkpoints, export int8/ONNX, header Arduino/Wio) è stato eliminato il 2026-07-22; recuperabile solo dalla history git.
 
 ---
 

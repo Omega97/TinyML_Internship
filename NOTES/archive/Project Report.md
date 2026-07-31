@@ -37,7 +37,7 @@ Meeting all'ufficio del prof. Zennaro
 - Model Compression
 - Knowledge Distillation
 
-(See [NOTES/notes.md](_notes.md) for details.)
+(See [NOTES/_notes.md](../_notes.md) for details.)
 
 ---
 
@@ -50,13 +50,13 @@ Meeting all'ufficio del prof. Zennaro
 - Power Measurement with OTII
 - MLSysBook AI Kits
 
-(See [NOTES/notes.md](_notes.md) for details.)
+(See [NOTES/_notes.md](../_notes.md) for details.)
 
 #### Repo work
 - basic repo structure
-- [download_data.py](scripts/download_data.py)
-- [test_data.py](tests/test_data.py)
-- [example_game.py](examples/example_game.py)
+- [download_data.py](../../scripts/download_data.py)
+- [test_data.py](../../tests/test_data.py)
+- `example_game.py`
 
 ---
 
@@ -65,12 +65,12 @@ Meeting all'ufficio del prof. Zennaro
 - Value functions
 - Policy functions
 
-(See [NOTES/notes.md](_notes.md) for chess/hardware/software notes; [PROJECT.md](PROJECT.md) for model details.)
+(See [NOTES/_notes.md](../_notes.md) for chess/hardware/software notes; [PROJECT.md](../../PROJECT.md) for model details.)
 
 #### Repo work
-- [example_fen.py](examples/example_fen.py)
-- [test_policy_inference.py](tests/test_policy_inference.py)
-- [featurizer.py](src/tinymlinternship/datasets/featurizer.py)
+- `example_fen.py`
+- `test_policy_inference.py`
+- `featurizer.py` (removed; features now in [encoder.py](../../src/tinymlinternship/features/encoder.py))
 
 ---
 
@@ -88,24 +88,24 @@ Meeting all'ufficio del prof. Zennaro
 
 ## 8-14 Giugno
 
-- 12/6 - **Prima esperienza il lab** -  [export pipeline](export_pipeline.md)
- - Docs: [export_pipeline.md](export_pipeline.md), [PRIVATE/private-notes.md](PRIVATE/private-notes.md) (PRIVATE/ index + #core)
+- 12/6 - **Prima esperienza il lab** -  export pipeline
+ - Docs: `export_pipeline.md`, [PRIVATE/private-notes.md](../../PRIVATE/private-notes.md) (PRIVATE/ index + #core)
  - Software: ONNX, TorchScript
  - Hardware: Wio Terminal
  - `models\exported\my_tiny_model.ts.pt`
  - Arduino IDE
 
 #### Repo work
- - Main pipeline files: [scripts/prepare_for_arduino.py](legacy/pre-sardine/scripts/prepare_for_arduino.py) (TFLite export + C header, cleaned with lazy imports), [scripts/prepare_wio_tiny.py](legacy/pre-sardine/scripts/prepare_wio_tiny.py) (Wio-specific), [scripts/bin_to_c_header.py](legacy/pre-sardine/scripts/bin_to_c_header.py) (binary to C array)
- - Model files: [models/policy.py](legacy/pre-sardine/src/tinymlinternship/models/policy.py) (TinyPolicy), [models/value.py](legacy/pre-sardine/src/tinymlinternship/models/value.py) (TinyValueMLP / UltraTinyValueMLP)
+ - Main pipeline files: `scripts/prepare_for_arduino.py` (TFLite export + C header, cleaned with lazy imports), `scripts/prepare_wio_tiny.py` (Wio-specific), `scripts/bin_to_c_header.py` (binary to C array)
+ - Model files: `models/policy.py` (TinyPolicy), `models/value.py` (TinyValueMLP / UltraTinyValueMLP)
  - Fixes: lazy heavy imports, type TODO cleanup, import style fix in policy.py
- - **Run policy and value functions** by running the example commands in [scripts/run_model.py](legacy/pre-sardine/scripts/run_model.py).
+ - **Run policy and value functions** by running the example commands in `scripts/run_model.py`.
 
 **Pipeline chain (start-to-finish):**  
-- [models/value.py](legacy/pre-sardine/src/tinymlinternship/models/value.py) (UltraTinyValueMLP) + [scripts/prepare_wio_tiny.py](legacy/pre-sardine/scripts/prepare_wio_tiny.py) 
+- `models/value.py` (UltraTinyValueMLP) + `scripts/prepare_wio_tiny.py` 
 - → `models/checkpoints/tiny_value_wio.pt` 
 - → `torch.jit.trace` + save → `models/exported/my_tiny_model.ts.pt` (58.4 KB) 
-- → [scripts/bin_to_c_header.py](legacy/pre-sardine/scripts/bin_to_c_header.py) (my_tiny_model.ts.pt --var-name g_chess_model --out ...) 
+- → `scripts/bin_to_c_header.py` (my_tiny_model.ts.pt --var-name g_chess_model --out ...) 
 - → `models/arduino/models/my_tiny_model.h` (g_chess_model + _len=59754 for #include / TFLM)
 
 #### Hardware 
@@ -125,11 +125,11 @@ Meeting all'ufficio del prof. Zennaro
 - Int8 quantization experiment (using prepare_wio_tiny pipeline + wio_int8_weights.h): same 2.16M evals/s as float32 (naive int8 + dequant scales gives no speedup on FPU SAMD51, as expected), but ~4x lower weight memory. Display now includes "Evals/s: 2.16M" and weights filename. See daily note 2026-06-16.md for full log. We are probably not actually running the network.
 
 #### Repo work
-- Input helper: [fen_to_c_array.py](legacy/pre-sardine/scripts/fen_to_c_array.py) → `Arduino/Wio_TinyValueTest/fen_input.h`
-- Model: [UltraTinyValueMLP](legacy/pre-sardine/src/tinymlinternship/models/value.py) (`768→32→16→1`)
-- Export: [generate_wio_weights.py](legacy/pre-sardine/scripts/generate_wio_weights.py) (float32 `wio_weights.h`), [prepare_wio_tiny.py](legacy/pre-sardine/scripts/prepare_wio_tiny.py) (int8 `wio_int8_weights_tiny.h`)
-- PC parity: [run_model.py](legacy/pre-sardine/scripts/run_model.py)
-- Device sketch: [Arduino/Wio_TinyValueTest/Wio_TinyValueTest.ino](legacy/pre-sardine/Arduino/Wio_TinyValueTest/Wio_TinyValueTest.ino) (hand-written forward pass, TFT + Serial)
+- Input helper: `fen_to_c_array.py` → `Arduino/Wio_TinyValueTest/fen_input.h`
+- Model: UltraTinyValueMLP (`768→32→16→1`)
+- Export: `generate_wio_weights.py` (float32 `wio_weights.h`), `prepare_wio_tiny.py` (int8 `wio_int8_weights_tiny.h`)
+- PC parity: `run_model.py`
+- Device sketch: `Arduino/Wio_TinyValueTest/Wio_TinyValueTest.ino` (hand-written forward pass, TFT + Serial)
 
 ---
 
@@ -139,34 +139,34 @@ Meeting all'ufficio del prof. Zennaro
 - **Measuring memory and time to run the NNs correctly!** Extended the Wio value-net performance matrix to **big** (`768→256→64→1`) and **huge** (`768→512→64→1`); full nano→huge sweep now fits on device (huge at ~96% flash).
 - **Benchmark honesty fix:** the flat ~2.01M evals/s across all models was a measurement artifact — `-Os` dead-code elimination removed `forward()` from `loop()`. Fixed with `volatile forwardSink`, interval-based EMA rate, and 1s warm-up discard; throughput now scales with model size (~2× latency per tier: nano 1.4 ms → huge 45 ms).
 - **Sketch refactor:** split `Wio_TinyValueTest` into `config.h`, `Int8ValueNet`, `WioBoard`, `Benchmark`; weights included once in `Int8ValueNet.cpp` (fixes 3× PROGMEM duplication that overflowed huge). Sparse L1 skips `pgm_read_byte` on empty board squares.
-- **24/6 lab session:** optimized forward pass (~15% faster overall; nano 1.8→1.4 ms/call); removed misleading `K` display suffix; updated [NOTES/Performance.md](NOTES/Performance.md) with honest latency/evals/s table and hw–sw synergy notes (flash bus stalls dominate, not FPU). See daily notes [2026-06-22.md](2026-06-22.md), [2026-06-24.md](2026-06-24.md).
+- **24/6 lab session:** optimized forward pass (~15% faster overall; nano 1.8→1.4 ms/call); removed misleading `K` display suffix; updated [NOTES/Performance.md](../Performance.md) with honest latency/evals/s table and hw–sw synergy notes (flash bus stalls dominate, not FPU). See daily notes [2026-06-22.md](../../DAILY-NOTES/2026-06/2026-06-22.md), [2026-06-24.md](../../DAILY-NOTES/2026-06/2026-06-24.md).
 
 #### Repo work
-- Models: [BigValueMLP / HugeValueMLP](legacy/pre-sardine/src/tinymlinternship/models/value.py) (nano→huge family)
-- Export scripts: [prepare_wio_big.py](legacy/pre-sardine/scripts/prepare_wio_big.py), [prepare_wio_huge.py](legacy/pre-sardine/scripts/prepare_wio_huge.py), [count_model_params.py](legacy/pre-sardine/scripts/count_model_params.py)
-- Device sketch: `legacy/pre-sardine/Arduino/Wio_TinyValueTest/` (modular int8 forward + benchmark)
+- Models: `BigValueMLP / HugeValueMLP` (nano→huge family)
+- Export scripts: `prepare_wio_big.py`, `prepare_wio_huge.py`, `count_model_params.py`
+- Device sketch: `Arduino/Wio_TinyValueTest/` (modular int8 forward + benchmark; later under `legacy/pre-sardine/`, now removed)
 
 ---
 
 ## 29 Giugno - 5 Luglio
 
-- **Catalogo modelli** — consolidata la ricerca HF in [NOTES/Models.md](NOTES/Models.md): confronto per famiglia (Dense/Conv, ResNet, Transformer, NNUE, Lc0 edge) con parametri, file size e fattibilità su Wio. Conclusione: i modelli HF (8–100M params) sono fuori budget; NNUE e dual-head custom restano le direzioni più promettenti.
-- **Transformer compatto** — definita in [NOTES/chess transformer.md](NOTES/chess%20transformer.md) un'architettura policy+value a **~210K parametri** (input `24×8×8`, 2 blocchi transformer, policy 2048 + value tanh) — ~165× più piccola di ChessBot (34.7M).
+- **Catalogo modelli** — consolidata la ricerca HF in [NOTES/Models.md](../Models.md): confronto per famiglia (Dense/Conv, ResNet, Transformer, NNUE, Lc0 edge) con parametri, file size e fattibilità su Wio. Conclusione: i modelli HF (8–100M params) sono fuori budget; NNUE e dual-head custom restano le direzioni più promettenti.
+- **Transformer compatto** — definita in [NOTES/chess transformer.md](../chess%20transformer.md) un'architettura policy+value a **~210K parametri** (input `24×8×8`, 2 blocchi transformer, policy 2048 + value tanh) — ~165× più piccola di ChessBot (34.7M).
 - **FIDE & Google Challenge** — analizzate le soluzioni top sotto vincoli estremi (5 MiB RAM, binario ≤ 64 KiB): micro-NNUE, king mirroring, geometric pruning, SPSA tuning. Note: [FIDE & Google Efficient Chess AI Kaggle Challenge](https://www.kaggle.com/competitions/fide-google-efficiency-chess-ai-challenge).
-- **NNUE deep-dive** — nota dedicata su architettura, aggiornamenti incrementali e quantizzazione: [NOTES/NNUE.md](NOTES/NNUE.md).
+- **NNUE deep-dive** — nota dedicata su architettura, aggiornamenti incrementali e quantizzazione: [NOTES/NNUE.md](../NNUE.md).
 - **Analisi dataset** — distribuzione piece-count su 1k e 10k partite Lichess (`piece_count_distribution.xlsx`, `piece_count_distribution_10k.xlsx`); usata per progettare i bucket bilanciati del training.
-- **SARDINE blueprint** — decisioni in [NOTES/SARDINE Engine Blueprint.md](NOTES/SARDINE%20Engine%20Blueprint.md); catalogo opzioni in [SARDINE design options.md](NOTES/SARDINE%20design%20options.md). Vedi sezione [SARDINE Pipeline](README.md#sardine-pipeline) nel README.
-- **1 Luglio** — avvio pipeline SARDINE: pre-SARDINE archiviato in `legacy/pre-sardine/`; encoder 716 in `src/tinymlinternship/features/`. Daily note: [2026-07-01.md](2026-07-01.md).
-- **2 Luglio** — step 1 chiuso (golden FEN, 29 test); **engine v0.1** (HCE + 1-ply search); self-play registrato in **`sardine_game.gif`** via pygame + gifpgn. Daily note: [2026-07-02.md](2026-07-02.md).
-- **3 Luglio** — Lc0 subset scaricato (~1.15 GiB, 54k chunk); parser V6→FEN; pipeline preprocess (stats + pilot parquet 1k posizioni, no SF labels). Encoder/engine SARDINE invariati (HCE + 1-ply). Daily note: [2026-07-03.md](2026-07-03.md).
+- **SARDINE blueprint** — decisioni in [NOTES/SARDINE Engine Blueprint.md](../SARDINE%20Engine%20Blueprint.md); catalogo opzioni in [SARDINE design options.md](../SARDINE%20design%20options.md). Vedi sezione [SARDINE Pipeline](../../README.md#sardine-pipeline) nel README.
+- **1 Luglio** — avvio pipeline SARDINE: pre-SARDINE messo da parte; encoder 716 in `src/tinymlinternship/features/`. Daily note: [2026-07-01.md](../../DAILY-NOTES/2026-07/2026-07-01.md).
+- **2 Luglio** — step 1 chiuso (golden FEN, 29 test); **engine v0.1** (HCE + 1-ply search); self-play registrato in **`sardine_game.gif`** via pygame + gifpgn. Daily note: [2026-07-02.md](../../DAILY-NOTES/2026-07/2026-07-02.md).
+- **3 Luglio** — Lc0 subset scaricato (~1.15 GiB, 54k chunk); parser V6→FEN; pipeline preprocess (stats + pilot parquet 1k posizioni, no SF labels). Encoder/engine SARDINE invariati (HCE + 1-ply). Daily note: [2026-07-03.md](../../DAILY-NOTES/2026-07/2026-07-03.md).
 
 #### Repo work
 - Features: `src/tinymlinternship/features/` — 844 encoder (716 base + tactical 128), bucket router, 33+ tests
 - Engine: `src/tinymlinternship/engine/` — HCE + `search_best_move` (v0.1)
-- Visualization: `src/tinymlinternship/visualization/` + [scripts/record_engine_game.py](scripts/record_engine_game.py) → `sardine_game.gif`
-- Notes: [NOTES/Models.md](NOTES/Models.md), [NOTES/chess transformer.md](NOTES/chess%20transformer.md), [NOTES/NNUE.md](NOTES/NNUE.md), [NOTES/SARDINE Engine Blueprint.md](NOTES/SARDINE%20Engine%20Blueprint.md), [FIDE & Google Efficient Chess AI Kaggle Challenge.md](https://www.kaggle.com/competitions/fide-google-efficiency-chess-ai-challenge)
-- Data analysis: [scripts/plot_piece_count_distribution.py](scripts/plot_piece_count_distribution.py) → `piece_count_distribution.xlsx`, `piece_count_distribution_10k.xlsx`
-- Archive: `legacy/pre-sardine/` (export pipeline, `Wio_TinyValueTest`, checkpoints)
+- Visualization: `src/tinymlinternship/visualization/` + [scripts/record_engine_game.py](../../scripts/record_engine_game.py) → `sardine_game.gif`
+- Notes: [NOTES/Models.md](../Models.md), [NOTES/chess transformer.md](../chess%20transformer.md), [NOTES/NNUE.md](../NNUE.md), [NOTES/SARDINE Engine Blueprint.md](../SARDINE%20Engine%20Blueprint.md), [FIDE & Google Efficient Chess AI Kaggle Challenge.md](https://www.kaggle.com/competitions/fide-google-efficiency-chess-ai-challenge)
+- Data analysis: [scripts/plot_piece_count_distribution.py](../../scripts/plot_piece_count_distribution.py) → `piece_count_distribution.xlsx`, `piece_count_distribution_10k.xlsx`
+- Archive: pre-SARDINE export pipeline / `Wio_TinyValueTest` (later removed from the tree; see git history)
 
 ---
 

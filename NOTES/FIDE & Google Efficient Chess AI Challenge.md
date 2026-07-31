@@ -2,7 +2,7 @@
 # FIDE & Google Efficient Chess AI Challenge
 
 
-The absolute cutting edge of "small hardware" chess architectures, the FIDE & Google Efficient Chess AI Challenge hosted on [Kaggle](https://www.kaggle.com/competitions/fide-google-efficiency-chess-ai-challenge). This competition explicitly forbids brute-force computation and forces participants to build engines under extreme hardware constraints, such as allocating a maximum of just 5MiB of RAM
+The absolute cutting-edge of "small hardware" chess architectures, the FIDE & Google Efficient Chess AI Challenge hosted on [Kaggle](https://www.kaggle.com/competitions/fide-google-efficiency-chess-ai-challenge). This competition explicitly forbids brute-force computation and forces participants to build engines under extreme hardware constraints, such as allocating a maximum of just 5MiB of RAM
 	- **[FIDE and Google create the Efficient Chess AI Challenge (FIDE.com)](https://www.fide.com/fide-and-google-create-the-efficient-chess-ai-challenge-hosted-on-kaggle/)**: The official announcement challenging developers to create smart, resource-light chess programs
 	- **[FIDE & Google Efficient Chess AI Challenge (Kaggle)](https://www.kaggle.com/competitions/fide-google-efficiency-chess-ai-challenge/discussion/557921)**: The competition forums and discussion boards are a goldmine for seeing the exact lightweight architectures (like heavily pruned NNUE variants or tiny custom networks) that top competitors used to maximize Elo per byte
 	- [Discussion](https://www.kaggle.com/competitions/fide-google-efficiency-chess-ai-challenge/discussion?sort=undefined)
