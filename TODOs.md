@@ -1,6 +1,6 @@
-# SARDINE Blueprint — Progress
+# SARDINE — Eng micro-gates
 
-_Checkpoint map vs NOTES/SARDINE Engine Blueprint.md only. Last updated: 2026-07-22 (reassessment cleanup; buckets stay **8** until §D)._
+_Optional engineering checklist vs blueprint. **Product progress lives only in [PROJECT.md](PROJECT.md)** (decision A1). Doc authority: [ai-feed.md](ai-feed.md). Last updated: 2026-08-03 — **F3: single head until §D**; multi-bucket routing not production until ablation locks a scheme._
 
 ---
 
@@ -22,7 +22,7 @@ Stesso ordine del diagramma _Build Pipeline_ nel blueprint.
 - [x] Dual-perspective sparse input — `encode_dual()`
 - [x] Enemy-king full 64-square resolution (only the perspective king is mirror-compressed to 32 slots)
 - [x] **Castling coordinate-frame fix** — rights from `base` + K/Q swap if mirrored (EP from `view`); golden startpos + `test_castling_*`
-- [x] 8-bucket router (piece count + queen-split), boundaries closed at **p ≤ 12** (no gap)
+- [x] Bucket **metadata** helpers (piece count + queen-split in `bucket.py`) — used for analysis / future §D; **not** production multi-head routing (**F3**)
 - [x] Gate test (`tests/test_features.py`, `test_tactical.py`, golden FEN) — **33** tests
 - [ ] Encoder parity on **device** (C, with search) — step F
 
@@ -45,9 +45,10 @@ Stesso ordine del diagramma _Build Pipeline_ nel blueprint.
 
 ---
 
-### C · Train bucketed NNUE
+### C · Train NNUE (single head until §D — F3)
 
-Architecture: shared L1 **844 → W** with $W \in \{128, 256\}$ (dense train + **gradual prune** 70–80% in training; **non-zero only in flash**; dual call, same weights twice — own-POV + opponent-POV) → concat **2W** → router → expert **2W → 1** × 8 · **CReLU** hidden · **tanh** output → expected-reward LUT in $[-1,+1]$.
+Architecture (production): shared L1 **844 → W** with $W \in \{128, 256\}$ (dense train + **gradual prune** 70–80%; **non-zero only in flash**; dual POV) → concat **2W** → **one** head **2W → 1** · **CReLU** · **tanh** → expected-reward LUT in $[-1,+1]$.  
+*Legacy pilots used 8 expert heads — treat as experimental; next production train = single head.*
 
 - [x] Lc0 subset **~1–2 GB** (`data/raw/lc0/`, `scripts/download_lc0.py`)
 - [x] Games **≥ 16** moves; pilot preprocess — `lc0_preprocess.py`, `stats_lc0_processed.py`, `prepare_lc0_dataset.py` (ply≥32 global, bucket7≥8)
@@ -61,8 +62,9 @@ Architecture: shared L1 **844 → W** with $W \in \{128, 256\}$ (dense train + *
 - [ ] Label **full-volume** production blocks after Lichess dump / large extract (same teacher; multi-session)
 - [x] Schema/merge tooling — `schema.py`, `merge_training_sets.py` (game-level split + single-teacher check)
 - [x] Merge mini set → `data/processed/labeled/{train,val}.parquet` + `manifest.json` (5306 / 214, seed 42, 2026-07-20)
-- [ ] **nnue-pytorch** fork/adapt — 844-dim bucketed, gradual L1 prune, 100 ep fixed
-- [x] PyTorch **smoke** pilot (shared L1 + 8 expert heads) — ChessBench `pilot_W128_844` val_mse **0.056**; production mini `smoke_prod_W128_844` val_mse **0.247** (2 ep, encode-from-fen)
+- [ ] **nnue-pytorch** fork/adapt — 844-dim, **single head** (F3), gradual L1 prune, 100 ep fixed
+- [x] PyTorch **smoke** pilot (legacy multi-head) — ChessBench `pilot_W128_844` val_mse **0.056**; production mini `smoke_prod_W128_844` val_mse **0.247** (2 ep)
+- [ ] PyTorch / nnue-pytorch **single-head** production train (F3) on labeled mini then full volume
 - [ ] Calibrated **PTQ int8** export + tanh LUT (histogram weights, scale onto [-127,127])
 - [ ] Measure fp32→int8 gap — QAT fallback if MSE > 0.01 or Elo drop > 30
 - [ ] L1 gradual pruning 70–80% **during training**; sparse flash export
@@ -72,14 +74,15 @@ Architecture: shared L1 **844 → W** with $W \in \{128, 256\}$ (dense train + *
 
 ---
 
-### D · Bucket ablation (decides scheme)
+### D · Bucket ablation (decides whether to leave single-head)
 
-_Interim (reassessment G3, 2026-07-22): **keep 8-bucket queen-split in code** until this section decides. Blueprint default table lists 4 piece-count-only as a candidate baseline — do not silent-migrate._
+_**F3 (2026-08-03):** production path stays **single head** until this section finishes. Ablation compares single-head baseline vs candidate multi-head partitions (4 piece-count, 8 queen-split, …). Do not silent-migrate multi-head into ship path without locking here + syncing blueprint, `bucket.py`, train/export, docs._
 
-- [ ] Per-bucket eval MSE: **8 queen-split** vs **4 piece-count-only** (and other splits if useful) on teacher-labeled val (natural mix)
-- [ ] Define "decisive vs ambiguous" threshold (e.g. >5% relative MSE change per bucket = decisive; 2–5% or mixed-direction buckets = ambiguous → escalate)
-- [ ] Playing-strength test — **only if** per-bucket results are ambiguous or contradictory
-- [ ] Lock final `NUM_BUCKETS` + router; sync blueprint, `bucket.py`, train/export, docs
+- [ ] Train / eval **single-head** baseline on teacher-labeled val (required arm)
+- [ ] Per-partition eval MSE: **single head** vs **4 piece-count** vs **8 queen-split** (and others if useful) on natural mix
+- [ ] Define "decisive vs ambiguous" threshold (e.g. >5% relative MSE change = decisive; mixed → escalate)
+- [ ] Playing-strength test — **only if** partition MSE results are ambiguous or contradictory
+- [ ] Lock final scheme (`NUM_BUCKETS` = 1 or multi + router); sync blueprint, code, train/export, docs
 
 ---
 

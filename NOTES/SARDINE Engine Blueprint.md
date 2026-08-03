@@ -11,7 +11,7 @@ Chess engine for the **Wio Terminal** — neural evaluation + alpha-beta search,
 
 Playable chess bot on a tiny device: no cloud, no GPU. Extreme optimization and efficiency. Ideally, we will be able to play against it on *Lichess*. 
 
-The hope is also to make a setup where we can later transpose the project to a different filed, for example the bucketing technique based on task vectors.
+The hope is also to make a setup where we can later transpose the project to a different field, for example applying the bucketing technique based on task vectors on other environments.
 
 ---
 
@@ -30,46 +30,24 @@ Node budget reference: Urusov's ESP32 engine (~20 kNps, heuristics-only, ~2023 E
 
 ## Build Pipeline
 
-*Detailed overview in [PROJECT.md](../PROJECT.md) .*
+*Status and detailed checklist: **[PROJECT.md](../PROJECT.md)** only (decision A1). Paths/labels: [ASSETS.md](../ASSETS.md). Doc authority: [ai-feed.md](../ai-feed.md).*
 
-- Run Cfish
-	- Cfish smoke test 
-    
-- First NNUE
-	- Download a NNUE 
-	- Replace the value function that Cfish uses with the new NNUE 
-	- smoke test Hybrid NNUE log
-	- Evaluation with Stockfish
-    
-- Dataset
-	- Download the raw data 
-	- remove duplicate positions 
-	- add Stockfish evaluations to each board state
-	- Clean the data into a single, uniform dataset
-	
-- Train the Network
-	- Train small NNUE 
-	- Thesis idea: Replace the single NNUE with a MoE
-	- Evaluation with Stockfish
+- Run Cfish → First NNUE (stock net baseline) → Dataset → Train student NNUE → On the hardware → Thesis (later)
 
-- On the Hardware
-	- Wio Terminal smoke test
-	- Evaluation with Stockfish  
-	- Connect the Wio to Lichess and play!
-
-- For the Thesis
-	- Compare the new and other techniques 
+Outline only — do not track progress here.
 
 ---
 
 ## Design Decisions
 
+*Architecture authority: this section (decision B1). When interim code diverges, production design below wins unless §D / explicit decision updates it.*
+
 
 ### Runtime (phased)
 
-Pure C engine core (Cfish-style) is the target, but port after the first playable search exists in C++ on PC.
+Pure **C** engine core (Cfish-style) is the device target, after a playable search exists on **PC** in **Python** (`src/tinymlinternship/` — encoder, search, NNUE). Optional C++ is not required on PC.
 
-Rationale: debugging alpha-beta, quiescence, and TT interactions is far faster with a PC toolchain (debugger, sanitizers, perft/eval unit tests) than on Wio hardware. Minimal C++ remains acceptable for TFT/Serial glue on-device.
+Rationale: debugging alpha-beta, quiescence, and TT interactions is far faster with a PC toolchain (debugger, sanitizers, perft/eval unit tests) than on Wio hardware. Minimal C++ remains acceptable for TFT/Serial glue on-device only.
 
 Compiler flags: once the C port lands (build step 6), benchmark `-O3` vs `-Os` on Wio — a free recompile experiment; no decision needed upfront. FIDE 9th place gained significant speed from `-O3` after gutting unused features.
 
@@ -104,27 +82,29 @@ Separate pattern tables: skip for v1. Geometric zeros (impossible pawn ranks, ki
 
 ### Evaluation
 
-Bucketed micro NNUE: `844 → W → 1` with $W \in \{128, 256\}$, dual-perspective, **4** output weight sets (experts) selected by **piece-count** bucket.
+> **Decision F3 (2026-08-03):** production student uses a **single** output head until pipeline **§D (bucket ablation)** finishes. No multi-expert routing in the ship path before D. Legacy 8-head pilots are experimental only.
 
-**L1 shared layer:** train dense ($844 \times W$), applying **gradual pruning during training** up to 70–80% sparsity. Export and store **only non-zero weights** in flash (sparse index + int8 value). All 4 NNUE expert nets share this pruned L1; expert heads differ only in the $2W \rightarrow 1$ output weights. Pick $W$ empirically (128 vs 256) from eval latency on Wio and depth=1 / Elo baselines.
+Micro NNUE (production until D): dual-perspective L1 `844 → W` with $W \in \{128, 256\}$, STM‖Opp concat → **one** head `2W → 1`.
 
-Activations: CReLU on the shared hidden layer ($844 \rightarrow W$); tanh on the final scalar output ($2W \rightarrow 1$ per expert). The tanh is never computed at runtime — apply a precomputed lookup table indexed by the clipped int16 dot-product, mapping to **expected reward** in $[-1, +1]$ (side to move perspective). LUT lives in flash (~1–2 KB for 256–512 entries); training in `nnue-pytorch` uses tanh so export matches inference.
+**L1 shared layer:** train dense ($844 \times W$), applying **gradual pruning during training** up to 70–80% sparsity. Export and store **only non-zero weights** in flash (sparse index + int8 value). Pick $W$ empirically (128 vs 256) from eval latency on Wio and depth=1 / Elo baselines.
 
-Shared accumulator: all experts share the same first hidden layer. The accumulator depends only on board features, not on which output bucket is active — compute it once per position, then route to the correct output head. Matches Stockfish-style bucketed NNUE; incremental add/sub updates stay bucket-agnostic.
+Activations: CReLU on the shared hidden layer ($844 \rightarrow W$); tanh on the final scalar output ($2W \rightarrow 1$). The tanh is never computed at runtime — apply a precomputed lookup table indexed by the clipped int16 dot-product, mapping to **expected reward** in $[-1, +1]$ (side to move perspective). LUT lives in flash (~1–2 KB for 256–512 entries); training in `nnue-pytorch` uses tanh so export matches inference.
 
-**STM reorder:** L1 produces two POV vectors — White and Black accumulators — always in fixed color order. Before the expert head, reorder them so the **first** vector is the **side to move (STM)** and the **second** is the opponent. That keeps the expert head perspective-invariant: training and inference always see “my side ‖ their side,” not “white ‖ black.” When White is to move, the order is white then black; when Black is to move, it swaps.
+Shared accumulator: depends only on board features (dual POV). Incremental add/sub updates; no bucket switch while F3 holds.
 
-**Concatenate (STM ‖ Opp):** stack the reordered pair into one **2W**-dim vector and feed that single vector to the selected expert (`2W → 1`). Concatenation is what turns dual-perspective L1 into the input the output head expects; no extra learned layer — just `cat([stm_h, opp_h])`.
+**STM reorder:** L1 produces two POV vectors — White and Black accumulators — always in fixed color order. Before the output head, reorder them so the **first** vector is the **side to move (STM)** and the **second** is the opponent. That keeps the head perspective-invariant: training and inference always see “my side ‖ their side,” not “white ‖ black.”
+
+**Concatenate (STM ‖ Opp):** stack the reordered pair into one **2W**-dim vector and feed that single vector to the **single** head (`2W → 1`). No extra learned layer — just `cat([stm_h, opp_h])`.
 
 Autoencoder warm-start: skip for v1.
 
-Tactical MoE (`inCheck`, capture threat): defer to v1.x/v2. Bucket switches are already infrequent along a typical game (piece count mostly decreases), so the default 4-bucket piece-count scheme is not leaving large gains on the table — no urgency to add tactical heads earlier.
+Multi-expert / piece-count MoE and tactical MoE (`inCheck`, capture threat): **after** §D (or v1.x/v2). Do not enable routing on the production path before ablation locks a scheme.
 
-### Output buckets
+### Output buckets (ablation candidates only — not production until §D)
 
-> **Interim implementation (2026-07-22 reassessment G3):** code and checkpoints use **8 buckets (piece count + queen-split)** until pipeline step **D (bucket ablation)** locks the scheme. The 4-bucket table below remains the **piece-count-only baseline** for that ablation (and a simpler flash default if ablation prefers it). Do not silent-migrate without updating `bucket.py`, labels, and docs together.
+> **F3:** do **not** train or ship multi-head routing until §D. Store `piece_count` / optional `bucket_id` as **metadata** for analysis and ablation datasets. Candidate partitions below are for **§D comparison** against the single-head baseline.
 
-**Default candidate (v1 table):** **4 buckets** by **piece count only** ($p$ = number of pieces on the board, kings included). 
+**Candidate A — 4 buckets** by **piece count only** ($p$ = pieces on board, kings included):
 
 | Bucket | Condition | Phase |
 | --- | --- | --- |
@@ -133,9 +113,9 @@ Tactical MoE (`inCheck`, capture threat): defer to v1.x/v2. Bucket switches are 
 | 2 | $p \in [22,27]$ | middlegame |
 | 3 | $p \in [28,32]$ | opening |
 
-Fewer heads → less flash for expert weights and simpler training/validation.
+**Candidate B — 8 buckets** (piece count + queen-split): used in early pilot code (`features/bucket.py`); keep as ablation arm only.
 
-Informed by `piece_count_distribution_10k.xlsx` (games ≥ 16 moves). Training keeps the **natural bucket distribution** from Lichess PGNs — no stratified resampling.
+Informed by `data/excel/piece_count_distribution_10k.xlsx` (games ≥ 16 moves). When multi-head is eventually enabled, training keeps the **natural** position distribution from Lichess PGNs — no stratified resampling.
 
 
 ### Later: optimal feature combinations & task vectors
@@ -181,7 +161,7 @@ Killer moves are a complementary heuristic for non-capture moves. The idea: if a
 | Tensor            | Precision    | Note                                                                      |
 | ----------------- | ------------ | ------------------------------------------------------------------------- |
 | L1 weights        | int8         | Sparse in Flash (non-zero only, ~20–30% of $844 \times W$ after pruning)  |
-| Expert weights    | int8         | Dense $2W \times 1$ per bucket, Flash                                     |
+| Output-head weights | int8       | Dense $2W \times 1$ (single head until §D / F3); multi-head only if §D enables |
 | Biases            | int16        | Larger scale needed for offset                                            |
 | Accumulator (RAM) | int16        | $W$ values per POV; lazy add/sub                                          |
 | MAC temporaneo    | int32        | Solo durante il calcolo, non persistito; sparse L1 MAC skips zero weights |
@@ -255,7 +235,7 @@ Move ordering is about the order in which a chess engine tries moves at each nod
 | Lc0 training games  | Supplemento / volume          | Subset filtrato (~1–2 GB locale, non il corpus completo); formato training-data / `.bin` Lc0                                                        |
 | Kaggle  `games.csv` | Smoke test / statistiche      | Già via  `scripts/download_data.py`;  `non` per training NNUE (partite deboli, label outcome)                                                        |
 | Filtro              | Games  ≥ 16 mosse             | Allineato a  `piece_count_distribution_10k.xlsx`                                                                                                     |
-| Resampling          | Natural distribution          | No stratified resampling — routing via piece-count `bucket_id()` (4 buckets default); vedi tabella Output buckets                                   |
+| Resampling          | Natural distribution          | No stratified resampling. Multi-head routing **off** until §D (F3); `bucket_id` optional metadata only until then                                   |
 
 **Teacher v1 (deciso):** Lc0 value head — **latest best network** da [training.lczero.org](https://training.lczero.org/) via `lc0` UCI; `expected_reward = W − L` da WDL nativo. Label on-the-fly (`position fen …` + `eval`). Fallback: Stockfish `UCI_ShowWDL`. Vedi [Models.md](Models.md) · [Datasets.md](Datasets.md).
 
@@ -268,14 +248,14 @@ Prossimi script: survey existing labeled datasets; `scripts/download_lichess.py`
 | **Stage** | **What we do** |
 |-----------|----------------|
 | **Data** | Label positions on‑the‑fly using **Lc0’s latest best network** (UCI, `position fen …` + `eval` → WDL → expected reward `W‑L`). |
-| **Framework** | **nnue‑pytorch** (Stockfish’s training codebase), adapted to SARDINE’s 844‑input / bucketed architecture. |
-| **Bucketing** | No resampling — use the **natural distribution** of bucket frequencies from Lichess PGNs. |
+| **Framework** | **nnue‑pytorch** (Stockfish’s training codebase), adapted to SARDINE’s 844‑input architecture; **single head** until §D (F3). PC pilot: `scripts/train_nnue.py`. |
+| **Bucketing** | **Off for production train (F3)** until §D ablation. Metadata may record piece count; no multi-expert routing. |
 | **L1 width & sparsity** | Train **dense** (`W = 128` or `256`), then apply **gradual pruning during training** up to 70‑80% sparsity (weights are gradually zeroed over epochs). |
 | **Quantization** | **PTQ only** initially (calibrated int8 export). If the FP32→int8 gap exceeds threshold (MSE > 0.01 or Elo drop >30), we trigger QAT as a fallback. |
 | **Validation** | Train for a **fixed 100 epochs**; save the best checkpoint (by validation loss) and also keep the final model. |
 | **Baseline check** | Run **depth‑1 matches** against weak reference engines (e.g., Sunfish, heuristic‑only) to confirm label/NNUE quality before investing in full search. |
 | **Tuning** | Use **SPSA** only on **search parameters** (pruning thresholds, LMR depth, null‑move, etc.) — no NNUE eval‑scaling tuning. |
-| **Export** | **nnue‑pytorch export script** that outputs sparse int8 L1 weights, dense int8 expert weights, and a tanh LUT for final evaluation on the Wio. |
+| **Export** | **nnue‑pytorch export script** that outputs sparse int8 L1 weights, dense int8 output-head weights (single head until §D), and a tanh LUT for final evaluation on the Wio. |
 
 
 ### I/O
@@ -297,7 +277,7 @@ If the primary NNUE + search plan fails to reach 1700 Elo, the following fallbac
 | 1     | Eval > 3ms     | Reduce $W$ 256→128 (or prune harder) | Retrain (2d)      |
 | 2     | Depth < 6      | Reduce TT 128→64 KB        | Recompile (1h)    |
 | 3     | Elo < 1600     | Aggressive pruning tuning  | SPSA (2d)         |
-| 4     | Still < 1600   | Remove MoE → single expert | Retrain (5d)      |
+| 4     | Still < 1600   | If multi-head was enabled post-§D, collapse to **single** head; else prune harder / smaller $W$ | Retrain (5d) |
 | 5     | Still < 1500   | No-NNUE heuristics-only    | Rewrite eval (2w) |
 | 6     | < 4 weeks left | Material-only eval         | Simplify (1w)     |
 
@@ -341,7 +321,7 @@ Device-only benchmarking is **not** the primary loop before the port; PC numbers
 
 - Self-play (or fixed agent recipe) → PGN → Stockfish analyzes each move → average centipawn loss.
 - Mapping (documented heuristic): \(\mathrm{Elo}_{acpl} \approx 2855 - 10 \times \mathrm{ACPL}\), with project floor/cap as implemented in `eval_bot_acpl.py`.
-- **Judge:** Stockfish at **fixed depth** (not movetime) for cross-machine stability; pin binary under `models/teacher/stockfish/` and record version + depth in every run manifest.
+- **Judge:** Stockfish at **fixed depth** (not movetime) for cross-machine stability; resolve binary via **PATH / `STOCKFISH_PATH` / `--stockfish`** (not shipped in-repo — decision I1). Record version + depth in every run manifest.
 - Multi-game runs preferred for σ; report range / CI when \(n\) is small.
 
 #### Match track (gates)

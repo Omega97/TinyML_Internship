@@ -3,8 +3,9 @@
 Quick map of **datasets**, **models**, and **scripts** used by the SARDINE pipeline.  
 Paths are relative to the project root. Run commands with `py -3.12` from the root unless noted.
 
-Longer command recipes: [NOTES/Commands.md](NOTES/Commands.md) · data notes: [NOTES/Datasets.md](NOTES/Datasets.md) · teachers: [NOTES/Models.md](NOTES/Models.md) · blueprint: [NOTES/SARDINE Engine Blueprint.md](NOTES/SARDINE%20Engine%20Blueprint.md).
+Longer command recipes: [NOTES/Commands.md](NOTES/Commands.md) · data notes: [NOTES/Datasets.md](NOTES/Datasets.md) · teachers: [NOTES/Models.md](NOTES/Models.md) · blueprint: [NOTES/SARDINE Engine Blueprint.md](NOTES/SARDINE%20Engine%20Blueprint.md) · progress: [PROJECT.md](PROJECT.md) · authority: [ai-feed.md](ai-feed.md).
 
+**Label + data contract authority (C1 / E1).** Progress checklist: PROJECT only (A1). Architecture: blueprint (B1).
 ---
 
 ## Ideal final training set (production target)
@@ -42,7 +43,8 @@ Train/val loaders must read **only** `expected_reward` as `target` — never `be
 
 - Prefer games with **≥ 16 full moves** (aligned with piece-count study / blueprint).
 - Optional opening skip: e.g. `min_ply ≥ 32` globally, relaxed for bucket 7 (`p=32`) so early-game density is not zero.
-- **Natural bucket distribution** — keep the empirical frequencies from the source games; do **not** force 1/8 per bucket for training (queen-split `bucket_id` is for routing only).
+- **Natural position distribution** — keep empirical frequencies from source games; do **not** stratify for multi-head balance.
+- **`bucket_id` / piece_count** — store as **metadata** for analysis and future §D ablation; **production student is single-head until §D (F3)** — do not require multi-expert routing at train time.
 - Sample every position or every *N* plies (`--sample-every`) for volume control; document the choice in the dataset manifest.
 
 ### Who labels (teacher)
@@ -97,7 +99,7 @@ Each training row is one position. **Required columns for production train:**
 | ------ | ---- | ------- |
 | `fen` | string | Standard FEN (legal position) |
 | `expected_reward` | float32 | Teacher label, **White POV**, range **[-1, +1]** |
-| `bucket_id` | int8 | SARDINE router bucket `0…7` (`features/bucket.py`) |
+| `bucket_id` | int8 | Optional metadata (e.g. piece-count / queen-split id from `features/bucket.py`); **not** used for multi-head routing until §D locks a scheme (**F3**) |
 | `piece_count` | int8 | Pieces on board (kings included), 2…32 |
 | `has_queen` | bool | Either side still has a queen |
 | `stm_white` | bool | Side to move is White (derivable from FEN; store for loaders) |
