@@ -4,101 +4,103 @@
 
 Chess engine for the **Wio Terminal**: neural evaluation + alpha-beta search, maximizing **Elo per byte** under **192 KB RAM** / **~500 KB flash**. No cloud, no GPU. Target: playable bot (ideally on *Lichess*).
 
-| Doc | Role |
-| --- | ---- |
-| [NOTES/SARDINE Engine Blueprint.md](NOTES/SARDINE%20Engine%20Blueprint.md) | Spec, architecture, pipeline, design decisions |
-| [TODOs.md](TODOs.md) | Checkpoint checklist vs blueprint (**progress source of truth**) |
-| Daily notes | Session plan + execution log under `DAILY-NOTES/` (**local / gitignored**) |
-| [ASSETS.md](ASSETS.md) | Paths, teachers, label uniformity |
-| [Goal.md](Goal.md) | Short mission statement |
-| [ai-feed.md](ai-feed.md) | Slim code map for agents |
-| [NOTES/Thesis.md](NOTES/Thesis.md) | Later research: task vectors / optimal bucketing |
+| Doc                                                                        | Role                                                                       |
+| -------------------------------------------------------------------------- | -------------------------------------------------------------------------- |
+| [NOTES/SARDINE Engine Blueprint.md](NOTES/SARDINE%20Engine%20Blueprint.md) | Spec, architecture, pipeline, design decisions                             |
+| [TODOs.md](TODOs.md)                                                       | Checkpoint checklist vs blueprint (**progress source of truth**)           |
+| [ASSETS.md](ASSETS.md)                                                     | Paths, teachers, label uniformity                                          |
+| [Goal.md](Goal.md)                                                         | Short mission statement                                                    |
+| [ai-feed.md](ai-feed.md)                                                   | Slim code map for agents                                                   |
+| [NOTES/Thesis.md](NOTES/Thesis.md)                                         | Later research: task vectors / optimal bucketing                           |
 
 Inspiration from [Kaggle Challenge](https://www.kaggle.com/competitions/fide-google-efficiency-chess-ai-challenge/writeups/linrock-my-solution-cfish-nnue-data-1st), [repo](https://github.com/linrock/minifish)
 
 ---
 
-## Overview
+## Progress Overview
 
-Build a complete, playable chess bot that runs **entirely on-device** on the Seeed Wio Terminal. Primary path: PC bring-up (Python search + training) → pure **C** core on device. Spec: blueprint.
 
-## Goals
+_Progress vs repo as of ~2026-08-01. Checklist marks work that is **done enough to build on**; italics flag caveats or disagreements with later blueprint sections. Detailed gates live in [TODOs.md](../TODOs.md) / [PROJECT.md](../PROJECT.md)._
 
-- **Primary:** ≥ **1700 Elo** on-device (match gate), best move within **~1 s**
-- **Secondary:** Reproducible train → export → device pipeline; minimal UCI for engine-vs-engine tests
-- **Non-goals (v1):** MCTS · policy net · opening book · full UCI polish · tactical MoE · Grapheus/QAT by default · MicroChess stack surfing
+### Run Cfish
 
-## Key design decisions
+- [x] Cfish smoke test 
+	- `src/cfish/cfish.exe` · launcher `run-cfish.bat` · notes `NOTES/Cfish.md`
+	- UCI `uciok` / `readyok` verified (2026-07-31)
+	- *Formal `go depth 5` → `bestmove` recipe + archived **nps** bench still thin; `scripts/cfish.py` still has a stale `./cfish` path.*
 
-| Topic | Decision |
-| ----- | -------- |
-| **Search** | Alpha-beta (not MCTS); PC skeleton first, then C on Wio |
-| **Eval** | Bucketed micro NNUE: shared L1 `844 → W` ($W \in \{128,256\}$), dual POV, expert heads `2W → 1` |
-| **Buckets (interim G3)** | **Code ships 8** (piece count + queen-split). Blueprint default table is **4** piece-count-only. **Keep 8 until §D ablation** decides; do not silent-migrate |
-| **Labels** | Teacher **`expected_reward`** only (Lc0 WDL → White POV $[-1,+1]$) — never mix `best_q` / game result |
-| **Train framework (target)** | nnue-pytorch adapted; **now:** `scripts/train_nnue.py` (pilot + mini prod) |
-| **Quantization** | PTQ int8 first; QAT only if MSE/Elo gap too large |
-| **Stockfish (ACPL judge)** | **System PATH / `STOCKFISH_PATH` only** — no in-repo binary |
-| **HF study nets** | Code kept; **weights not shipped** (re-download if needed) |
-| **Legacy pre-SARDINE** | **Removed** (2026-07-22) |
-| **ChessBench** | Smoke / pilot wiring only — not production train |
-| **Daily notes** | `DAILY-NOTES/` only, **gitignored** |
+### First NNUE
 
-## Development guidelines
+- [x] Download a NNUE 
+	- `src/cfish/nn-62ef826d1a6d.nnue` (also `make net` in `src/cfish/`)
+	- [URL](https://tests.stockfishchess.org/api/nn/nn-62ef826d1a6d.nnue)
+	- *This is the **stock Stockfish-family** net shipped with Cfish — not a SARDINE-trained student.*
+	
+- [x] Replace the value function that Cfish uses with the new NNUE 
+	- Default: `DefaultEvalFile` / INCBIN in `src/cfish/` (`evaluate.h`, `nnue.c`)
+	- *No extra patch required for the stock net. Wiring a **custom SARDINE** `.nnue` into Cfish is a different (later) step — device path is still “own C port,” not necessarily Cfish-hosted student weights.*
+	  
+- [x] smoke test Hybrid NNUE log
+	- Hybrid NNUE evaluation using the new NNUE (Cfish `Use NNUE` hybrid with EvalFile present)
+	- *UCI smoke with net on disk is done; a dedicated hybrid-only log / nps artifact is not archived yet.*
+	  
+- [ ] Evaluation with Stockfish
+	- 10 quick self-play games + run the engine on every move to get the 5 biggest blunders
+	- benchmark the nps
+	- *Stack ready: `scripts/eval_bot_acpl.py` (top-5 CPL) + self-play recorders. **Cfish** self-play + ACPL still open (carry-over 2026-08-01). ACPL gates already exist for HCE / pilot NNUE / Sunfish / Lc0 under `plots/PGN_and_JSON/`.*
 
-- **Python:** 3.12; `pip install -e ".[train,viz]"` as needed
-- **Tests:** `py -3.12 -m pytest tests/ -q` after code changes
-- **Progress:** update `TODOs.md` checkboxes; write a daily note under `DAILY-NOTES/YYYY-MM/` each work session
-- **Labels:** follow [ASSETS.md](ASSETS.md) uniformity rule
-- **No scope creep:** defer blueprint non-goals until Elo gate
+### Dataset
 
-## Current status & roadmap
+- [x] Download the raw data 
+	- engine games + human games, to have good coverage
+	- mainly board positions
+	- *Lc0 chunks ~1.1 GiB in `data/raw/lc0/` (`scripts/download_lc0.py`). Human side is only **smoke** (`data/raw/lichess_smoke50.pgn`) — full Lichess monthly dump under `data/raw/lichess/` **not** downloaded. ChessBench bags = encoder smoke only.*
+	  
+- [ ] remove duplicate positions 
+	- but keep track of the multiplicity, so we may use it later
+	- *No dedicated dedup + multiplicity pass in the data pipeline yet.*
+	  
+- [x] add Stockfish evaluations to each board state
+	- data is a list of board-eval pairs
+	- if Stockfish returns centipawns then we will stick with that
+	- ***Disagrees with §Training data / ASSETS:** train labels are **not** Stockfish centipawns — they are **Lc0** WDL → **`expected_reward`** White POV ∈ \([-1,+1]\) (`scripts/label_positions.py`, teacher `791556`). Stockfish is the **ACPL / match judge** only. Mini blocks labeled: `lichess_labeled` + `lc0_labeled`.*
+	  
+- [x] Clean the data into a single, uniform dataset
+	- list of $(s, v)$ pairs
+	- *Done as `data/processed/labeled/{train,val}.parquet` + `manifest.json` (~5.3k / 214 rows, seed 42). Uniform on **`expected_reward` only**. Scale is **mini/smoke**, not production \(10^5\)–\(10^6+\).*
+    
 
-| Scope | Bar | % | Note |
-| ----- | --- | - | ---- |
-| **v1 → Elo gate** | `████░░░░░░` | **~38%** | Encoder + PC search + mini train path; no device, no full search stack, no match gate |
-| **Device ship** | `░░░░░░░░░░` | **0%** | Wio port not started |
+### Train the Network
 
-| Step | Bar | % | Status |
-| ---- | --- | - | ------ |
-| **A** · Feature encoder | `█████████░` | **88%** | 844 dual POV + 8 buckets ✅ · device parity with F |
-| **B** · Search skeleton PC | `████████░░` | **75%** | v0.3 αβ + qsearch + MVV-LVA + NNUE hook · TT / nodes/s ❌ |
-| **C** · Train bucketed NNUE | `██████░░░░` | **55%** | Mini labels + merge + smoke train ✅ · full volume / nnue-pytorch / prune / PTQ ❌ |
-| **C1** · Teacher@d1 baseline | `██░░░░░░░░` | **20%** | Tooling exists · systematic ladder not done |
-| **D** · Bucket ablation | `░░░░░░░░░░` | **0%** | Decides 8 queen-split vs 4 piece-count (and peers) |
-| **D2** · Optimal bucketing | `░░░░░░░░░░` | **0%** | Later — Thesis.md |
-| **E–F** · Accumulators / C port | `░░░░░░░░░░` | **0%** | After stronger PC net + search |
-| **G** · Full search stack | `███░░░░░░░` | **25%** | qsearch + MVV-LVA ✅ · rest open |
-| **H** · Elo gate ≥1700 | `░░░░░░░░░░` | **0%** | ACPL heuristic only today |
+- [x] Train small NNUE 
+	- input layer + 2 hidden layers + output layer, standard input shape
+	- ***Disagrees with §NNUE Architecture:** trained net is **bucketed** micro-NNUE — shared L1 `844 → W=128` + **8** expert heads `2W → 1` (not plain 2-hidden). Via `scripts/train_nnue.py`; checkpoints `models/checkpoints/nnue/pilot_W128_844/` (ChessBench pilot) and `smoke_prod_W128_844/` (mini labeled). nnue-pytorch adapt, gradual L1 prune, PTQ export still open.*
+      
+- [ ] Thesis idea: Replace the single NNUE with a MoE
+	- training by bucketing the states based on the task vectors for each data point
+	- *Runtime already multi-expert (piece-count + queen-split, interim **8** buckets until §D). Task-vector / dispatcher research is **later** ([Thesis.md](Thesis.md), §Later) — not blocking v1 Elo gate.*
+      
+- [x] Evaluation with Stockfish
+	- 10 quick self-play games + run the engine on every move to get the 5 biggest blunders
+	- bench the nps
+	- *ACPL self-play for pilot NNUE archived (`plots/PGN_and_JSON/nnue_d1_gate*`; top-5 CPL in `eval_bot_acpl.py`). Not a full closed package for every checkpoint; **nps** microbench still open (TODOs §B). Known issue: NNUE d2 ACPL collapse vs d1.*
 
-**Critical path (next):** longer mini-set train → d1 ACPL → full Lichess volume + re-label → nnue-pytorch/prune/PTQ → TT/nodes/s → search polish → device.
+### On the Hardware
 
-**Known issues:** NNUE d2 ACPL collapse vs d1 (2026-07-20 notes); val set thin for per-bucket metrics; blueprint 4-bucket table vs code 8-bucket until D.
+- [ ] Wio Terminal smoke test 
+	- *Legacy pre-SARDINE Wio sketches removed (2026-07-22). Device work restarts with C-port steps E–F — not started.*
+      
+- [ ] Evaluation with Stockfish
+	- 30 self-play games
+	- bench the nps
+      
+- [ ] Connect the Wio to Lichess and play!
 
-## Deliverables
+## For the Thesis
 
-| Priority | Deliverable |
-| -------- | ----------- |
-| **P0** | Playable PC engine + production-labeled train set + NNUE checkpoint |
-| **P0** | Search stack + TT; Elo **match** path toward ≥1700 |
-| **P0** | C port on Wio @ ~1 s/move with parity |
-| **P1** | Minimal UCI; bucket ablation (D); PTQ export |
-| **P2** | Policy head / book / thesis bucketing (after gate) |
-
-## Reassessment cleanup (2026-07-22)
-
-| Decision | Action |
-| -------- | ------ |
-| A4 | Hard-deleted `legacy/pre-sardine/` |
-| B3 | Stockfish via PATH / env only |
-| C2 | Removed `models/teacher/hf/` weights; code kept |
-| D1 | Cleared local `terminals/` |
-| E3 | Daily notes only under `DAILY-NOTES/` (gitignored); moved 07-20/07-21 there |
-| F1 | Kept ChessBench smoke path |
-| G3 | Stay on **8** buckets until ablation D |
-| H2 | PROJECT = status; Goal short; Report archived; ai-feed slimmed |
-| I1 | Removed empty `core/`, `evaluation/`, `datasets/`, `models/` packages + stale pyc |
-| J1 | Kept all `images/games/` demos |
+- [ ] Compare the new and other techniques 
+	- bucketing through task vectors vs clustering directly through embeddings
+	- *After a working base NNUE + Elo path; see §Later: optimal feature combinations & task vectors.*
 
 ---
 

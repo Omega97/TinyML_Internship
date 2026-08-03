@@ -28,74 +28,37 @@ Node budget reference: Urusov's ESP32 engine (~20 kNps, heuristics-only, ~2023 E
 
 ---
 
-## Project Overview - the Build Pipeline
+## Build Pipeline
 
+*Detailed overview in [PROJECT.md](../PROJECT.md) .*
 
-### Run Cfish
-
-- [ ] Cfish smoke test 
-	-  #todo script path; UCI `uciok`, `go depth 5` → `bestmove`, 
-	- benchmark the nps
-
-### First NNUE
-
-- [ ] Download a NNUE 
-	- #todo file path; [URL](https://tests.stockfishchess.org/api/nn/nn-62ef826d1a6d.nnue) ; also `make net` in `src/`
-	
-- [ ] Replace the value function that Cfish uses with the new NNUE 
-	- #todo file path
-	  
-- [ ] smoke test Hybrid NNUE log
-	- Hybrid NNUE evaluation using the new NNUE
-	  
-- [ ] Evaluation with Stockfish
-	- 10 quick self-play games + run the engine on every move to get the 5 biggest blunders
-	- benchmark the nps
-	- #todo script path
-
-### Dataset
-
-- [ ] Download the raw data 
-	- engine games + human games, to have good coverage
-	- mainly board positions
-	  
-- [ ] remove duplicate positions 
-	- but keep track of the multiplicity, so we may use it later
-	  
-- [ ] add Stockfish evaluations to each board state
-	- data is a list of board-eval pairs
-	- if Stockfish returns centipawns then we will stick with that
-	  
-- [ ] Clean the data into a single, uniform dataset
-	- list of $(s, v)$ pairs
+- Run Cfish
+	- Cfish smoke test 
     
+- First NNUE
+	- Download a NNUE 
+	- Replace the value function that Cfish uses with the new NNUE 
+	- smoke test Hybrid NNUE log
+	- Evaluation with Stockfish
+    
+- Dataset
+	- Download the raw data 
+	- remove duplicate positions 
+	- add Stockfish evaluations to each board state
+	- Clean the data into a single, uniform dataset
+	
+- Train the Network
+	- Train small NNUE 
+	- Thesis idea: Replace the single NNUE with a MoE
+	- Evaluation with Stockfish
 
-### Train the Network
+- On the Hardware
+	- Wio Terminal smoke test
+	- Evaluation with Stockfish  
+	- Connect the Wio to Lichess and play!
 
-- [ ] Train small NNUE 
-	- input layer + 2 hidden layers + output layer, standard input shape
-      
-- [ ] Thesis idea: Replace the single NNUE with a MoE
-	- training by bucketing the states based on the task vectors for each data point
-      
-- [ ] Evaluation with Stockfish
-	- 10 quick self-play games + run the engine on every move to get the 5 biggest blunders
-	- bench the nps
-
-### On the Hardware
-
-- [ ] Wio Terminal smoke test 
-      
-- [ ] Evaluation with Stockfish
-	- 30 self-play games
-	- bench the nps
-      
-- [ ] Connect the Wio to Lichess and play!
-
-## For the Thesis
-
-- [ ] Compare the new and other techniques 
-	- bucketing through task vectors vs clustering directly through embeddings
+- For the Thesis
+	- Compare the new and other techniques 
 
 ---
 
