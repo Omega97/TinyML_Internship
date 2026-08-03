@@ -11,7 +11,7 @@ Chess engine for the **Wio Terminal** — neural evaluation + alpha-beta search,
 
 Playable chess bot on a tiny device: no cloud, no GPU. Extreme optimization and efficiency. Ideally, we will be able to play against it on *Lichess*. 
 
-The hope is also to make a setup where we can later transpose the project to a different filed (accumulator layers + world models?)
+The hope is also to make a setup where we can later transpose the project to a different filed, for example the bucketing technique based on task vectors.
 
 ---
 
@@ -28,25 +28,74 @@ Node budget reference: Urusov's ESP32 engine (~20 kNps, heuristics-only, ~2023 E
 
 ---
 
-## Build Pipeline
+## Project Overview - the Build Pipeline
 
-```mermaid
-flowchart TD
-    A["Feature encoder<br/>PC + device parity"] --> B["Search skeleton in C++ on PC<br/>perft · eval hooks · TT format benchmark"]
-    B --> C["Train bucketed NNUE<br/>Lichess + Lc0 · Lc0 latest net labels<br/>dense L1 W=128/256 · gradual prune 70–80%<br/>games ≥ 16 · nnue-pytorch · sparse int8 export"]
-    C --> C1["Teacher-only depth=1 baseline<br/>playing strength vs weak engines"]
-    C1 --> D["Bucket ablation (optional)<br/>4 piece-count vs other split types 8<br/>per-bucket eval MSE"]
-    D --> D2["Later: optimal bucketing<br/>task-vector diversity search<br/>(see Output buckets)"]
-    D2 --> E["Incremental accumulators<br/>on device"]
-    E --> F["Port search + NNUE to C<br/>benchmark -O3 vs -Os"]
-    F --> G["Full search stack + tuning<br/>quiescence · futility · LMR · null-move ·<br/>killer moves · lazy eval · iterative deepening · SPSA"]
-    G --> H{"Elo gate<br/>≥ 1700?"}
-    H -- "No" --> I["Iterate:<br/>SCReLU · quantization-aware training ·<br/>TT format · bucket scheme"]
-    I --> G
-    H -- "Yes" --> J["v2 scope<br/>minimal UCI polish · policy head ·<br/>SCReLU / QAT / transformer only if needed"]
-    style H fill:#f9d,stroke:#333,stroke-width:2px
-    style J fill:#bfb,stroke:#333,stroke-width:2px
-```
+
+### Run Cfish
+
+- [ ] Cfish smoke test 
+	-  #todo script path; UCI `uciok`, `go depth 5` → `bestmove`, 
+	- benchmark the nps
+
+### First NNUE
+
+- [ ] Download a NNUE 
+	- #todo file path; [URL](https://tests.stockfishchess.org/api/nn/nn-62ef826d1a6d.nnue) ; also `make net` in `src/`
+	
+- [ ] Replace the value function that Cfish uses with the new NNUE 
+	- #todo file path
+	  
+- [ ] smoke test Hybrid NNUE log
+	- Hybrid NNUE evaluation using the new NNUE
+	  
+- [ ] Evaluation with Stockfish
+	- 10 quick self-play games + run the engine on every move to get the 5 biggest blunders
+	- benchmark the nps
+	- #todo script path
+
+### Dataset
+
+- [ ] Download the raw data 
+	- engine games + human games, to have good coverage
+	- mainly board positions
+	  
+- [ ] remove duplicate positions 
+	- but keep track of the multiplicity, so we may use it later
+	  
+- [ ] add Stockfish evaluations to each board state
+	- data is a list of board-eval pairs
+	- if Stockfish returns centipawns then we will stick with that
+	  
+- [ ] Clean the data into a single, uniform dataset
+	- list of $(s, v)$ pairs
+    
+
+### Train the Network
+
+- [ ] Train small NNUE 
+	- input layer + 2 hidden layers + output layer, standard input shape
+      
+- [ ] Thesis idea: Replace the single NNUE with a MoE
+	- training by bucketing the states based on the task vectors for each data point
+      
+- [ ] Evaluation with Stockfish
+	- 10 quick self-play games + run the engine on every move to get the 5 biggest blunders
+	- bench the nps
+
+### On the Hardware
+
+- [ ] Wio Terminal smoke test 
+      
+- [ ] Evaluation with Stockfish
+	- 30 self-play games
+	- bench the nps
+      
+- [ ] Connect the Wio to Lichess and play!
+
+## For the Thesis
+
+- [ ] Compare the new and other techniques 
+	- bucketing through task vectors vs clustering directly through embeddings
 
 ---
 
