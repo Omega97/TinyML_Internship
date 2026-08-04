@@ -36,6 +36,7 @@ Same spine as [PROJECT.md](PROJECT.md) §Progress Overview (**A1** — sole prog
 | Wio port / on-device gate | Not started |
 
 **Progress:** [PROJECT.md](PROJECT.md)  
+**Eng micro-gates:** [TODOs.md](TODOs.md) (mapped to PROJECT sections)  
 **Architecture:** [NOTES/SARDINE Engine Blueprint.md](NOTES/SARDINE%20Engine%20Blueprint.md)  
 **Labels / paths:** [ASSETS.md](ASSETS.md)  
 **Which file wins:** [ai-feed.md](ai-feed.md)
