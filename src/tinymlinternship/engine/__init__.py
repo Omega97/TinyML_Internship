@@ -4,6 +4,7 @@ from tinymlinternship.engine.eval_factory import EVAL_CHOICES, make_eval_fn
 from tinymlinternship.engine.eval_hce import evaluate_hce
 from tinymlinternship.engine.eval_lc0 import Lc0Teacher, evaluate_lc0_teacher
 from tinymlinternship.engine.eval_nnue import NnueEvaluator, evaluate_nnue
+from tinymlinternship.engine.eval_random import evaluate_random
 from tinymlinternship.engine.perft import perft
 from tinymlinternship.engine.search import EvalFn, SearchResult, search, search_best_move
 
@@ -19,6 +20,7 @@ __all__ = [
     "evaluate_hce",
     "evaluate_lc0_teacher",
     "evaluate_nnue",
+    "evaluate_random",
     "make_eval_fn",
     "perft",
     "search",

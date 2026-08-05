@@ -9,9 +9,10 @@ import chess
 from tinymlinternship.engine.eval_hce import evaluate_hce
 from tinymlinternship.engine.eval_lc0 import evaluate_lc0_teacher
 from tinymlinternship.engine.eval_nnue import evaluate_nnue
+from tinymlinternship.engine.eval_random import evaluate_random
 from tinymlinternship.engine.search import EvalFn
 
-EVAL_CHOICES = ("hce", "nnue", "lc0")
+EVAL_CHOICES = ("hce", "nnue", "lc0", "random")
 
 
 def make_eval_fn(
@@ -30,4 +31,6 @@ def make_eval_fn(
         return _nnue_eval
     if name == "lc0":
         return evaluate_lc0_teacher
+    if name == "random":
+        return evaluate_random
     raise ValueError(f"unknown eval backend: {name!r} (choices: {', '.join(EVAL_CHOICES)})")

@@ -48,6 +48,8 @@ def engine_player_label(
         return f"nnue-{stem}-d{depth}"
     if eval_backend == "lc0":
         return f"lc0-d{depth}"
+    if eval_backend == "random":
+        return f"random-d{depth}"
     return slug_name(eval_backend)
 
 
