@@ -150,23 +150,118 @@ Meeting all'ufficio del prof. Zennaro
 
 ## 29 Giugno - 5 Luglio
 
-- **Catalogo modelli** — consolidata la ricerca HF in [NOTES/Models.md](../Models.md): confronto per famiglia (Dense/Conv, ResNet, Transformer, NNUE, Lc0 edge) con parametri, file size e fattibilità su Wio. Conclusione: i modelli HF (8–100M params) sono fuori budget; NNUE e dual-head custom restano le direzioni più promettenti.
-- **Transformer compatto** — definita in [NOTES/chess transformer.md](../chess%20transformer.md) un'architettura policy+value a **~210K parametri** (input `24×8×8`, 2 blocchi transformer, policy 2048 + value tanh) — ~165× più piccola di ChessBot (34.7M).
-- **FIDE & Google Challenge** — analizzate le soluzioni top sotto vincoli estremi (5 MiB RAM, binario ≤ 64 KiB): micro-NNUE, king mirroring, geometric pruning, SPSA tuning. Note: [FIDE & Google Efficient Chess AI Kaggle Challenge](https://www.kaggle.com/competitions/fide-google-efficiency-chess-ai-challenge).
-- **NNUE deep-dive** — nota dedicata su architettura, aggiornamenti incrementali e quantizzazione: [NOTES/NNUE.md](../NNUE.md).
-- **Analisi dataset** — distribuzione piece-count su 1k e 10k partite Lichess (`piece_count_distribution.xlsx`, `piece_count_distribution_10k.xlsx`); usata per progettare i bucket bilanciati del training.
-- **SARDINE blueprint** — decisioni in [NOTES/SARDINE Engine Blueprint.md](../SARDINE%20Engine%20Blueprint.md); catalogo opzioni in [SARDINE design options.md](../SARDINE%20design%20options.md). Vedi sezione [SARDINE Pipeline](../../README.md#sardine-pipeline) nel README.
-- **1 Luglio** — avvio pipeline SARDINE: pre-SARDINE messo da parte; encoder 716 in `src/tinymlinternship/features/`. Daily note: [2026-07-01.md](../../DAILY-NOTES/2026-07/2026-07-01.md).
-- **2 Luglio** — step 1 chiuso (golden FEN, 29 test); **engine v0.1** (HCE + 1-ply search); self-play registrato in **`sardine_game.gif`** via pygame + gifpgn. Daily note: [2026-07-02.md](../../DAILY-NOTES/2026-07/2026-07-02.md).
-- **3 Luglio** — Lc0 subset scaricato (~1.15 GiB, 54k chunk); parser V6→FEN; pipeline preprocess (stats + pilot parquet 1k posizioni, no SF labels). Encoder/engine SARDINE invariati (HCE + 1-ply). Daily note: [2026-07-03.md](../../DAILY-NOTES/2026-07/2026-07-03.md).
+*Daily notes: [06-29](../../DAILY-NOTES/2026-06/2026-06-29.md), [06-30](../../DAILY-NOTES/2026-06/2026-06-30.md), [07-01](../../DAILY-NOTES/2026-07/2026-07-01.md), [07-02](../../DAILY-NOTES/2026-07/2026-07-02.md), [07-03](../../DAILY-NOTES/2026-07/2026-07-03.md); 07-04 vuota.*
+
+- **Catalogo modelli** — consolidata la ricerca HF in [NOTES/Models.md](../Models.md): Dense/Conv, ResNet, Transformer, NNUE, Lc0 edge; i modelli HF (8–100M params) restano fuori budget Wio.
+- **Transformer compatto** — [NOTES/chess transformer.md](../chess%20transformer.md): policy+value **~210K** params (`24×8×8`, 2 blocchi) — ~165× più piccolo di ChessBot.
+- **FIDE & Google Challenge** — top writeup sotto 5 MiB RAM / ≤64 KiB binario: micro-NNUE, king mirroring, geometric pruning, SPSA. [Kaggle](https://www.kaggle.com/competitions/fide-google-efficiency-chess-ai-challenge).
+- **NNUE deep-dive** — [NOTES/NNUE.md](../NNUE.md); piece-count study su Lichess (`piece_count_distribution*.xlsx`) per i bucket.
+- **30/6 — Blueprint SARDINE locked** — scelte componente in [SARDINE Engine Blueprint.md](../SARDINE%20Engine%20Blueprint.md) + [design options](../SARDINE%20design%20options.md): pure C target, micro-NNUE, alpha-beta ladder, int8/CReLU, TT-dominant RAM, Lc0 data.
+- **1/7 — Pipeline SARDINE avviata** — pre-SARDINE archiviato in `legacy/pre-sardine/`; encoder **716** (`index_map`, `mirror`, `encoder`, `bucket`) in `src/tinymlinternship/features/`.
+- **2/7 — Step 1 gate + engine v0.1** — golden FEN (29 test features); HCE + 1-ply; self-play GIF `sardine_game.gif` (pygame + gifpgn).
+- **3/7 — Search v0.3 + dati Lc0** — perft d5 startpos; alpha-beta + capture quiescence; download Lc0 ~1.15 GiB / 54 866 chunk; parser V6→FEN; pilot `positions.parquet` (no label SF). **66 test** passanti a fine giornata.
 
 #### Repo work
-- Features: `src/tinymlinternship/features/` — 844 encoder (716 base + tactical 128), bucket router, 33+ tests
-- Engine: `src/tinymlinternship/engine/` — HCE + `search_best_move` (v0.1)
-- Visualization: `src/tinymlinternship/visualization/` + [scripts/record_engine_game.py](../../scripts/record_engine_game.py) → `sardine_game.gif`
-- Notes: [NOTES/Models.md](../Models.md), [NOTES/chess transformer.md](../chess%20transformer.md), [NOTES/NNUE.md](../NNUE.md), [NOTES/SARDINE Engine Blueprint.md](../SARDINE%20Engine%20Blueprint.md), [FIDE & Google Efficient Chess AI Kaggle Challenge.md](https://www.kaggle.com/competitions/fide-google-efficiency-chess-ai-challenge)
-- Data analysis: [scripts/plot_piece_count_distribution.py](../../scripts/plot_piece_count_distribution.py) → `piece_count_distribution.xlsx`, `piece_count_distribution_10k.xlsx`
-- Archive: pre-SARDINE export pipeline / `Wio_TinyValueTest` (later removed from the tree; see git history)
+- Features: `src/tinymlinternship/features/` — 716 dual-POV + 8 queen-split buckets
+- Engine: `engine/eval_hce.py`, `search.py` (v0.3), `perft.py`
+- Visualization + [scripts/record_engine_game.py](../../scripts/record_engine_game.py)
+- Data: [scripts/download_lc0.py](../../scripts/download_lc0.py), `prepare_lc0_dataset.py`, [NOTES/Lc0 preprocessing pipeline.md](../Lc0%20preprocessing%20pipeline.md)
+- Notes: Models, chess transformer, NNUE, Blueprint, FIDE challenge; piece-count plots
+
+---
+
+## 6-12 Luglio
+
+*Daily notes: [07-06](../../DAILY-NOTES/2026-07/2026-07-06.md), [07-07](../../DAILY-NOTES/2026-07/2026-07-07.md), [07-08](../../DAILY-NOTES/2026-07/2026-07-08.md), [07-10](../../DAILY-NOTES/2026-07/2026-07-10.md).*
+
+Settimana del **primo NNUE pilot**, del **gate ACPL** e dell'encoder tattico **844**.
+
+- **6/7 — Teacher + ChessBench** — install Lc0 teacher (`download_teacher.py`, rete `fast`/791556); bench HF (chess_lite ~2 ms/eval ma gioco debole a d1); ChessBench test split → **62 829** pos con `win_prob` SF16; pipeline `prepare_chessbench_dataset.py` → train/val parquet con sparse 716 + `expected_reward`. Labeling UCI batch deprioritizzato (lento). **73 test**.
+- **7/7 — Train pilot + ACPL stack** — `BucketedNNUE` + `train_nnue.py`: pilot ChessBench W=128, val_mse **0.058** → poi **844-dim** tactical (`under-attack` + `king-attacker`) retrain `pilot_W128_844` val_mse **0.056**. Hook `--eval nnue` su engine; GIF NNUE d2. Blueprint training pipeline (Lc0 labels, nnue-pytorch path, prune, PTQ). **ACPL gate:** `bot_eval/` + Stockfish 18; NNUE d1 **ACPL 121.1** → Elo euristico **~1644**. **92 test**.
+- **8/7 — Ladder d1 + GIF d2** — baseline HCE ACPL **275**; Sunfish d1 **818** (clone + `sunfish_selfplay_pgn.py`). Ordine: **NNUE ≪ HCE < Sunfish**. GIF `hce_d2_game.gif`; progress bar su `record_engine_game.py`; qsearch HCE d2 blowup documentato (usare `--no-quiescence` per HCE d2).
+- **10/7 — Label smoke + multi-game gates** — `label_positions.py` (Lc0 WDL → `expected_reward`); smoke startpos + ChessBench10. Suite **94 passed**. Gate **16 partite** d1: NNUE Elo **~1465**, HCE/Sunfish floor **400**. Gate d2 no-qsearch: HCE Elo **~2610**, **NNUE collapse** (ACPL ~1588) — collasso noto del pilot a depth 2.
+
+#### Repo work
+- NNUE: `src/tinymlinternship/nnue/` (`model.py`, `dataset.py`), checkpoints `models/checkpoints/nnue/pilot_W128_*`
+- Features: `tactical.py` → **844** dim; tests tattici
+- Eval: `bot_eval/acpl.py`, [scripts/eval_bot_acpl.py](../../scripts/eval_bot_acpl.py); artefatti `plots/*_d1_gate*`, `*_d2_gate*`
+- Teachers: Lc0, Sunfish under `models/teacher/`; Stockfish install (poi PATH-only)
+- Scripts: `download_teacher.py`, `download_chessbench.py`, `prepare_chessbench_dataset.py`, `label_positions.py`, `sunfish_selfplay_pgn.py`, `plot_nnue_architecture.py`
+- Agent cards: `NOTES/agents/`; skill `AI-SKILLS/sardine-repo/`
+
+#### Gate depth-1 (riepilogo, 16 partite dove applicabile)
+
+| Eval | ACPL (ord.) | Elo euristico |
+| ---- | ----------- | ------------- |
+| NNUE `pilot_W128_844` d1 | ~139 | **~1465** |
+| HCE d1 | ~357 | ~400 |
+| Sunfish d1 | ~1038 | ~400 |
+| HCE d2 no-qsearch | ~24.5 | **~2610** |
+| NNUE d2 | collapse | ~400 |
+
+---
+
+## 13-19 Luglio
+
+*Daily notes: [07-16](../../DAILY-NOTES/2026-07/2026-07-16.md), [07-17](../../DAILY-NOTES/2026-07/2026-07-17.md); [07-18](../../DAILY-NOTES/2026-07/2026-07-18.md) solo idea.*
+
+Settimana del **path produzione dati** (Lichess primary + Lc0 supplement, label uniformi Lc0).
+
+- **16/7 — Extract + schema ASSETS** — `lichess_pgn_to_fen.py` su smoke 50 PGN → **2371** FEN, tutti e 8 i bucket (bucket 5 raro). Label smoke 50 pos (~6 pos/s). Schema production: `schema.py`, `merge_training_sets.py`, prelabel columns allineate ASSETS; extract non etichettato Lichess **2371** + Lc0 **3149**. README demo GIF. **100 test**.
+- **17/7 — Labeling uniforme mini** — stesso teacher `791556.pb.gz` su entrambi i blocchi: Lichess **2371** (~14 pos/s), Lc0 **3149** (~13 pos/s); fix WDL sintetico su posizioni terminali. Totale ~7 min wall. Merge/train smoke lasciati al giorno successivo.
+- **18/7** — idea parcheggiata: bit di presenza pezzi iniziali (+ extra per promozioni) come feature di eval.
+
+#### Repo work
+- [scripts/lichess_pgn_to_fen.py](../../scripts/lichess_pgn_to_fen.py), [scripts/label_positions.py](../../scripts/label_positions.py), [scripts/merge_training_sets.py](../../scripts/merge_training_sets.py)
+- `src/tinymlinternship/data/schema.py` + `tests/test_dataset_schema.py`
+- Labeled: `data/processed/labeled/lichess_labeled.parquet`, `lc0_labeled.parquet` (+ smoke intermediates)
+- Prelabel: `data/processed/lichess/positions.parquet`, `data/processed/lc0/positions.parquet`
+- Policy: [ASSETS.md](../../ASSETS.md) (uniform `expected_reward` only)
+
+---
+
+## 20-26 Luglio
+
+*Daily notes: [07-20](../../DAILY-NOTES/2026-07/2026-07-20.md), [07-21](../../DAILY-NOTES/2026-07/2026-07-21.md), [07-22](../../DAILY-NOTES/2026-07/2026-07-22.md).*
+
+Settimana del **mini production set end-to-end** e del **project reassessment** (cleanup repo + docs).
+
+- **20/7 — Merge + smoke train production** — `merge_training_sets.py` → `labeled/train.parquet` **5306** / `val.parquet` **214** (split by `game_id`, un solo teacher). Loader patch: encode-on-the-fly da FEN se mancano sparse features. Smoke train `smoke_prod_W128_844` 2 ep: val_mse **0.247** (vs pilot ChessBench 0.056 — atteso: mini set + poche epoch). **106 test**. Pipeline C–E smoke chiusa; full Lichess volume ancora aperta.
+- **21/7** — piano train lungo mini set + ACPL sul nuovo ckpt; in sessione: integrazione idee thesis (task vectors / optimal bucketing) in blueprint §Later / pipeline D2. Train lungo e gate strength **non eseguiti** (carry-over).
+- **22/7 — Reassessment cleanup** — decisioni A4…J1: hard-delete `legacy/pre-sardine/`; Stockfish **PATH-only** (no tree in-repo); drop HF weights teacher; daily notes solo sotto `DAILY-NOTES/`; Project Report → `NOTES/archive/`; refresh `PROJECT.md`, `Goal.md`, `TODOs.md`, `ASSETS.md`, `ai-feed.md`. ChessBench smoke tenuto; 8 bucket fino a ablation §D.
+
+#### Repo work
+- Checkpoints: `models/checkpoints/nnue/smoke_prod_W128_844/`
+- Dataset loader: `nnue/dataset.py` (FEN → `encode_dual`)
+- Docs: PROJECT / Goal / TODOs / ASSETS / README / Commands / Models; blueprint G3 interim
+- Cleanup: no `legacy/pre-sardine/`, no in-repo Stockfish tree, no `models/teacher/hf/`
+
+---
+
+## 27 Luglio - 2 Agosto
+
+*Daily notes: [07-31](../../DAILY-NOTES/2026-07/2026-07-31.md), [08-01](../../DAILY-NOTES/2026-08/2026-08-01.md). Nessuna nota 27–30/7 né 2/8.*
+
+Settimana di **baseline Cfish** (riferimento forte PC); confronto ACPL Cfish vs SARDINE ancora aperto.
+
+- **31/7 — Cfish in repo** — sorgenti + binario + stock net `nn-62ef826d1a6d.nnue` in `src/cfish/`; launcher `run-cfish.bat` (cwd corretto per `EvalFile`). Smoke UCI: **`uciok` / `readyok`**. Self-play Cfish + ACPL Stockfish **non chiusi** in sessione.
+- **1/8** — piano: chiudere self-play/ACPL Cfish e confrontare con NNUE SARDINE (`--eval nnue`); **execution log vuoto** (sessione non eseguita o non loggata).
+- **2/8** — nessuna daily note; stato prodotto invariato rispetto al 31/7 sul gate Cfish.
+
+#### Repo work
+- `src/cfish/` (full Cfish tree + `cfish.exe` + stock NNUE)
+- [run-cfish.bat](../../run-cfish.bat), [NOTES/Cfish.md](../Cfish.md)
+- Aperti a fine periodo: Cfish self-play + ACPL; formal `go depth 5` + nps archiviato; fix path `scripts/cfish.py`; single-head train F3; full Lichess; Wio port
+
+#### Stato a 2/8 (sintesi verso l'obiettivo del report)
+
+| Area | Stato |
+| ---- | ----- |
+| PC encoder + search | ✅ 844, αβ + qsearch, MVV-LVA |
+| Pilot / mini NNUE | ✅ ChessBench pilot + mini teacher-labeled smoke |
+| ACPL judge (Stockfish) | ✅ HCE / NNUE / Sunfish gates; **Cfish ACPL** ❌ |
+| Dati production volume | ❌ solo mini (~5.3k train); dump Lichess full open |
+| Device Wio / Elo on-device | ❌ non ripreso post–cleanup pre-SARDINE |
 
 ---
 

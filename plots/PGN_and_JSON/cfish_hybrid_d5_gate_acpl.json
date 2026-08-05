@@ -1,0 +1,20 @@
+{
+  "timestamp": "2026-08-04T09:32:12.459774+00:00",
+  "annotator": "Cfish Hybrid NNUE nn-62ef826d1a6d depth 5",
+  "stockfish": "C:\\Users\\monfalcone\\PycharmProjects\\TinyMLInternship\\tools\\stockfish\\stockfish\\stockfish-windows-x86-64-avx2.exe",
+  "sf_limit": {
+    "depth": 16,
+    "movetime_ms": 100
+  },
+  "max_plies": 80,
+  "max_game_seconds": null,
+  "max_qsearch_depth": null,
+  "games": 3,
+  "acpl": 42.04,
+  "acpl_std": 73.02,
+  "moves_analysed": 178,
+  "elo_estimate": 2435,
+  "elo_low": 2327,
+  "elo_high": 2542,
+  "elo_formula": "2855 - 10 * ACPL"
+}

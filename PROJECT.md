@@ -10,7 +10,7 @@ Chess engine for the **Wio Terminal**: neural evaluation + alpha-beta search, ma
 | [NOTES/SARDINE Engine Blueprint.md](NOTES/SARDINE%20Engine%20Blueprint.md) | Architecture / device design (decision B1)                       |
 | [ASSETS.md](ASSETS.md)                                                     | Labels + data contract + paths (C1, E1, H1)                      |
 | [ai-feed.md](ai-feed.md)                                                   | Locked “which file to follow” table                              |
-| [TODOs.md](TODOs.md)                                                       | Optional eng micro-gates (not product status)                    |
+| [TODOs.md](TODOs.md)                                                       | Eng micro-gates **mapped to §Progress Overview** (not product status) |
 | [Goal.md](Goal.md)                                                         | Short mission statement                                          |
 | [NOTES/Thesis.md](NOTES/Thesis.md)                                         | Later research: task vectors / optimal bucketing (J1)            |
 
@@ -28,7 +28,8 @@ _Progress vs repo as of ~2026-08-03. **This checklist is the sole product progre
 - [x] Cfish smoke test 
 	- binary: `src/cfish/cfish.exe` · launcher: `run-cfish.bat` · notes: `NOTES/Cfish.md`
 	- UCI `uciok` / `readyok` verified (2026-07-31)
-	- *Formal `go depth 5` → `bestmove` recipe + archived **nps** bench still thin; `scripts/cfish.py` still has a stale `./cfish` path (should target `src/cfish/cfish.exe`).*
+	- Formal recipe + nps archived (2026-08-04): cwd **must** be `src/cfish/`; Hybrid NNUE loads `nn-62ef826d1a6d.nnue`; `go depth 5` → `bestmove e2e4`, nps ~**224k** (depth 12 ~**1.8M** nps). See daily note `2026-08-04.md` §Execution log.
+	- `scripts/cfish.py` resolves `src/cfish/cfish.exe` + correct cwd (no longer `./cfish`).
     
 - [ ] Evaluate the base (HCE) model with Stockfish (game review)
 	- 10 quick self-play games + run the engine on every move to get the 5 biggest blunders
@@ -55,12 +56,12 @@ _Progress vs repo as of ~2026-08-03. **This checklist is the sole product progre
 	- Hybrid NNUE evaluation using the new NNUE (Cfish `Use NNUE` hybrid with EvalFile present)
 	- *UCI smoke with net on disk is done; a dedicated hybrid-only log / nps artifact is not archived yet.*
 	  
-- [ ] Evaluation with Stockfish
-	- 10 quick self-play games + run the engine on every move to get the 5 biggest blunders
-	- benchmark the nps
-	- CLI: `scripts/eval_bot_acpl.py` · lib: `src/tinymlinternship/bot_eval/`
-	- self-play: `scripts/record_engine_game.py` (Cfish via UCI still open)
-	- *Stack ready for in-process engines. **Cfish** self-play + ACPL still open (carry-over 2026-08-01). ACPL gates already exist for HCE / pilot NNUE / Sunfish / Lc0 under `plots/PGN_and_JSON/` (e.g. `nnue_d1_gate_acpl.json`, `sunfish_d1_gate_acpl.json`, `lc0_d1_gate_acpl.json`).*
+- [x] Evaluation with Stockfish
+	- Cfish Hybrid self-play + Stockfish ACPL (2026-08-04): `scripts/cfish_selfplay_pgn.py` + `scripts/eval_bot_acpl.py --pgn …`
+	- Artifacts: `plots/PGN_and_JSON/cfish_hybrid_d5_gate.pgn`, `cfish_hybrid_d5_gate_acpl.json` · copy `images/games/Cfish-hybrid-d5_vs_Cfish-hybrid-d5_2026-08-04.pgn`
+	- Protocol: 3 games, depth 5 Hybrid, max 80 plies; SF judge movetime 100 ms
+	- Combined: **ACPL 42.0** (σ=73) · Elo heuristic **2435** (2327–2542) · 178 moves · play nps mean ~427k
+	- *Judge = Stockfish on PATH / `STOCKFISH_PATH` (local download used under `tools/stockfish/` if not on PATH). ACPL gates for HCE / pilot NNUE / Sunfish / Lc0 already under `plots/PGN_and_JSON/`.*
 
 ### Dataset
 
@@ -117,7 +118,7 @@ _Progress vs repo as of ~2026-08-03. **This checklist is the sole product progre
 ### On the Hardware
 
 - [ ] Wio Terminal smoke test 
-	- *Legacy pre-SARDINE Wio sketches removed (2026-07-22). Device work restarts with C-port steps E–F in [TODOs.md](TODOs.md) — not started. No active device tree path yet.*
+	- *Legacy pre-SARDINE Wio sketches removed (2026-07-22). Device eng: [TODOs.md](TODOs.md) §5 + §8 — not started. No active device tree path yet.*
       
 - [ ] Evaluation with Stockfish
 	- 30 self-play games
@@ -142,19 +143,19 @@ _Progress vs repo as of ~2026-08-03. **This checklist is the sole product progre
 - [x] Feature encoder (716 base + tactical → 844)
 	- `src/tinymlinternship/features/index_map.py`, `encoder.py`, `mirror.py`, `tactical.py`, `bucket.py`
 	- tests: `tests/test_features.py`, `tests/test_tactical.py`
-	- *Already on the critical path (TODOs §A); listed here only if re-scoping as optional experiment.*
+	- *Detail: [TODOs.md](TODOs.md) §7a — critical path for student, not optional stretch work.*
     
 - [x] Tweak the base tree search (alpha-beta + quiescence)
 	- `src/tinymlinternship/engine/search.py` (PC v0.3) · `tests/test_engine.py`, `tests/test_perft.py`
-	- *Futility / LMR / null-move / TT still open (TODOs §B / §G).*
+	- *Remaining search stack: [TODOs.md](TODOs.md) §7b–7c (TT, nps, futility/LMR/null-move, killers).*
     
 - [x] MVV-LVA move ordering
 	- in `src/tinymlinternship/engine/search.py` (main search + qsearch)
-	- *Killers (depth > 4) still open.*
+	- *Killers (depth > 4): TODOs §7c.*
       
 - [x] Dual-perspective encoding, king mirror / castling frame fix
 	- `src/tinymlinternship/features/encoder.py` (`encode_dual`), `mirror.py`
-	- castling frame fix covered in `tests/test_features.py`
+	- castling frame fix covered in `tests/test_features.py` · TODOs §7a
 
 ---
 
@@ -237,8 +238,8 @@ PC reference implementations (Python) for the student path:
 
 | Layer | Path |
 | ----- | ---- |
-| Features 844 + buckets | `src/tinymlinternship/features/` |
-| Bucketed NNUE | `src/tinymlinternship/nnue/model.py` |
+| Features 844 + bucket metadata | `src/tinymlinternship/features/` |
+| Student NNUE (F3: single head; pilots may still be multi-head) | `src/tinymlinternship/nnue/model.py` |
 | Search / eval hooks | `src/tinymlinternship/engine/search.py`, `eval_nnue.py`, `eval_hce.py` |
 | ACPL judge stack | `src/tinymlinternship/bot_eval/`, `scripts/eval_bot_acpl.py` |
 | Cfish baseline tree | `src/cfish/` |
@@ -301,7 +302,7 @@ Do **not** port or re-enable for the first ship gate:
 - Desktop-only SIMD paths as the only NNUE kernel  
 - Multi-expert routing before §D ablation (**F3**)
 
-Reference: blueprint §Search, §Memory, §NNUE Architecture, §Move ordering · [ai-feed.md](ai-feed.md) · optional eng gates [TODOs.md](TODOs.md) E–H.
+Reference: blueprint §Search, §Memory, §NNUE Architecture, §Move ordering · [ai-feed.md](ai-feed.md) · eng gates [TODOs.md](TODOs.md) §7–§8.
 
 ---
 

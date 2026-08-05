@@ -1,0 +1,108 @@
+{
+  "timestamp": "2026-08-04T11:00:18.881021+00:00",
+  "pgn": "images\\games\\omar-game.pgn",
+  "stockfish": "C:\\Users\\monfalcone\\PycharmProjects\\TinyMLInternship\\tools\\stockfish\\stockfish\\stockfish-windows-x86-64-avx2.exe",
+  "sf_movetime_ms": 100,
+  "games": [
+    {
+      "round": "?",
+      "white": "DrifS",
+      "black": "Omega0",
+      "result": "0-1",
+      "combined": {
+        "moves": 48,
+        "acpl": 658.17,
+        "acpl_std": 4296.85,
+        "elo": 400,
+        "elo_range": [
+          400,
+          3200
+        ]
+      },
+      "white_side": {
+        "moves": 24,
+        "acpl": 1283.62,
+        "acpl_std": 6074.84,
+        "elo": 400,
+        "elo_range": [
+          400,
+          3200
+        ],
+        "worst": [
+          {
+            "ply": 24,
+            "move": "f1d1",
+            "best": "g1h1",
+            "cpl": 29801
+          },
+          {
+            "ply": 22,
+            "move": "g2g3",
+            "best": "c6e6",
+            "cpl": 412
+          },
+          {
+            "ply": 19,
+            "move": "c4d5",
+            "best": "a4c6",
+            "cpl": 181
+          },
+          {
+            "ply": 21,
+            "move": "d1c1",
+            "best": "f2f3",
+            "cpl": 131
+          },
+          {
+            "ply": 11,
+            "move": "c3e4",
+            "best": "h2h3",
+            "cpl": 57
+          }
+        ]
+      },
+      "black_side": {
+        "moves": 24,
+        "acpl": 32.71,
+        "acpl_std": 91.63,
+        "elo": 2528,
+        "elo_range": [
+          2161,
+          2895
+        ],
+        "worst": [
+          {
+            "ply": 22,
+            "move": "g5g4",
+            "best": "g5f5",
+            "cpl": 424
+          },
+          {
+            "ply": 18,
+            "move": "f7f5",
+            "best": "a8b8",
+            "cpl": 160
+          },
+          {
+            "ply": 12,
+            "move": "c6b4",
+            "best": "e4f3",
+            "cpl": 108
+          },
+          {
+            "ply": 17,
+            "move": "d8g5",
+            "best": "f7f5",
+            "cpl": 27
+          },
+          {
+            "ply": 3,
+            "move": "c5d4",
+            "best": "d7d5",
+            "cpl": 22
+          }
+        ]
+      }
+    }
+  ]
+}

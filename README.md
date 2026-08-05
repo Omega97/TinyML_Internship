@@ -7,11 +7,10 @@
 
 - Presentation: [SARDINE_ICTP_2026-07.pdf](presentations/SARDINE_ICTP_2026-07.pdf)
 - Engine blueprint: [SARDINE Engine Blueprint.md](NOTES/SARDINE%20Engine%20Blueprint.md)
+- Status / design dashboard: [PROJECT.md](PROJECT.md)
 - Thesis ideas: [Thesis.md](NOTES/Thesis.md)
 - Online models: [Models.md](NOTES/Models.md)
 - Kaggle challenge: [FIDE & Google Efficient Chess AI Challenge](https://www.kaggle.com/competitions/fide-google-efficiency-chess-ai-challenge)
-- Status / design dashboard: [PROJECT.md](PROJECT.md)
-- Internship report (archive): [NOTES/archive/Project Report.md](NOTES/archive/Project%20Report.md)
 - Pipeline assets: [ASSETS.md](ASSETS.md)
 
 **Engine self-play demos** (demo reel = HCE then NNUE at that depth):

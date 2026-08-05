@@ -1,0 +1,223 @@
+{
+  "timestamp": "2026-08-04T11:08:04.109669+00:00",
+  "stockfish": "C:\\Users\\monfalcone\\PycharmProjects\\TinyMLInternship\\tools\\stockfish\\stockfish\\stockfish-windows-x86-64-avx2.exe",
+  "sf_movetime_ms": 100,
+  "games": [
+    {
+      "pgn": "images\\games\\omar-game-2.pgn",
+      "white": "DrifS",
+      "black": "Omega0",
+      "white_elo": "1808",
+      "black_elo": "1819",
+      "result": "0-1",
+      "site": "https://lichess.org/9j95hzuj",
+      "date": "2026.07.27",
+      "eco": "B22",
+      "time_control": "180+2",
+      "plies": 48,
+      "legal_mainline": true,
+      "combined": {
+        "moves": 48,
+        "acpl": 651.15,
+        "acpl_std": 4295.15,
+        "elo": 400,
+        "elo_range": [
+          400,
+          3200
+        ]
+      },
+      "white_side": {
+        "moves": 24,
+        "acpl": 1275.38,
+        "acpl_std": 6072.99,
+        "elo": 400,
+        "elo_range": [
+          400,
+          3200
+        ],
+        "worst": [
+          {
+            "ply": 24,
+            "move": "f1d1",
+            "best": "g1h1",
+            "cpl": 29786
+          },
+          {
+            "ply": 22,
+            "move": "g2g3",
+            "best": "c6e6",
+            "cpl": 201
+          },
+          {
+            "ply": 19,
+            "move": "c4d5",
+            "best": "a4c6",
+            "cpl": 171
+          },
+          {
+            "ply": 21,
+            "move": "d1c1",
+            "best": "f2f3",
+            "cpl": 122
+          },
+          {
+            "ply": 12,
+            "move": "d2b4",
+            "best": "f3e5",
+            "cpl": 75
+          }
+        ]
+      },
+      "black_side": {
+        "moves": 24,
+        "acpl": 26.92,
+        "acpl_std": 66.23,
+        "elo": 2586,
+        "elo_range": [
+          2321,
+          2851
+        ],
+        "worst": [
+          {
+            "ply": 22,
+            "move": "g5g4",
+            "best": "g5f5",
+            "cpl": 266
+          },
+          {
+            "ply": 18,
+            "move": "f7f5",
+            "best": "h7h5",
+            "cpl": 181
+          },
+          {
+            "ply": 12,
+            "move": "c6b4",
+            "best": "e4f3",
+            "cpl": 114
+          },
+          {
+            "ply": 14,
+            "move": "b4c6",
+            "best": "b4d5",
+            "cpl": 30
+          },
+          {
+            "ply": 9,
+            "move": "e8g8",
+            "best": "h7h6",
+            "cpl": 19
+          }
+        ]
+      }
+    },
+    {
+      "pgn": "images\\games\\omar-game-3.pgn",
+      "white": "Omega0",
+      "black": "Petroliam89",
+      "white_elo": "1669",
+      "black_elo": "1694",
+      "result": "0-1",
+      "site": "https://lichess.org/fIVL0x8t",
+      "date": "2026.07.14",
+      "eco": "C00",
+      "time_control": "120+1",
+      "plies": 54,
+      "legal_mainline": true,
+      "combined": {
+        "moves": 54,
+        "acpl": 105.65,
+        "acpl_std": 125.93,
+        "elo": 1799,
+        "elo_range": [
+          1463,
+          2135
+        ]
+      },
+      "white_side": {
+        "moves": 27,
+        "acpl": 114.56,
+        "acpl_std": 145.09,
+        "elo": 1709,
+        "elo_range": [
+          1162,
+          2257
+        ],
+        "worst": [
+          {
+            "ply": 12,
+            "move": "b2b3",
+            "best": "d1c2",
+            "cpl": 642
+          },
+          {
+            "ply": 22,
+            "move": "f1g2",
+            "best": "g5f7",
+            "cpl": 271
+          },
+          {
+            "ply": 23,
+            "move": "e3f4",
+            "best": "c1c8",
+            "cpl": 270
+          },
+          {
+            "ply": 13,
+            "move": "d4b5",
+            "best": "d1c2",
+            "cpl": 255
+          },
+          {
+            "ply": 18,
+            "move": "e4c4",
+            "best": "f1h3",
+            "cpl": 237
+          }
+        ]
+      },
+      "black_side": {
+        "moves": 27,
+        "acpl": 96.74,
+        "acpl_std": 105.4,
+        "elo": 1888,
+        "elo_range": [
+          1490,
+          2286
+        ],
+        "worst": [
+          {
+            "ply": 12,
+            "move": "f8d8",
+            "best": "e4c3",
+            "cpl": 438
+          },
+          {
+            "ply": 19,
+            "move": "a8a6",
+            "best": "c8d7",
+            "cpl": 308
+          },
+          {
+            "ply": 13,
+            "move": "c7e7",
+            "best": "d8d1",
+            "cpl": 185
+          },
+          {
+            "ply": 18,
+            "move": "c6a5",
+            "best": "b7b6",
+            "cpl": 184
+          },
+          {
+            "ply": 22,
+            "move": "a6a7",
+            "best": "c8b7",
+            "cpl": 181
+          }
+        ]
+      }
+    }
+  ]
+}

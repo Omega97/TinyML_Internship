@@ -1,155 +1,214 @@
 # SARDINE — Eng micro-gates
 
-_Optional engineering checklist vs blueprint. **Product progress lives only in [PROJECT.md](PROJECT.md)** (decision A1). Doc authority: [ai-feed.md](ai-feed.md). Last updated: 2026-08-03 — **F3: single head until §D**; multi-bucket routing not production until ablation locks a scheme._
+**Product progress lives only in [PROJECT.md](PROJECT.md)** (decision **A1**). This file expands eng detail under the same section names.  
+Architecture: [blueprint](NOTES/SARDINE%20Engine%20Blueprint.md) (**B1**). Labels/data: [ASSETS.md](ASSETS.md) (**C1/E1**). Authority: [ai-feed.md](ai-feed.md).  
+_Last updated: 2026-08-03 — aligned with PROJECT; **F3** single head until §D._
+
+| PROJECT section | This file |
+| --------------- | --------- |
+| Run Cfish | §1 |
+| First NNUE | §2 |
+| Dataset | §3 |
+| Train the Network | §4 |
+| On the Hardware | §5 (+ §8 device eng) |
+| For the Thesis | §6 |
+| Stretch Goals (encoder / search) | §7 |
+
+When a checkbox conflicts, **PROJECT wins** for product status; update both when closing a gate.
 
 ---
+
+## Parking (research, not product)
 
 - Ispezionare link del supervisore Zennaro su [Systematic Pruning](https://ieeexplore.ieee.org/abstract/document/11603432)
-    
-- Idee con Ansuini:
-	Task vectors (in weight space / representation space) T1, T2, …, T8 have specific vectors in the weight space. Is it possible / useful to define task vectors that bring you from one head to another with minimal information/performance loss? This may be the case if the head vectors live in a linear submanifold of low dimensionality (are we so lucky? Maybe not!)
+- Idee con Ansuini (task vectors / multi-head): **after** Elo path (**J1**) — see §6 / [NOTES/Thesis.md](NOTES/Thesis.md)
 
 ---
 
-## Build pipeline
+## 1 · Run Cfish
 
-Stesso ordine del diagramma _Build Pipeline_ nel blueprint.
+_PROJECT: Cfish smoke [x] · HCE/Cfish eval with Stockfish [ ]._
 
-### A · Feature encoder (PC + device parity)
-
-- [x] Pruned **716** base features (pawn prune, king mirror, castling, EP) — `index_map.py`, `encoder.py`, `mirror.py`
-- [x] Tactical extension **+128** (under-attack + king-attacker, 64+64) → **844** total — `tactical.py`
-- [x] Dual-perspective sparse input — `encode_dual()`
-- [x] Enemy-king full 64-square resolution (only the perspective king is mirror-compressed to 32 slots)
-- [x] **Castling coordinate-frame fix** — rights from `base` + K/Q swap if mirrored (EP from `view`); golden startpos + `test_castling_*`
-- [x] Bucket **metadata** helpers (piece count + queen-split in `bucket.py`) — used for analysis / future §D; **not** production multi-head routing (**F3**)
-- [x] Gate test (`tests/test_features.py`, `test_tactical.py`, golden FEN) — **33** tests
-- [ ] Encoder parity on **device** (C, with search) — step F
+- [x] Cfish binary + launcher — `src/cfish/cfish.exe`, `run-cfish.bat`, `NOTES/Cfish.md`
+- [x] UCI smoke — `uciok` / `readyok` (2026-07-31)
+- [x] Formal UCI recipe — `go depth 5` → `bestmove` + archived **nps** (2026-08-04; depth-12 ~1.8M nps Hybrid)
+- [x] Fix `scripts/cfish.py` stale `./cfish` path → `src/cfish/cfish.exe` + cwd `src/cfish/`
+- [ ] **Cfish classical / HCE-style baseline ACPL** (if distinct from Python HCE gate) — `eval_bot_acpl.py` / UCI self-play; PROJECT open item
+- [x] Python HCE ACPL gate already archived — `plots/PGN_and_JSON/hce_d1_gate*` (not a substitute for Cfish UCI baseline)
 
 ---
 
-### B · Search skeleton on PC
+## 2 · First NNUE (stock net in Cfish)
 
-- [x] perft — `engine/perft.py`, `tests/test_perft.py` (d5 = 4 865 609)
-- [x] HCE eval bring-up — `evaluate_hce` (`tests/test_engine.py`)
-- [x] 1-ply search bring-up — `search_best_move` (= `search(..., depth=1)`)
-- [x] Alpha-beta — fixed-depth negamax (`search(board, depth)`), engine **v0.2**
-- [x] Capture quiescence — depth-0 leaves, MVV-LVA noisy moves, `quiescence=False` opt-out; engine **v0.3**
-- [x] MVV-LVA move ordering — main search + qsearch (killers: step G)
-- [x] `record_engine_game.py --depth` + GIF depth-2 — `images/nnue_d2_game.gif`, `images/hce_d2_game.gif` (`--no-quiescence` per HCE)
-- [x] Eval hook at depth-search nodes — `evaluate_nnue` + `--eval nnue` (`eval_nnue.py`, `make_eval_fn`)
-- [x] Gate depth-1 ACPL (§Bot Evaluation) — NNUE **121** · HCE **275** · Sunfish **818** cp (`eval_bot_acpl.py`, `sunfish_selfplay_pgn.py`, `tests/test_bot_eval_acpl.py`)
+_PROJECT: download / wire / hybrid smoke [x] · Cfish ACPL eval [ ]._
+
+- [x] Stock NNUE on disk — `src/cfish/nn-62ef826d1a6d.nnue` (`make net` in `src/cfish/`)
+- [x] Default EvalFile / INCBIN — `evaluate.h`, `nnue.c`, `ucioption.c`
+- [x] Hybrid path available with net present (dedicated hybrid-only log optional)
+- [x] **Cfish self-play + Stockfish ACPL** (D1 judge) — 2026-08-04 Hybrid d5, 3 games: ACPL **42.0** · Elo **2435**; `plots/PGN_and_JSON/cfish_hybrid_d5_gate*`; CLI `scripts/cfish_selfplay_pgn.py`
+- [x] In-process ACPL stack ready — `scripts/eval_bot_acpl.py`, `src/tinymlinternship/bot_eval/` (used for HCE / pilot NNUE / Sunfish / Lc0 / Cfish)
+- *Stock net ≠ SARDINE student. Custom SARDINE weights in Cfish = later / optional; device path is own C port.*
+
+---
+
+## 3 · Dataset
+
+_PROJECT: raw download / teacher labels / uniform mini set [x] · dedup [ ] · full Lichess volume open._
+
+- [x] Lc0 raw subset — `data/raw/lc0/`, `scripts/download_lc0.py` (~1–2 GB)
+- [x] Lichess **smoke** PGN + FEN extract — `data/raw/lichess_smoke50.pgn`, `scripts/lichess_pgn_to_fen.py` → `data/processed/lichess/positions.parquet`
+- [ ] Full **Lichess monthly dump** → `data/raw/lichess/` + large-scale FEN extract (E1 production)
+- [x] Kaggle `games.csv` — smoke/stats only (`scripts/download_data.py`) — **not** NNUE train
+- [x] ChessBench bags — encoder smoke only
+- [ ] **Dedup + multiplicity** — no script yet (`src/tinymlinternship/data/` + CLI)
+- [x] Teacher = **Lc0** → `expected_reward` only (C1) — `label_positions.py`, `models/teacher/lc0/`
+- [x] Mini labeled blocks + merge — `lichess_labeled` / `lc0_labeled` → `data/processed/labeled/{train,val}.parquet` + `manifest.json`
+- [ ] Label **full-volume** after Lichess dump (same teacher net)
+- [x] Schema / merge tooling — `schema.py`, `merge_training_sets.py`
+- *Stockfish = ACPL judge only (D1/I1: PATH / `STOCKFISH_PATH`), not train labels.*
+
+---
+
+## 4 · Train the Network
+
+_PROJECT: pilot/smoke train [x] · ACPL on pilot NNUE [x] · thesis MoE later [ ] · production single-head open (F3)._
+
+Architecture (**F3** production): L1 `844 → W` dual POV → concat `2W` → **one** head `2W → 1` · CReLU · tanh → expected-reward LUT.  
+*Legacy 8-head pilots = experimental only.*
+
+- [x] Pilot / smoke train — `scripts/train_nnue.py`, `nnue/model.py` (legacy multi-head checkpoints under `models/checkpoints/nnue/`)
+- [ ] **Single-head** model + train path (F3) — adapt `model.py` / train CLI; drop multi-expert routing for production runs
+- [ ] Single-head train on mini labeled set, then full volume
+- [ ] **nnue-pytorch** adapt — 844-dim, single head, gradual L1 prune, 100 ep
+- [ ] L1 gradual pruning 70–80% during training; sparse flash export
+- [ ] PTQ int8 + tanh LUT; measure fp32→int8 gap (QAT only if MSE/Elo gap too large)
+- [x] ACPL on pilot NNUE (D1) — `plots/PGN_and_JSON/nnue_d1_gate*`; d2 collapse known
+- [ ] **nps** microbench for student / search (still open; PROJECT notes)
+- [ ] Teacher-only depth=1 playing-strength baseline (after first single-head net)
+- [x] Piece-count distribution study — `scripts/plot_piece_count_distribution.py`, `data/excel/piece_count_distribution_10k.xlsx` (PROJECT Stretch [x])
+
+### 4b · Bucket ablation (PROJECT Train / blueprint §D — after single-head baseline)
+
+_**F3:** no multi-head ship until this finishes. Compare single-head vs candidate partitions only after single-head baseline exists._
+
+- [ ] Single-head baseline on teacher-labeled val
+- [ ] Per-partition MSE: single head vs 4 piece-count vs 8 queen-split (natural mix)
+- [ ] Decisive vs ambiguous threshold; playing-strength only if ambiguous
+- [ ] Lock scheme; sync PROJECT, blueprint, `bucket.py`, train/export
+
+---
+
+## 5 · On the Hardware
+
+_PROJECT: Wio smoke / device ACPL / Lichess [ ] all open._
+
+- [ ] Wio Terminal smoke test (no active device tree; pre-SARDINE sketches removed)
+- [ ] Device eval vs Stockfish (ACPL / match) — ~30 games + nps; host SF judge
+- [ ] Connect Wio to Lichess and play
+- *Eng detail: §8 (accumulators, C port, UCI/Serial).*
+
+---
+
+## 6 · For the Thesis
+
+_PROJECT: compare techniques [ ] — **J1** after base NNUE + Elo path._
+
+- [ ] Task-vector bucketing vs embedding clustering — [NOTES/Thesis.md](NOTES/Thesis.md), blueprint §Later
+- [ ] Compact-transformer fallback criteria (v2 policy) — define “underperforms” before invoking
+
+---
+
+## 7 · PC SARDINE stack (PROJECT Stretch Goals — detail)
+
+_PROJECT marks encoder / αβ+qsearch / MVV-LVA / dual-POV [x]. Eng depth for remaining search/TT work._
+
+### 7a · Feature encoder
+
+- [x] 716 base + 128 tactical → **844** — `features/index_map.py`, `encoder.py`, `mirror.py`, `tactical.py`
+- [x] Dual-perspective `encode_dual()`; enemy-king full 64; castling frame fix
+- [x] Bucket **metadata** helpers (`bucket.py`) — analysis / future §D only; **not** production multi-head (**F3**)
+- [x] Tests — `tests/test_features.py`, `test_tactical.py`
+- [ ] Encoder parity on **device** (with §8 C port)
+
+### 7b · Search skeleton on PC
+
+- [x] perft — `engine/perft.py`, `tests/test_perft.py`
+- [x] HCE + 1-ply + alpha-beta + capture quiescence + MVV-LVA — `engine/search.py` v0.3
+- [x] `record_engine_game.py` + GIF demos; NNUE eval hook `eval_nnue.py`
+- [x] Depth-1 ACPL ladder (HCE / NNUE / Sunfish) — see PROJECT artifacts
 - [ ] TT entry format prototype + PC benchmark
 - [ ] Nodes/s benchmark on PC
-- [ ] Node-budget model vs Urusov ESP32 baseline (~20 kNps, heuristics-only) — estimate reachable depth once eval latency is measured
+- [ ] Node-budget model vs Urusov ESP32 (~20 kNps) once eval latency known
+
+### 7c · Full search stack (v1 remaining)
+
+- [x] Alpha-beta + quiescence (PC)
+- [ ] Futility + LMR + null-move
+- [ ] Lazy evaluation (with lazy accumulators)
+- [ ] Iterative deepening (TT stable)
+- [ ] TT **128–160 KB** entry format (Wio metric: nodes/s + depth @ ~1 s)
+- [ ] Killer moves (depth > 4)
+- [x] Countermove / full history suite — **out of v1**
+- [ ] SPSA on search params only
 
 ---
 
-### C · Train NNUE (single head until §D — F3)
+## 8 · Device eng (supports PROJECT §On the Hardware)
 
-Architecture (production): shared L1 **844 → W** with $W \in \{128, 256\}$ (dense train + **gradual prune** 70–80%; **non-zero only in flash**; dual POV) → concat **2W** → **one** head **2W → 1** · **CReLU** · **tanh** → expected-reward LUT in $[-1,+1]$.  
-*Legacy pilots used 8 expert heads — treat as experimental; next production train = single head.*
+### 8a · Incremental accumulators
 
-- [x] Lc0 subset **~1–2 GB** (`data/raw/lc0/`, `scripts/download_lc0.py`)
-- [x] Games **≥ 16** moves; pilot preprocess — `lc0_preprocess.py`, `stats_lc0_processed.py`, `prepare_lc0_dataset.py` (ply≥32 global, bucket7≥8)
-- [x] Survey pre-labeled datasets — nessun dump riutilizzabile end-to-end; vedi [NOTES/Datasets.md](NOTES/Datasets.md)
-- [x] Lichess PGN → FEN script — `scripts/lichess_pgn_to_fen.py` (streaming, `bucket_id` / piece_count / has_queen); smoke 50 games → `data/processed/lichess/positions.parquet` (all 8 buckets)
-- [ ] Full Lichess dump download + large-scale FEN extract (production volume; natural bucket mix) + Lc0 supplement at scale
-- [x] Teacher scelto: **Lc0** (`expected_reward` White POV from WDL, on-the-fly UCI); fallback Stockfish WDL — [NOTES/Models.md](NOTES/Models.md) · [ASSETS.md](ASSETS.md) §Uniformity
-- [x] Teacher installato — `models/teacher/` (lc0 v0.32.1 + reti); `scripts/download_teacher.py`, `smoke_test_teacher.py` OK
-- [x] `label_positions.py` — scaffold + smoke; **uniform target = `expected_reward` only** (same formula for every source block)
-- [x] Label **mini** production blocks (Lichess **2371** + Lc0 **3149**) with teacher **`791556`** → `lichess_labeled` / `lc0_labeled`; no `best_q` as train target
-- [ ] Label **full-volume** production blocks after Lichess dump / large extract (same teacher; multi-session)
-- [x] Schema/merge tooling — `schema.py`, `merge_training_sets.py` (game-level split + single-teacher check)
-- [x] Merge mini set → `data/processed/labeled/{train,val}.parquet` + `manifest.json` (5306 / 214, seed 42, 2026-07-20)
-- [ ] **nnue-pytorch** fork/adapt — 844-dim, **single head** (F3), gradual L1 prune, 100 ep fixed
-- [x] PyTorch **smoke** pilot (legacy multi-head) — ChessBench `pilot_W128_844` val_mse **0.056**; production mini `smoke_prod_W128_844` val_mse **0.247** (2 ep)
-- [ ] PyTorch / nnue-pytorch **single-head** production train (F3) on labeled mini then full volume
-- [ ] Calibrated **PTQ int8** export + tanh LUT (histogram weights, scale onto [-127,127])
-- [ ] Measure fp32→int8 gap — QAT fallback if MSE > 0.01 or Elo drop > 30
-- [ ] L1 gradual pruning 70–80% **during training**; sparse flash export
-- [ ] Teacher-only **depth=1** playing-strength baseline (after first net)
-- [x] Kaggle `games.csv` smoke only (not NNUE training) — `scripts/download_data.py`
-- [x] Piece-count distribution for bucket design — `plot_piece_count_distribution.py`, `excel/piece_count_distribution_10k.xlsx`
-
----
-
-### D · Bucket ablation (decides whether to leave single-head)
-
-_**F3 (2026-08-03):** production path stays **single head** until this section finishes. Ablation compares single-head baseline vs candidate multi-head partitions (4 piece-count, 8 queen-split, …). Do not silent-migrate multi-head into ship path without locking here + syncing blueprint, `bucket.py`, train/export, docs._
-
-- [ ] Train / eval **single-head** baseline on teacher-labeled val (required arm)
-- [ ] Per-partition eval MSE: **single head** vs **4 piece-count** vs **8 queen-split** (and others if useful) on natural mix
-- [ ] Define "decisive vs ambiguous" threshold (e.g. >5% relative MSE change = decisive; mixed → escalate)
-- [ ] Playing-strength test — **only if** partition MSE results are ambiguous or contradictory
-- [ ] Lock final scheme (`NUM_BUCKETS` = 1 or multi + router); sync blueprint, code, train/export, docs
-
----
-
-### E · Incremental accumulators (device)
-
-- [ ] Lazy add/sub on shared layer (bucket-agnostic)
+- [ ] Lazy add/sub on shared L1 (no bucket router while F3)
 - [ ] Full refresh on king centre-file crossing
 - [ ] Lazy accumulator updates (TT cutoffs)
-- [ ] Castling-bit add/sub (rare — only on king/rook moves or rook capture)
-- [ ] En-passant-bit add/sub (frequent — flips near every ply, but cheap: single bit)
+- [ ] Castling-bit / EP-bit add/sub
+
+### 8b · Port search + NNUE to C (Wio)
+
+- [ ] C engine core after playable PC search
+- [ ] Benchmark `-O3` vs `-Os` on Wio
+- [ ] Sparse L1 int8 + tanh LUT in flash; int16 accumulators in RAM
+- [ ] Minimal UCI over Serial; TFT off during search
+
+### 8c · Elo ship gate
+
+- [ ] ≥ 1700 **`elo_match`** under frozen protocol (ACPL heuristic alone insufficient — blueprint)
+- [ ] PC↔device parity on golden FENs
+
+### 8d · Iterate if gate missed
+
+- [ ] SCReLU fallback (hidden)
+- [ ] QAT only if PTQ gap too large
+- [ ] TT / scheme revision after §D if multi-head enabled
+
+### 8e · v2 (after gate)
+
+- [ ] UCI polish · policy head · opening book · tactical MoE · transformer fallback — as needed
+
+**v1 non-goals (aligned with PROJECT Cfish strip list):** MCTS · multi-head before §D · book · TB · SMP/NUMA · full history move ordering · HalfKP student · desktop-only SIMD as sole NNUE kernel · autoencoder warm-start · MicroChess stack surfing.
 
 ---
 
-### F · Port search + NNUE to C (Wio)
+## Cross-check: open in PROJECT → eng follow-ups
 
-- [ ] C engine core (after playable PC search)
-- [ ] Benchmark **`-O3` vs `-Os`** on Wio
-- [ ] Sparse L1 int8 weights + tanh LUT in flash; int16 accumulators ($W$ per POV) in RAM
-
----
-
-### G · Full search stack + tuning
-
-Phased rollout dal blueprint (tutto v1, non rinviato salvo dove indicato):
-
-- [x] Alpha-beta + **quiescence** (PC minima — catture/promozioni in foglia, `search.py` v0.3)
-- [ ] **Futility** + **LMR** + **null-move**
-- [ ] **Lazy evaluation** (paired with lazy accumulators)
-- [ ] **Iterative deepening** (TT stable)
-- [ ] TT **128–160 KB** — format decision: ~10 B tight pack vs 16 B byte-aligned entry, decided by wall-clock nodes/sec + depth reached on Wio, **not** hit-rate alone
-- [ ] Move ordering: **killer moves** (depth > 4) — MVV-LVA ✅ in main/qsearch
-- [x] Countermove history — **out of v1** per blueprint (killers only at depth > 4)
-- [ ] **SPSA** search/heuristic tuning
+| PROJECT open item | Eng follow-up here |
+| ----------------- | ------------------ |
+| Cfish / HCE eval with SF | §1 |
+| Cfish stock-NNUE ACPL | §2 |
+| Dedup + multiplicity | §3 |
+| Full Lichess + re-label | §3 |
+| Single-head production train | §4 |
+| Thesis MoE / task vectors | §6 (after Elo) |
+| Wio smoke / device eval / Lichess | §5 + §8 |
+| nps microbench | §2 / §4 / §7b |
+| Killers / TT / futility / LMR | §7c |
 
 ---
 
-### H · Elo gate
+## Done reference (do not re-open without cause)
 
-- [ ] **≥ 1700 Elo** (blueprint gate) — e.g. cutechess-cli
-- [ ] Minimal **UCI over Serial**
-- [ ] TFT **off** during search; Serial for debug
-
----
-
-### I · Iterate (if gate missed)
-
-- [ ] SCReLU fallback (hidden layer) — clip int16 accumulator to activation range **before** squaring (load-bearing, avoids overflow); square in int16; multiply-accumulate with int8 weights in **int32**
-- [ ] Quantization-aware training (only if int8 gap too large) — stay on nnue-pytorch first; only evaluate Grapheus or in-pipeline QAT if PTQ gap threatens the Elo gate
-- [ ] TT format / bucket scheme revision
+- Dog ESP32 RAM feasibility note (blueprint §Memory)
+- Stretch: piece-count study, 844 encoder, αβ+qsearch, MVV-LVA, dual-POV (PROJECT [x])
 
 ---
 
-### J · v2 (after gate)
-
-- [ ] Minimal UCI polish
-- [ ] Policy guidance head (off shared accumulator, $W \rightarrow$ move-ranking; watch per-node latency vs ~1 s budget)
-- [ ] Opening book
-- [ ] SCReLU / QAT / compact transformer fallback (~210K design) — only if needed
-- [ ] Tactical MoE axis (`inCheck`, capture threat) — only if switching cost analysis shows it's worth it earlier than assumed
-
-**Explicitly deferred in blueprint (v1):** MCTS · tactical MoE heads · autoencoder warm-start · separate pattern tables · opening book · Grapheus/QAT · MicroChess stack surfing · MicroChess bare-metal patterns.
-
----
-
-## Open questions / research (not blocking, but untracked otherwise)
-
-- [x] Dog (ESP32) RAM budget study — feasibility reference in blueprint §Memory; TT-dominant plan unchanged
-- [ ] Compact-transformer fallback evaluation criteria — define what "underperforms" means for the v2 policy head before deciding to invoke this fallback
-
----
+#core
