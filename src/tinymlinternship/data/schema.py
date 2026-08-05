@@ -1,4 +1,4 @@
-"""Uniform training-set schema (see ASSETS.md §Ideal final training set)."""
+"""Uniform training-set schema (fen + expected_reward White POV; see ASSETS.md)."""
 
 from __future__ import annotations
 

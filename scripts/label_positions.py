@@ -4,7 +4,7 @@
 Input: parquet/CSV with a ``fen`` column (ideally full ASSETS pre-label schema).
 Output: same metadata columns preserved + ``expected_reward``, WDL, ``teacher_network``.
 
-See ASSETS.md §Ideal final training set.
+See ASSETS.md (training data / labels) and schema.py.
 """
 
 from __future__ import annotations
