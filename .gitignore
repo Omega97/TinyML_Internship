@@ -1,6 +1,5 @@
 # ===== Repo-specific =====
 DAILY-NOTES/
-terminals/
 
 # Data
 data/raw/
@@ -24,6 +23,9 @@ data/processed/
 *.nnue
 src/cfish/nn-62ef826d1a6d.nnue
 
+# Local tools (Stockfish judge download, etc. — use PATH / STOCKFISH_PATH)
+tools/
+
 # Other
 PRIVATE
 
@@ -34,6 +36,7 @@ PRIVATE
 # ===== AI agents =====
 AI-SKILLS/
 mcps/
+terminals/
 
 # ===== Standard =====
 
