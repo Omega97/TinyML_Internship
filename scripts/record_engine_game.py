@@ -67,7 +67,25 @@ def main(argv: list[str] | None = None) -> int:
         help="Output GIF path (default: images/sardine_game.gif)",
     )
     parser.add_argument("--max-plies", type=int, default=200, help="Max half-moves")
-    parser.add_argument("--depth", type=int, default=1, help="Search depth in full moves")
+    parser.add_argument(
+        "--depth",
+        type=int,
+        default=1,
+        help="Fixed search depth (ignored if --movetime is set)",
+    )
+    parser.add_argument(
+        "--movetime",
+        type=float,
+        default=None,
+        metavar="SEC",
+        help="Per-move wall-clock budget in seconds (iterative deepening; depth not fixed)",
+    )
+    parser.add_argument(
+        "--max-search-depth",
+        type=int,
+        default=64,
+        help="Cap iterative depth when using --movetime (default: 64)",
+    )
     parser.add_argument(
         "--eval",
         choices=EVAL_CHOICES,
@@ -121,21 +139,31 @@ def main(argv: list[str] | None = None) -> int:
         args.eval,
         nnue_checkpoint=args.nnue_checkpoint if args.eval == "nnue" else None,
     )
-    annotator = f"SARDINE {ENGINE_VERSION} ({args.eval}, depth {args.depth})"
     qsearch = "on" if args.quiescence else "off"
     if args.quiescence and args.max_qsearch_depth is not None:
         qsearch = f"on,max{args.max_qsearch_depth}"
-    print(f"Playing engine self-play ({annotator}, qsearch={qsearch})...")
+    if args.movetime is not None:
+        annotator = (
+            f"SARDINE {ENGINE_VERSION} ({args.eval}, movetime={args.movetime}s, "
+            f"maxd={args.max_search_depth}, qsearch={qsearch})"
+        )
+    else:
+        annotator = (
+            f"SARDINE {ENGINE_VERSION} ({args.eval}, depth {args.depth}, qsearch={qsearch})"
+        )
+    print(f"Playing engine self-play ({annotator})...")
 
     play_progress = None if args.no_progress else _TerminalProgress(args.max_plies, "Self-play")
 
     def _on_ply(ply: int, max_plies: int, move: chess.Move, ply_sec: float) -> None:
         if play_progress is not None:
-            play_progress.update(ply, f"ply {ply} {move.uci()} {ply_sec:.1f}s")
+            play_progress.update(ply, f"ply {ply} {move.uci()} {ply_sec:.2f}s")
 
     game = play_engine_game(
         max_plies=args.max_plies,
         depth=args.depth,
+        movetime_s=args.movetime,
+        max_search_depth=args.max_search_depth,
         eval_fn=eval_fn,
         quiescence=args.quiescence,
         max_qsearch_depth=args.max_qsearch_depth,

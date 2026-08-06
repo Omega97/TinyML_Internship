@@ -11,7 +11,14 @@ import torch
 from tinymlinternship.config.settings import CHESSBENCH_PROCESSED_DIR
 from tinymlinternship.data.chessbench_preprocess import parse_chessbench_row
 from tinymlinternship.features import FEATURE_DIM, NUM_BUCKETS
-from tinymlinternship.nnue import BucketedNNUE, ChessbenchDataset, indices_to_binary
+from tinymlinternship.nnue import (
+    BucketedNNUE,
+    ChessbenchDataset,
+    SingleHeadNNUE,
+    build_nnue,
+    indices_to_binary,
+    infer_architecture,
+)
 
 
 def test_indices_to_binary():
@@ -21,6 +28,34 @@ def test_indices_to_binary():
     assert x[5] == 1.0
     assert x[10] == 1.0
     assert x[1] == 0.0
+
+
+def test_single_head_nnue_forward_startpos():
+    """F3 production path: one head, ignores bucket routing."""
+    row = parse_chessbench_row(chess.STARTING_FEN, 0.5)
+    assert row is not None
+
+    model = SingleHeadNNUE(hidden_dim=16)
+    white = indices_to_binary(row.white_features).unsqueeze(0)
+    black = indices_to_binary(row.black_features).unsqueeze(0)
+    bucket_ids = torch.tensor([row.bucket_id], dtype=torch.long)
+    stm_white = torch.tensor([row.stm_white], dtype=torch.bool)
+
+    out = model(white, black, bucket_ids, stm_white)
+    assert out.shape == (1,)
+    assert -1.0 <= out.item() <= 1.0
+
+
+def test_single_head_ignores_bucket_id():
+    model = SingleHeadNNUE(hidden_dim=8)
+    white = torch.zeros(1, FEATURE_DIM)
+    black = torch.zeros(1, FEATURE_DIM)
+    white[:, 0] = 1.0
+    black[:, 1] = 1.0
+    stm = torch.tensor([True], dtype=torch.bool)
+    a = model(white, black, torch.tensor([0]), stm)
+    b = model(white, black, torch.tensor([7]), stm)
+    assert torch.allclose(a, b)
 
 
 def test_bucketed_nnue_forward_startpos():
@@ -49,6 +84,17 @@ def test_bucketed_nnue_routes_by_bucket():
 
     out = model(white, black, bucket_ids, stm_white)
     assert out.shape == (2,)
+
+
+def test_build_nnue_and_infer_architecture():
+    single = build_nnue("single_head", hidden_dim=16)
+    bucketed = build_nnue("bucketed", hidden_dim=16)
+    assert isinstance(single, SingleHeadNNUE)
+    assert isinstance(bucketed, BucketedNNUE)
+    assert infer_architecture(single.state_dict()) == "single_head"
+    assert infer_architecture(bucketed.state_dict()) == "bucketed"
+    # single-head is strictly smaller than 8-expert bucketed at same W
+    assert single.count_parameters() < bucketed.count_parameters()
 
 
 @pytest.mark.skipif(

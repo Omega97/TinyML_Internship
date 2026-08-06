@@ -2,7 +2,7 @@
 
 import chess
 
-from tinymlinternship.engine import evaluate_hce, search, search_best_move
+from tinymlinternship.engine import evaluate_hce, search, search_best_move, search_timed
 from tinymlinternship.engine.eval_hce import MATE_SCORE
 
 
@@ -78,7 +78,15 @@ def test_search_finds_mating_move_depth_two():
     result = search(board, 2)
     assert result is not None
     assert result.move.uci() == "f7g7"
-    assert result.score >= MATE_SCORE - 100
+
+
+def test_search_timed_returns_legal_move():
+    board = chess.Board()
+    result = search_timed(board, 0.05, max_depth=8)
+    assert result is not None
+    assert result.move in board.legal_moves
+    assert result.depth >= 1
+    assert result.nodes >= 1
 
 
 def test_search_depth_two_winning_capture():

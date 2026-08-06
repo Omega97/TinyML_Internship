@@ -9,7 +9,7 @@ from typing import Any
 import chess
 import chess.pgn
 
-from tinymlinternship.engine import ENGINE_VERSION, search
+from tinymlinternship.engine import ENGINE_VERSION, search, search_timed
 from tinymlinternship.engine.eval_hce import evaluate_hce
 from tinymlinternship.engine.search import EvalFn
 
@@ -22,6 +22,8 @@ def play_engine_game(
     white_name: str = "SARDINE",
     black_name: str = "SARDINE",
     depth: int = 1,
+    movetime_s: float | None = None,
+    max_search_depth: int = 64,
     eval_fn: EvalFn = evaluate_hce,
     quiescence: bool = True,
     max_qsearch_depth: int | None = None,
@@ -30,10 +32,12 @@ def play_engine_game(
     max_seconds: float | None = None,
 ) -> chess.pgn.Game:
     """
-    Self-play with fixed-depth search until game over, ``max_plies``, or
-    ``max_seconds`` elapsed.
+    Self-play until game over, ``max_plies``, or ``max_seconds`` elapsed.
 
-    Returns a ``chess.pgn.Game`` with the main line recorded.
+    Search mode:
+    - If ``movetime_s`` is set: iterative deepening under that **per-move** budget
+      (depth not fixed; capped by ``max_search_depth``).
+    - Else: fixed ``depth`` alpha-beta as before.
     """
     board = chess.Board()
     game = chess.pgn.Game()
@@ -41,7 +45,12 @@ def play_engine_game(
     game.headers["White"] = white_name
     game.headers["Black"] = black_name
     if annotator is None:
-        annotator = f"SARDINE {ENGINE_VERSION} (HCE, {depth}-ply)"
+        if movetime_s is not None:
+            annotator = (
+                f"SARDINE {ENGINE_VERSION} (HCE, movetime={movetime_s}s)"
+            )
+        else:
+            annotator = f"SARDINE {ENGINE_VERSION} (HCE, {depth}-ply)"
     game.headers["Annotator"] = annotator
 
     node = game
@@ -54,17 +63,30 @@ def play_engine_game(
             truncated_time = True
             break
         t0 = time.perf_counter()
-        result = search(
-            board,
-            depth,
-            eval_fn=eval_fn,
-            quiescence=quiescence,
-            max_qsearch_depth=max_qsearch_depth,
-        )
+        if movetime_s is not None:
+            result = search_timed(
+                board,
+                movetime_s,
+                eval_fn=eval_fn,
+                quiescence=quiescence,
+                max_qsearch_depth=max_qsearch_depth,
+                max_depth=max_search_depth,
+            )
+        else:
+            result = search(
+                board,
+                depth,
+                eval_fn=eval_fn,
+                quiescence=quiescence,
+                max_qsearch_depth=max_qsearch_depth,
+            )
         if result is None:
             break
         ply_sec = time.perf_counter() - t0
         node = node.add_variation(result.move)
+        # Optional: comment reached search depth when timed
+        if movetime_s is not None and node.comment is None:
+            node.comment = f"depth {result.depth}, nodes {result.nodes}"
         board.push(result.move)
         plies += 1
         if on_ply is not None:

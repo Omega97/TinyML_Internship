@@ -31,15 +31,28 @@ _Progress vs repo as of ~2026-08-03. **This checklist is the sole product progre
 	- Formal recipe + nps archived (2026-08-04): cwd **must** be `src/cfish/`; Hybrid NNUE loads `nn-62ef826d1a6d.nnue`; `go depth 5` → `bestmove e2e4`, nps ~**224k** (depth 12 ~**1.8M** nps). See daily note `2026-08-04.md` §Execution log.
 	- `scripts/cfish.py` resolves `src/cfish/cfish.exe` + correct cwd (no longer `./cfish`).
     
-- [ ] Evaluate the base (HCE) model with Stockfish (game review)
-	- 10 quick self-play games + run the engine on every move to get the 5 biggest blunders
-	- benchmark the nps
-	- lib: `src/tinymlinternship/bot_eval/` (`acpl.py`, `stockfish_path.py`)
-	- CLI: `scripts/eval_bot_acpl.py` · optional Elo: `scripts/eval_game_elo.py`
-	- self-play recorder: `scripts/record_engine_game.py --eval hce`
-	- HCE eval: `src/tinymlinternship/engine/eval_hce.py` · search: `src/tinymlinternship/engine/search.py`
-	- existing PC gate artifacts: `plots/PGN_and_JSON/hce_d1_gate.pgn`, `hce_d1_gate_acpl.json` (and d2 variants)
-	- *Item is for **Cfish classical/HCE baseline** if distinct from the Python HCE gate already archived.*
+- [x] Selecting evaluation criterion
+	- **Primary judge: Stockfish** (strong external engine) — game review via average centipawn loss (ACPL) and heuristic Elo (`Elo ≈ 2855 − 10×ACPL`, floor 400)
+	- CLI: `scripts/eval_bot_acpl.py` · per-side from PGN: `scripts/eval_game_elo.py` · lib: `src/tinymlinternship/bot_eval/`
+	- Stockfish binary: PATH / `STOCKFISH_PATH` / `--stockfish` (optional local under `tools/stockfish/`; not shipped in git)
+	- **Other criteria used in this project:**
+		- **nps / nodes** — search cost model (UCI `info nps` on Cfish; microbench still open for Python student)
+		- **Self-play ladder** — same judge protocol across policies (HCE, NNUE, random floor, Cfish Hybrid, teachers)
+		- **val MSE / MAE** — train-time fit to teacher `expected_reward` (not a playing-strength metric alone)
+		- **Match Elo** (blueprint ship gate) — head-to-head under a frozen protocol; preferred for the final ≥1700 claim over ACPL alone
+	- *ACPL is the day-to-day gate; match Elo is the product ship gate (see blueprint / On the Hardware).*
+    
+- [x] Evaluate the base (HCE) model with Stockfish (game review)
+	- **Python HCE** baseline (not Cfish classical UCI): `eval_hce.py` + αβ `search.py`
+	- **10-game gate (2026-08-05):** depth **2**, qsearch **off**, max 80 plies; SF judge 100 ms/move
+	- Combined: **ACPL 20.9** (σ=16.5) · Elo heuristic **2646** (2571–2721) · 440 moves · all 10 games ½–½ @ 44 plies (deterministic self-play line)
+	- **Mean per-game Elo:** **~2646** (range across games **2631–2667**)
+	- Top blunders (combined CPL): `…d6` / `Be3` ~65 cp (opening inaccuracy, not tactical collapse)
+	- **nps microbench** (startpos, d2, qsearch cap 6, 50 searches): ~**28k nps** (Python; not Cfish-class)
+	- Artifacts: `plots/PGN_and_JSON/hce_d2_q6_10game_gate.pgn`, `hce_d2_q6_10game_gate_acpl.json`
+	- Prior multi-game d2 no-q: `hce_d2_gate_acpl.json` (16 games, ACPL **24.5** / Elo **~2610**, 2026-07-10) — consistent order of magnitude
+	- CLI: `scripts/eval_bot_acpl.py --eval hce --depth 2 --games 10 --sf-movetime-ms 100` · lib: `bot_eval/`
+	- *Cfish pure-classical UCI baseline remains optional/distinct if ever needed; this ticks the PC HCE strength gate.*
 
 ### First NNUE
 
@@ -97,10 +110,11 @@ _Progress vs repo as of ~2026-08-03. **This checklist is the sole product progre
 
 - [x] Train small NNUE (pilot / smoke)
 	- **Production shape (F3):** dual-POV L1 `844 → W` + concat `2W` + **single** head `2W → 1` (no multi-expert routing until §D)
-	- train CLI: `scripts/train_nnue.py` · model: `src/tinymlinternship/nnue/model.py` · loader: `src/tinymlinternship/nnue/dataset.py`
-	- *Legacy pilots used **8** expert heads (`pilot_W128_844`, `smoke_prod_W128_844`) — experimental only; next production train should be single-head.*
+	- train CLI: `scripts/train_nnue.py` (`--architecture single_head` **default**) · model: `SingleHeadNNUE` / legacy `BucketedNNUE` in `src/tinymlinternship/nnue/model.py` · loader: `nnue/dataset.py` · eval load: `engine/eval_nnue.py`
+	- **F3 path + mini train (2026-08-05):** `models/checkpoints/nnue/single_W128_mini_ep30/` on `data/processed/labeled/{train,val}.parquet` (5306 / 214 rows; best val_mse **0.196** @ ep6; 30 ep run)
+	- *Legacy pilots used **8** expert heads (`pilot_W128_844`, `smoke_prod_W128_844`) — experimental only; still the stronger d1 ladder point until data scale improves.*
 	- ChessBench pilot data: `data/processed/chessbench/splits/{train,val}.parquet` · `scripts/prepare_chessbench_dataset.py` (smoke wiring only)
-	- *nnue-pytorch adapt, gradual L1 prune, PTQ export still open.*
+	- *Full-volume single-head train, nnue-pytorch adapt, gradual L1 prune, PTQ export still open.*
       
 - [ ] Thesis idea: multi-expert / task-vector bucketing (after Elo path — J1)
 	- training by bucketing states via task vectors or ablation-chosen partitions
@@ -112,8 +126,9 @@ _Progress vs repo as of ~2026-08-03. **This checklist is the sole product progre
 	- CLI: `scripts/eval_bot_acpl.py` · lib: `src/tinymlinternship/bot_eval/acpl.py`
 	- self-play: `scripts/record_engine_game.py --eval nnue` · NNUE hook: `src/tinymlinternship/engine/eval_nnue.py`
 	- artifacts: `plots/PGN_and_JSON/nnue_d1_gate.pgn`, `plots/PGN_and_JSON/nnue_d1_gate_acpl.json` (also `nnue_d2_*`)
+	- **F3 single-head mini gate (2026-08-05):** `single_W128_mini_d1_gate*` — ACPL **~583** / Elo floor **400** (worse than random ~276; pilot multi-head d1 ~139 remains reference student)
 	- demos: `images/nnue_d1_game.gif`, `images/nnue_d2_game.gif` (and related under `images/games/`)
-	- *Not a full closed package for every checkpoint; **nps** microbench still open. Known issue: NNUE d2 ACPL collapse vs d1.*
+	- *Playing-strength path **not** closed by mini single-head. **nps** microbench still open. Known issue: NNUE d2 ACPL collapse vs d1 (pilot).*
 
 ### On the Hardware
 
@@ -239,7 +254,7 @@ PC reference implementations (Python) for the student path:
 | Layer | Path |
 | ----- | ---- |
 | Features 844 + bucket metadata | `src/tinymlinternship/features/` |
-| Student NNUE (F3: single head; pilots may still be multi-head) | `src/tinymlinternship/nnue/model.py` |
+| Student NNUE (F3 `SingleHeadNNUE`; legacy `BucketedNNUE` pilots) | `src/tinymlinternship/nnue/model.py` |
 | Search / eval hooks | `src/tinymlinternship/engine/search.py`, `eval_nnue.py`, `eval_hce.py` |
 | ACPL judge stack | `src/tinymlinternship/bot_eval/`, `scripts/eval_bot_acpl.py` |
 | Cfish baseline tree | `src/cfish/` |

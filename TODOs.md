@@ -2,7 +2,7 @@
 
 **Product progress lives only in [PROJECT.md](PROJECT.md)** (decision **A1**). This file expands eng detail under the same section names.  
 Architecture: [blueprint](NOTES/SARDINE%20Engine%20Blueprint.md) (**B1**). Labels/data: [ASSETS.md](ASSETS.md) (**C1/E1**). Authority: [ai-feed.md](ai-feed.md).  
-_Last updated: 2026-08-03 — aligned with PROJECT; **F3** single head until §D._
+_Last updated: 2026-08-05 — F3 single-head path + mini train + ACPL gate; **F3** single head until §D._
 
 | PROJECT section | This file |
 | --------------- | --------- |
@@ -71,27 +71,31 @@ _PROJECT: raw download / teacher labels / uniform mini set [x] · dedup [ ] · f
 
 ## 4 · Train the Network
 
-_PROJECT: pilot/smoke train [x] · ACPL on pilot NNUE [x] · thesis MoE later [ ] · production single-head open (F3)._
+_PROJECT: pilot/smoke [x] · F3 single-head **code + mini train** [x] · ACPL pilot [x] · ACPL single-head mini recorded (strength fail) · full volume / Elo path still open · thesis MoE later [ ]._
 
 Architecture (**F3** production): L1 `844 → W` dual POV → concat `2W` → **one** head `2W → 1` · CReLU · tanh → expected-reward LUT.  
 *Legacy 8-head pilots = experimental only.*
 
 - [x] Pilot / smoke train — `scripts/train_nnue.py`, `nnue/model.py` (legacy multi-head checkpoints under `models/checkpoints/nnue/`)
-- [ ] **Single-head** model + train path (F3) — adapt `model.py` / train CLI; drop multi-expert routing for production runs
-- [ ] Single-head train on mini labeled set, then full volume
+- [x] **Single-head** model + train path (F3) — `SingleHeadNNUE` + `--architecture single_head` default; `eval_nnue` loads both arches (2026-08-05)
+- [x] Single-head train on **mini** labeled set — `single_W128_mini_ep30` · data `data/processed/labeled/{train,val}.parquet` · best val_mse **0.196** @ ep6
+- [ ] Single-head train on **full volume** (Lichess dump + re-label after scale)
 - [ ] **nnue-pytorch** adapt — 844-dim, single head, gradual L1 prune, 100 ep
 - [ ] L1 gradual pruning 70–80% during training; sparse flash export
 - [ ] PTQ int8 + tanh LUT; measure fp32→int8 gap (QAT only if MSE/Elo gap too large)
 - [x] ACPL on pilot NNUE (D1) — `plots/PGN_and_JSON/nnue_d1_gate*`; d2 collapse known
+- [x] ACPL on single-head mini (D1) — `plots/PGN_and_JSON/single_W128_mini_d1_gate*` · ACPL **~583** / Elo **400** (worse than random ~276; **not** a strength win)
+- [ ] Playing-strength student ≥ pilot ladder (need more data / better train before Elo gate)
 - [ ] **nps** microbench for student / search (still open; PROJECT notes)
-- [ ] Teacher-only depth=1 playing-strength baseline (after first single-head net)
+- [ ] Teacher-only depth=1 playing-strength baseline (after a *playable* single-head net)
 - [x] Piece-count distribution study — `scripts/plot_piece_count_distribution.py`, `data/excel/piece_count_distribution_10k.xlsx` (PROJECT Stretch [x])
 
 ### 4b · Bucket ablation (PROJECT Train / blueprint §D — after single-head baseline)
 
-_**F3:** no multi-head ship until this finishes. Compare single-head vs candidate partitions only after single-head baseline exists._
+_**F3:** no multi-head ship until this finishes. Compare single-head vs candidate partitions only after a **playable** single-head baseline exists (mini MSE alone insufficient — need ladder not at Elo floor)._
 
-- [ ] Single-head baseline on teacher-labeled val
+- [x] Single-head val MSE on mini teacher-labeled set (best **0.196**; overfit train MSE ~0.006 @ ep30)
+- [ ] Single-head baseline **playing strength** on teacher-labeled / ladder (open — mini gate failed)
 - [ ] Per-partition MSE: single head vs 4 piece-count vs 8 queen-split (natural mix)
 - [ ] Decisive vs ambiguous threshold; playing-strength only if ambiguous
 - [ ] Lock scheme; sync PROJECT, blueprint, `bucket.py`, train/export
@@ -196,7 +200,7 @@ _PROJECT marks encoder / αβ+qsearch / MVV-LVA / dual-POV [x]. Eng depth for re
 | Cfish stock-NNUE ACPL | §2 |
 | Dedup + multiplicity | §3 |
 | Full Lichess + re-label | §3 |
-| Single-head production train | §4 |
+| Single-head code + mini train [x]; full volume + strength | §4 |
 | Thesis MoE / task vectors | §6 (after Elo) |
 | Wio smoke / device eval / Lichess | §5 + §8 |
 | nps microbench | §2 / §4 / §7b |

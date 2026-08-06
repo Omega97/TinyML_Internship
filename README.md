@@ -8,28 +8,10 @@
 - Presentation: [SARDINE_ICTP_2026-07.pdf](presentations/SARDINE_ICTP_2026-07.pdf)
 - Engine blueprint: [SARDINE Engine Blueprint.md](NOTES/SARDINE%20Engine%20Blueprint.md)
 - Status / design dashboard: [PROJECT.md](PROJECT.md)
-- Thesis ideas: [Thesis.md](NOTES/Thesis.md)
 - Online models: [Models.md](NOTES/Models.md)
 - Kaggle challenge: [FIDE & Google Efficient Chess AI Challenge](https://www.kaggle.com/competitions/fide-google-efficiency-chess-ai-challenge)
 - Pipeline assets: [ASSETS.md](ASSETS.md)
-
-**Engine self-play demos** (demo reel = HCE then NNUE at that depth):
-
-| Eval                  | depth 1                                                   | depth 2                                                   |
-| --------------------- | --------------------------------------------------------- | --------------------------------------------------------- |
-| Demo reel             | <img src="images/games/depth1_game_demo.gif" width="200"> | <img src="images/games/depth2_game_demo.gif" width="200"> |
-| HCE (no qsearch)      | <img src="images/games/hce_d1_game.gif" width="200">      | <img src="images/games/hce_d2_game.gif" width="200">      |
-| NNUE `pilot_W128_844` | <img src="images/games/nnue_d1_game.gif" width="200">     | <img src="images/games/nnue_d2_game.gif" width="200">     |
-
-```bash
-# Reproduce GIFs
-pip install -e ".[viz]"
-py -3.12 scripts/record_engine_game.py --eval hce --depth 1 --no-quiescence --headless --output images/hce_d1_game.gif
-py -3.12 scripts/record_engine_game.py --eval hce --depth 2 --no-quiescence --headless --output images/hce_d2_game.gif
-py -3.12 scripts/record_engine_game.py --eval nnue --depth 1 --headless --output images/nnue_d1_game.gif
-py -3.12 scripts/record_engine_game.py --eval nnue --depth 2 --headless --output images/nnue_d2_game.gif
-# Demo reels = concatenate HCE + NNUE GIFs for that depth → images/games/depth{1,2}_game_demo.gif
-```
+- Thesis ideas: [Thesis.md](NOTES/Thesis.md)
 
 ---
 
@@ -74,6 +56,49 @@ py -3.12 scripts/record_engine_game.py
 </div>
 
 See [NOTES/Commands.md](NOTES/Commands.md) for all commands.
+
+---
+
+## Games
+
+**Engine self-play demos** (how each GIF was produced → result).  
+**White / Black Elo** = Stockfish ACPL heuristic on that demo PGN (`Elo ≈ 2855 − 10×ACPL`, floor **400**), via `scripts/eval_game_elo.py`. Same agent plays both colors; single-game Elo is noisy when huge blunders/mates inflate ACPL. Multi-game ladder (bot ranking): [ASSETS.md](ASSETS.md) / `plots/PGN_and_JSON/*_gate_acpl.json` (e.g. HCE d1 **~400**, pilot NNUE d1 **~1465**, Cfish Hybrid d5 **~2435**).
+
+| Description                                                                                                                                                                              | GIF                                                           |
+| ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------- |
+| **Omar game 2** <br>human blitz PGN (`omar-game-2.pgn`)<br>DrifS (1808) vs Omega0 (1819), 0-1<br>White **~400** (ACPL 1275)‡ <br>Black **~2590** (ACPL 27)                               | <img src="images/games/omar-game-2.gif" width="200">          |
+| **Omar game 3** <br>human bullet PGN (`omar-game-3.pgn`)<br>Omega0 (1669) vs Petroliam89 (1694), 0-1<br>White **~1710** (ACPL 115) <br>Black **~1890** (ACPL 97)                         | <img src="images/games/omar-game-3.gif" width="200">          |
+| **Omar game 4** <br>human blitz PGN (`omar-game-4.pgn`)<br>Omega0 (1938) vs GonzoII (2006), 1-0<br>White **~2540** (ACPL 31) <br>Black **~2435** (ACPL 42)                               | <img src="images/games/omar-game-4.gif" width="200">          |
+| **NNUE d4 demo** <br>same pilot NNUE<br>αβ depth 4, **no** qsearch<br>max 40 plies<br>White **~2420** (ACPL 43) <br>Black **~2280** (ACPL 58)                                            | <img src="images/games/nnue_d4_demo.gif" width="200">         |
+| **NNUE depth 1** <br>pilot `pilot_W128_844` <br>pure NNUE <br>(844-dim dual POV),<br>alpha-beta depth 1<br>White **~2260** (ACPL 59) <br>Black **~2250** (ACPL 61)                       | <img src="images/games/nnue_d1_game.gif" width="200">         |
+| **HCE depth 1** <br>hand-crafted eval<br>alpha-beta depth 1<br>**no** quiescence<br>White **~400** (ACPL 1548) <br>Black **~2230** (ACPL 62)                                             | <img src="images/games/hce_d1_game.gif" width="200">          |
+| **NNUE depth 2** <br>same pilot NNUE checkpoint<br>alpha-beta depth 2<br>White **~2135** (ACPL 72)† <br>Black **~2120** (ACPL 74)†                                                       | <img src="images/games/nnue_d2_game.gif" width="200">         |
+| **HCE 1 s/move** <br>same HCE, iterative deepening<br>**movetime 1.0 s** (depth not fixed)<br>qsearch cap 6 · ½–½ @ 37 plies<br>White **~1230** (ACPL 162) <br>Black **~1960** (ACPL 90) | <img src="images/games/hce_movetime_1s_demo.gif" width="200"> |
+| **NNUE d1 demo** <br>pilot `pilot_W128_844`<br>αβ depth 1, **no** qsearch<br>max 80 plies ([demo](demo/demo-nnue-gif.md))<br>White **~1720** (ACPL 113) <br>Black **~1630** (ACPL 123)   | <img src="images/games/nnue_d1_demo.gif" width="200">         |
+| **HCE depth 2** <br>same HCE value function<br>alpha-beta depth 2<br>**no** quiescence<br>White **~400** (ACPL 1519) <br>Black **~400** (ACPL 1516)                                      | <img src="images/games/hce_d2_game.gif" width="200">          |
+| **HCE d2 + qsearch** <br>same HCE<br>αβ depth 2, **with** qsearch<br>(cap 6), max 80 plies<br>White **~400** (ACPL 1525) <br>Black **~400** (ACPL 1524)                                  | <img src="images/games/hce_d2_qsearch_demo.gif" width="200">  |
+| **Depth-1 demo reel** <br>concat. HCE d1 + NNUE d1<br>                                                                                                                                   | <img src="images/games/depth1_game_demo.gif" width="200">     |
+| **Depth-2 demo reel** <br>concat. HCE d2 + NNUE d2<br>                                                                                                                                   | <img src="images/games/depth2_game_demo.gif" width="200">     |
+
+
+† NNUE d2: no `nnue_d2_game.pgn` beside the GIF; Elo from companion self-play `images/games/nnue_w128_844_d2_vs_nnue_w128_844_d2_2026-07-10.pgn`. Multi-game gate for this pilot at d2 is a known **collapse** (ACPL ~1590 / Elo floor **~400** in `nnue_d2_gate_acpl.json`).
+
+‡ Omar 2/3/4: SF ACPL 100 ms/move — `omar_game_2_3_acpl.json`, `omar_game_4_acpl.json`. Omar 2 White floor driven by one mate-threat miss (`Rfd1` vs `Kh1`). Lichess ratings ≠ ACPL heuristic.
+
+```bash
+# Reproduce GIFs
+pip install -e ".[viz]"
+py -3.12 scripts/record_engine_game.py --eval hce --depth 1 --no-quiescence --headless --output images/games/hce_d1_game.gif
+py -3.12 scripts/record_engine_game.py --eval hce --depth 2 --no-quiescence --headless --output images/games/hce_d2_game.gif
+py -3.12 scripts/record_engine_game.py --eval hce --depth 2 --max-qsearch-depth 6 --max-plies 80 --headless --output images/games/hce_d2_qsearch_demo.gif
+py -3.12 scripts/record_engine_game.py --eval hce --movetime 1.0 --max-qsearch-depth 6 --max-plies 60 --headless --output images/games/hce_movetime_1s_demo.gif
+py -3.12 scripts/record_engine_game.py --eval nnue --depth 1 --headless --output images/games/nnue_d1_game.gif
+py -3.12 scripts/record_engine_game.py --eval nnue --depth 2 --headless --output images/games/nnue_d2_game.gif
+# Demo reels = concatenate HCE + NNUE GIFs for that depth → images/games/depth{1,2}_game_demo.gif
+
+# Per-color strength on a demo PGN (needs Stockfish)
+py -3.12 scripts/eval_game_elo.py --pgn images/games/nnue_d1_game.pgn --stockfish tools/stockfish/stockfish/stockfish-windows-x86-64-avx2.exe
+```
 
 ---
 

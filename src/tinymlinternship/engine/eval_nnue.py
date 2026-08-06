@@ -1,8 +1,9 @@
 """
-Bucketed NNUE static evaluation for the SARDINE search stack.
+NNUE static evaluation for the SARDINE search stack.
 
-Loads a PyTorch checkpoint (``BucketedNNUE``) and maps tanh expected-reward
-output to centipawn-like scores from White's perspective (same scale as Lc0).
+Loads a PyTorch checkpoint (F3 ``SingleHeadNNUE`` or legacy ``BucketedNNUE``)
+and maps tanh expected-reward output to centipawn-like scores from White's
+perspective (same scale as Lc0).
 """
 
 from __future__ import annotations
@@ -12,12 +13,18 @@ from pathlib import Path
 
 import chess
 import torch
+import torch.nn as nn
 
 from tinymlinternship.config.settings import NNUE_CHECKPOINT_DEFAULT
 from tinymlinternship.engine.eval_hce import MATE_SCORE
-from tinymlinternship.engine.eval_lc0 import CP_SCALE, expected_reward_to_cp
+from tinymlinternship.engine.eval_lc0 import expected_reward_to_cp
 from tinymlinternship.features import FEATURE_DIM, bucket_id, encode_dual
-from tinymlinternship.nnue import BucketedNNUE, indices_to_binary
+from tinymlinternship.nnue import (
+    Architecture,
+    build_nnue,
+    indices_to_binary,
+    infer_architecture,
+)
 
 
 def stm_reward_to_white(board: chess.Board, reward_stm: float) -> float:
@@ -26,7 +33,7 @@ def stm_reward_to_white(board: chess.Board, reward_stm: float) -> float:
 
 
 class NnueEvaluator:
-    """Loads and runs a trained ``BucketedNNUE`` checkpoint."""
+    """Loads and runs a trained single-head or bucketed NNUE checkpoint."""
 
     def __init__(
         self,
@@ -36,8 +43,9 @@ class NnueEvaluator:
     ) -> None:
         self.checkpoint = Path(checkpoint)
         self.device = torch.device(device)
-        self._model: BucketedNNUE | None = None
+        self._model: nn.Module | None = None
         self.hidden_dim = 128
+        self.architecture: Architecture = "single_head"
 
     def load(self) -> None:
         if self._model is not None:
@@ -48,21 +56,43 @@ class NnueEvaluator:
             )
 
         payload = torch.load(self.checkpoint, map_location=self.device, weights_only=True)
-        self.hidden_dim = int(payload.get("hidden_dim", 128))
-        model = BucketedNNUE(hidden_dim=self.hidden_dim)
-        l1_in = payload["model_state_dict"]["l1.weight"].shape[1]
+        # Support both full payload (best.pt) and raw state_dict (old last.pt).
+        if isinstance(payload, dict) and "model_state_dict" in payload:
+            state = payload["model_state_dict"]
+            self.hidden_dim = int(payload.get("hidden_dim", 128))
+            arch_raw = payload.get("architecture")
+            self.architecture = (
+                arch_raw
+                if arch_raw in ("single_head", "bucketed")
+                else infer_architecture(state)
+            )
+            num_buckets = int(payload.get("num_buckets", 8))
+        else:
+            state = payload
+            self.hidden_dim = 128
+            self.architecture = infer_architecture(state)
+            num_buckets = 8
+            if "l1.weight" in state:
+                self.hidden_dim = int(state["l1.weight"].shape[0])
+
+        l1_in = state["l1.weight"].shape[1]
         if l1_in != FEATURE_DIM:
             raise ValueError(
                 f"checkpoint L1 input {l1_in} != encoder FEATURE_DIM {FEATURE_DIM}; "
                 "retrain with scripts/train_nnue.py"
             )
-        model.load_state_dict(payload["model_state_dict"])
+        model = build_nnue(
+            self.architecture,
+            hidden_dim=self.hidden_dim,
+            num_buckets=num_buckets,
+        )
+        model.load_state_dict(state)
         model.to(self.device)
         model.eval()
         self._model = model
 
     @property
-    def model(self) -> BucketedNNUE:
+    def model(self) -> nn.Module:
         self.load()
         assert self._model is not None
         return self._model

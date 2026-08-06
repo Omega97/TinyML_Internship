@@ -1,6 +1,7 @@
 """
 SARDINE search — negamax alpha-beta with pluggable static eval.
 
+v0.3.1: timed iterative deepening (``search_timed`` / movetime).
 v0.3: capture-only quiescence at depth-0 leaves.
 v0.2: fixed-depth alpha-beta (``search``).
 v0.1: ``search_best_move`` is depth-1 search.
@@ -8,6 +9,7 @@ v0.1: ``search_best_move`` is depth-1 search.
 
 from __future__ import annotations
 
+import time
 from collections.abc import Callable
 from dataclasses import dataclass
 from typing import Union
@@ -18,6 +20,10 @@ from tinymlinternship.engine.eval_hce import MATE_SCORE, evaluate_hce
 
 BoardLike = Union[str, chess.Board]
 EvalFn = Callable[[chess.Board], int]
+
+
+class _TimeUp(Exception):
+    """Internal: search aborted because the wall-clock deadline was hit."""
 
 
 @dataclass(frozen=True)
@@ -71,12 +77,16 @@ def search(
     eval_fn: EvalFn = evaluate_hce,
     quiescence: bool = True,
     max_qsearch_depth: int | None = None,
+    deadline: float | None = None,
 ) -> SearchResult | None:
     """
     Fixed-depth negamax alpha-beta search with optional capture quiescence.
 
     ``max_qsearch_depth`` caps noisy-move extensions at depth-0 leaves (``None`` =
     unlimited). Each capture/promotion in qsearch consumes one ply of this budget.
+
+    ``deadline`` is an optional ``time.perf_counter()`` wall time; if the search
+    exceeds it mid-tree, raises ``_TimeUp`` (used by :func:`search_timed`).
 
     ``score`` is centipawns from **White's** perspective at the resulting position
     (same convention as ``evaluate_hce``). Returns ``None`` if there are no legal moves.
@@ -91,6 +101,10 @@ def search(
 
     nodes = 0
 
+    def _check_time() -> None:
+        if deadline is not None and time.perf_counter() >= deadline:
+            raise _TimeUp()
+
     def qsearch(
         node: chess.Board,
         alpha: int,
@@ -99,6 +113,8 @@ def search(
     ) -> int:
         nonlocal nodes
         nodes += 1
+        if nodes & 255 == 0:
+            _check_time()
 
         if node.is_game_over():
             return _eval_stm(node, eval_fn)
@@ -114,9 +130,11 @@ def search(
 
         for move in _noisy_moves(node):
             node.push(move)
-            next_q = None if qremaining is None else qremaining - 1
-            score = -qsearch(node, -beta, -alpha, next_q)
-            node.pop()
+            try:
+                next_q = None if qremaining is None else qremaining - 1
+                score = -qsearch(node, -beta, -alpha, next_q)
+            finally:
+                node.pop()
 
             if score > alpha:
                 alpha = score
@@ -127,6 +145,8 @@ def search(
     def negamax(node: chess.Board, remaining: int, alpha: int, beta: int) -> int:
         nonlocal nodes
         nodes += 1
+        if nodes & 255 == 0:
+            _check_time()
 
         if node.is_game_over():
             return _eval_stm(node, eval_fn)
@@ -139,8 +159,10 @@ def search(
         value = -MATE_SCORE
         for move in _ordered_moves(node):
             node.push(move)
-            score = -negamax(node, remaining - 1, -beta, -alpha)
-            node.pop()
+            try:
+                score = -negamax(node, remaining - 1, -beta, -alpha)
+            finally:
+                node.pop()
 
             if score > value:
                 value = score
@@ -155,22 +177,111 @@ def search(
     alpha = -MATE_SCORE
     beta = MATE_SCORE
 
-    for move in legal:
-        position.push(move)
-        score = -negamax(position, depth - 1, -beta, -alpha)
-        position.pop()
+    try:
+        for move in legal:
+            _check_time()
+            position.push(move)
+            try:
+                score = -negamax(position, depth - 1, -beta, -alpha)
+            except _TimeUp:
+                position.pop()
+                raise
+            position.pop()
 
-        if score > best_score:
-            best_score = score
-            best_move = move
-        if score > alpha:
-            alpha = score
+            if score > best_score:
+                best_score = score
+                best_move = move
+            if score > alpha:
+                alpha = score
+    except _TimeUp:
+        # Keep any fully scored root moves; otherwise let caller fall back.
+        if best_move is None:
+            raise
 
-    assert best_move is not None
+    if best_move is None:
+        # Should be unreachable (empty legal handled above); keep search robust.
+        best_move = legal[0]
+
     position.push(best_move)
     report_score = eval_fn(position)
     position.pop()
     return SearchResult(move=best_move, score=report_score, nodes=nodes, depth=depth)
+
+
+def search_timed(
+    board: BoardLike,
+    movetime_s: float,
+    *,
+    eval_fn: EvalFn = evaluate_hce,
+    quiescence: bool = True,
+    max_qsearch_depth: int | None = None,
+    max_depth: int = 64,
+) -> SearchResult | None:
+    """
+    Iterative deepening under a **per-move wall-clock budget** (seconds).
+
+    Depth is not fixed: the search runs depth 1, 2, … until ``movetime_s`` is
+    exhausted or ``max_depth`` is reached. If a depth is aborted mid-search,
+    the last fully completed depth is kept. Depth 1 is always completed even
+    if the budget is already exhausted (need a legal move).
+    """
+    if movetime_s <= 0:
+        raise ValueError(f"movetime_s must be > 0, got {movetime_s}")
+    if max_depth < 1:
+        raise ValueError(f"max_depth must be >= 1, got {max_depth}")
+
+    position = _as_board(board)
+    if not any(position.legal_moves):
+        return None
+
+    deadline = time.perf_counter() + movetime_s
+    best: SearchResult | None = None
+    total_nodes = 0
+
+    for depth in range(1, max_depth + 1):
+        if time.perf_counter() >= deadline and best is not None:
+            break
+        try:
+            # Always respect the wall clock so deeper ID iterations get budget.
+            # If depth-1 is aborted with no scored root move, fall through to fallback.
+            result = search(
+                position,
+                depth,
+                eval_fn=eval_fn,
+                quiescence=quiescence,
+                max_qsearch_depth=max_qsearch_depth,
+                deadline=deadline,
+            )
+        except _TimeUp:
+            break
+        if result is None:
+            break
+        total_nodes += result.nodes
+        best = SearchResult(
+            move=result.move,
+            score=result.score,
+            nodes=total_nodes,
+            depth=result.depth,
+        )
+
+    if best is None:
+        # Budget exhausted before any root move finished: greedy 1-ply static pick.
+        pick: chess.Move | None = None
+        pick_score = -MATE_SCORE
+        for move in _ordered_moves(position):
+            position.push(move)
+            # After the move, STM is the opponent; maximise the mover's score.
+            sc = -_eval_stm(position, eval_fn)
+            position.pop()
+            if sc > pick_score:
+                pick_score = sc
+                pick = move
+        assert pick is not None
+        position.push(pick)
+        report = eval_fn(position)
+        position.pop()
+        return SearchResult(move=pick, score=report, nodes=total_nodes, depth=0)
+    return best
 
 
 def search_best_move(board: BoardLike, *, eval_fn: EvalFn = evaluate_hce) -> SearchResult | None:

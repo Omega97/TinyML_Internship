@@ -6,9 +6,15 @@ from tinymlinternship.engine.eval_lc0 import Lc0Teacher, evaluate_lc0_teacher
 from tinymlinternship.engine.eval_nnue import NnueEvaluator, evaluate_nnue
 from tinymlinternship.engine.eval_random import evaluate_random
 from tinymlinternship.engine.perft import perft
-from tinymlinternship.engine.search import EvalFn, SearchResult, search, search_best_move
+from tinymlinternship.engine.search import (
+    EvalFn,
+    SearchResult,
+    search,
+    search_best_move,
+    search_timed,
+)
 
-ENGINE_VERSION = "0.3.0"
+ENGINE_VERSION = "0.3.1"
 
 __all__ = [
     "ENGINE_VERSION",
@@ -25,4 +31,5 @@ __all__ = [
     "perft",
     "search",
     "search_best_move",
+    "search_timed",
 ]

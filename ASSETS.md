@@ -11,9 +11,11 @@ Labels for training are Lc0 WDL → **`expected_reward`** (White POV, \([-1,+1]\
 
 | Title | Path | Description |
 | ----- | ---- | ----------- |
-| **Pilot NNUE W128 844** (default student) | `models/checkpoints/nnue/pilot_W128_844/` | Active SARDINE student (`best.pt`, `config.json`, `history.json`). Hidden width 128, 844-dim dual-POV encoder; trained on ChessBench pilot splits (~60k train rows, 5 epochs). Default for `--eval nnue`. |
-| **Pilot NNUE W128 ChessBench** (older) | `models/checkpoints/nnue/pilot_W128_chessbench/` | Earlier ChessBench pilot (716-era feature width in config params); superseded by `pilot_W128_844`. |
-| **Smoke prod W128 844** | `models/checkpoints/nnue/smoke_prod_W128_844/` | Short smoke train (2 epochs) on mini labeled set `data/processed/labeled/{train,val}.parquet` (~5.3k / 214 rows). Not a production student. |
+| **Pilot NNUE W128 844** (default student / ladder ref) | `models/checkpoints/nnue/pilot_W128_844/` | Multi-head pilot (`best.pt`). W=128, 844-dim dual-POV; ChessBench pilot splits (~60k train, 5 ep). Default for `--eval nnue`. d1 ACPL gate ~139 / Elo ~1465. |
+| **F3 single-head mini** | `models/checkpoints/nnue/single_W128_mini_ep30/` | First **single-head** train (F3): mini labeled `data/processed/labeled/{train,val}.parquet` (5306 / 214), 30 ep, best val_mse **0.196** @ ep6. d1 ACPL gate **~583** / Elo floor **400** — not playable yet. |
+| **F3 path smoke** | `models/checkpoints/nnue/f3_path_smoke/` | 1-ep wiring check for `SingleHeadNNUE` on same mini set. |
+| **Pilot NNUE W128 ChessBench** (older) | `models/checkpoints/nnue/pilot_W128_chessbench/` | Earlier ChessBench pilot; superseded by `pilot_W128_844`. |
+| **Smoke prod W128 844** | `models/checkpoints/nnue/smoke_prod_W128_844/` | Short multi-head smoke (2 ep) on mini labeled set. |
 
 ---
 
@@ -34,13 +36,13 @@ Labels for training are Lc0 WDL → **`expected_reward`** (White POV, \([-1,+1]\
 
 ## Training data — raw
 
-| Title | Path | Description |
-| ----- | ---- | ----------- |
-| **Lc0 training chunks** | `data/raw/lc0/` (`tars/`, `chunks/`, `manifest.json`) | ~1+ GiB Lc0 self-play shards for FEN sampling (supplement source). |
-| **Lichess smoke PGN** | `data/raw/lichess_smoke50.pgn` | 50 games for pipeline smoke (not production volume). |
-| **ChessBench bags** | `data/raw/chessbench/test/` | Raw bags for encoder/train pilot only — not production labels. |
-| **Kaggle games CSV** | `data/raw/games.csv` | Piece-count / stats smoke only — not NNUE train. |
-| **Lichess monthly dump** | `data/raw/lichess/` | Production primary source — **not downloaded yet**. |
+| Title                    | Path                                                  | Description                                                        |
+| ------------------------ | ----------------------------------------------------- | ------------------------------------------------------------------ |
+| **Lc0 training chunks**  | `data/raw/lc0/` (`tars/`, `chunks/`, `manifest.json`) | ~1+ GiB Lc0 self-play shards for FEN sampling (supplement source). |
+| **Lichess smoke PGN**    | `data/raw/lichess_smoke50.pgn`                        | 50 games for pipeline smoke (not production volume).               |
+| **ChessBench bags**      | `data/raw/chessbench/test/`                           | Raw bags for encoder/train pilot only — not production labels.     |
+| **Kaggle games CSV**     | `data/raw/games.csv`                                  | Piece-count / stats smoke only — not NNUE train.                   |
+| **Lichess monthly dump** | `data/raw/lichess/`                                   | Production primary source — **not downloaded yet**.                |
 
 ---
 
@@ -66,6 +68,7 @@ Labels for training are Lc0 WDL → **`expected_reward`** (White POV, \([-1,+1]\
 | ----- | ---- | ----------- |
 | **Cfish Hybrid d5** | `plots/PGN_and_JSON/cfish_hybrid_d5_gate_acpl.json` | Stock Cfish Hybrid, depth 5 self-play; ACPL **~42** / Elo heur. **~2435**. |
 | **NNUE pilot d1** | `plots/PGN_and_JSON/nnue_d1_gate_acpl.json` | Student `pilot_W128_844` depth-1 gate (multi-game ladder). |
+| **F3 single-head mini d1** | `plots/PGN_and_JSON/single_W128_mini_d1_gate_acpl.json` | First single-head student gate; ACPL **~583** / Elo floor **400** (below random). |
 | **HCE d1** | `plots/PGN_and_JSON/hce_d1_gate_acpl.json` | Python handcrafted eval depth-1 baseline. |
 | **Random d1** | `plots/PGN_and_JSON/random_d1_gate_acpl.json` | Untrained null floor; ACPL **~276** / Elo floor **400**. |
 | **Sunfish / Lc0 gates** | `plots/PGN_and_JSON/sunfish_*_gate_acpl.json`, `lc0_*_gate_acpl.json` | Other ladder points at d1/d2. |

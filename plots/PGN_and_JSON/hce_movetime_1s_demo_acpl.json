@@ -1,0 +1,30 @@
+{
+  "timestamp": "2026-08-05T13:46:41.648881+00:00",
+  "stockfish": "C:\\Users\\monfalcone\\PycharmProjects\\TinyMLInternship\\tools\\stockfish\\stockfish\\stockfish-windows-x86-64-avx2.exe",
+  "sf_limit": {
+    "depth": 16,
+    "movetime_ms": 100
+  },
+  "white": "SARDINE",
+  "black": "SARDINE",
+  "result": "1/2-1/2",
+  "players": {
+    "white": {
+      "moves_analysed": 19,
+      "acpl": 162.16,
+      "acpl_std": 165.39,
+      "elo_estimate": 1233,
+      "elo_low": 489,
+      "elo_high": 1977
+    },
+    "black": {
+      "moves_analysed": 18,
+      "acpl": 89.56,
+      "acpl_std": 161.42,
+      "elo_estimate": 1959,
+      "elo_low": 1213,
+      "elo_high": 2705
+    }
+  },
+  "elo_formula": "2855 - 10 * ACPL"
+}
