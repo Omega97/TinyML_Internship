@@ -321,4 +321,8 @@ Reference: blueprint §Search, §Memory, §NNUE Architecture, §Move ordering ·
 
 ---
 
+#todo ideas for agent eval: tactical test suites, BayesElo, Ordo, OpenBranch fishtest
+
+---
+
 #core

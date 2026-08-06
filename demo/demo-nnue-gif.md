@@ -85,11 +85,11 @@ Existing reel files: `images/games/nnue_d1_game.gif`, `images/games/nnue_d2_game
 
 ## Related
 
-| Path | Role |
-| ---- | ---- |
-| [demo-hce-gif.md](demo-hce-gif.md) | Pure HCE value (same thin search) |
-| [demo-cfish-hybrid-gif.md](demo-cfish-hybrid-gif.md) | Cfish Hybrid + full SF-class search |
-| `NOTES/agents/nnue-w128-844-d1.md` | Frozen bot recipe |
-| `scripts/run_engine.py --eval nnue --depth 1` | Single-position best move |
-| `scripts/eval_bot_acpl.py --eval nnue --depth 1 --no-quiescence` | ACPL gate (needs Stockfish) |
-| [ASSETS.md](../ASSETS.md) | Checkpoint + train-data inventory |
+| Path                                                             | Role                                |
+| ---------------------------------------------------------------- | ----------------------------------- |
+| [demo-hce-gif.md](demo-hce-gif.md)                               | Pure HCE value (same thin search)   |
+| [demo-cfish-hybrid-gif.md](demo-cfish-hybrid-gif.md)             | Cfish Hybrid + full SF-class search |
+| `NOTES/agents/nnue-w128-844-d1.md`                               | Frozen bot recipe                   |
+| `scripts/run_engine.py --eval nnue --depth 1`                    | Single-position best move           |
+| `scripts/eval_bot_acpl.py --eval nnue --depth 1 --no-quiescence` | ACPL gate (needs Stockfish)         |
+| [ASSETS.md](../ASSETS.md)                                        | Checkpoint + train-data inventory   |

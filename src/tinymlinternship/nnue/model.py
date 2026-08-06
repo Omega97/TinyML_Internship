@@ -10,7 +10,7 @@ import torch.nn.functional as F
 
 from tinymlinternship.features import FEATURE_DIM, NUM_BUCKETS
 
-Architecture = Literal["single_head", "bucketed"]
+Architecture = Literal["single_head", "bucketed", "dual_hidden"]
 
 
 def crelu(x: torch.Tensor, clip: float = 127.0) -> torch.Tensor:
@@ -82,6 +82,59 @@ class SingleHeadNNUE(nn.Module):
         return sum(p.numel() for p in self.parameters() if p.requires_grad)
 
 
+class DualHiddenNNUE(nn.Module):
+    """
+    FFNN with **two hidden layers** (PC serious student, 2026-08-06):
+
+    shared L1 ``844 → W`` dual POV → concat ``2W`` → L2 ``2W → H`` (CReLU)
+    → head ``H → 1`` → tanh expected reward.
+
+    ``bucket_ids`` ignored (same signature as other models).
+    """
+
+    architecture: Architecture = "dual_hidden"
+
+    def __init__(
+        self,
+        feature_dim: int = FEATURE_DIM,
+        hidden_dim: int = 128,
+        hidden2_dim: int = 256,
+        crelu_clip: float = 127.0,
+    ) -> None:
+        super().__init__()
+        self.feature_dim = feature_dim
+        self.hidden_dim = hidden_dim
+        self.hidden2_dim = hidden2_dim
+        self.crelu_clip = crelu_clip
+
+        self.l1 = nn.Linear(feature_dim, hidden_dim, bias=True)
+        self.l2 = nn.Linear(hidden_dim * 2, hidden2_dim, bias=True)
+        self.head = nn.Linear(hidden2_dim, 1, bias=True)
+        self._reset_parameters()
+
+    def _reset_parameters(self) -> None:
+        for layer in (self.l1, self.l2, self.head):
+            nn.init.kaiming_uniform_(layer.weight, a=5**0.5)
+            nn.init.zeros_(layer.bias)
+
+    def forward(
+        self,
+        white_features: torch.Tensor,
+        black_features: torch.Tensor,
+        bucket_ids: torch.Tensor,
+        stm_white: torch.Tensor,
+    ) -> torch.Tensor:
+        del bucket_ids
+        concat = _dual_concat(
+            white_features, black_features, stm_white, self.l1, self.crelu_clip
+        )
+        h2 = crelu(self.l2(concat), self.crelu_clip)
+        return torch.tanh(self.head(h2)).squeeze(-1)
+
+    def count_parameters(self) -> int:
+        return sum(p.numel() for p in self.parameters() if p.requires_grad)
+
+
 class BucketedNNUE(nn.Module):
     """
     Legacy multi-expert: shared L1 (844 → W) + N expert heads (2W → 1).
@@ -147,10 +200,11 @@ def build_nnue(
     architecture: Architecture = "single_head",
     *,
     hidden_dim: int = 128,
+    hidden2_dim: int = 256,
     num_buckets: int = NUM_BUCKETS,
     feature_dim: int = FEATURE_DIM,
-) -> SingleHeadNNUE | BucketedNNUE:
-    """Factory for train / eval (F3 default = single head)."""
+) -> SingleHeadNNUE | BucketedNNUE | DualHiddenNNUE:
+    """Factory for train / eval."""
     if architecture == "single_head":
         return SingleHeadNNUE(feature_dim=feature_dim, hidden_dim=hidden_dim)
     if architecture == "bucketed":
@@ -159,17 +213,25 @@ def build_nnue(
             hidden_dim=hidden_dim,
             num_buckets=num_buckets,
         )
+    if architecture == "dual_hidden":
+        return DualHiddenNNUE(
+            feature_dim=feature_dim,
+            hidden_dim=hidden_dim,
+            hidden2_dim=hidden2_dim,
+        )
     raise ValueError(f"unknown architecture: {architecture!r}")
 
 
 def infer_architecture(state_dict: dict[str, torch.Tensor]) -> Architecture:
     """Infer model class from a checkpoint ``model_state_dict``."""
-    keys = state_dict.keys()
+    keys = list(state_dict.keys())
     if any(k.startswith("experts.") for k in keys):
         return "bucketed"
+    if any(k.startswith("l2.") for k in keys):
+        return "dual_hidden"
     if any(k.startswith("head.") for k in keys):
         return "single_head"
     raise ValueError(
         "cannot infer NNUE architecture from state_dict keys "
-        f"(sample: {list(keys)[:8]})"
+        f"(sample: {keys[:8]})"
     )

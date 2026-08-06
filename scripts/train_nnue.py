@@ -135,6 +135,7 @@ def _checkpoint_payload(
     *,
     architecture: Architecture,
     hidden_dim: int,
+    hidden2_dim: int,
     val_mse: float,
     epoch: int,
 ) -> dict[str, Any]:
@@ -142,6 +143,7 @@ def _checkpoint_payload(
         "model_state_dict": model.state_dict(),
         "architecture": architecture,
         "hidden_dim": hidden_dim,
+        "hidden2_dim": hidden2_dim,
         "val_mse": val_mse,
         "epoch": epoch,
     }
@@ -152,17 +154,23 @@ def _checkpoint_payload(
 
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(
-        description="Train SARDINE NNUE (F3 single-head default)"
+        description="Train SARDINE NNUE (dual_hidden = 2 hidden layers)"
     )
     parser.add_argument("--train", type=Path, default=_DEFAULT_TRAIN)
     parser.add_argument("--val", type=Path, default=_DEFAULT_VAL)
     parser.add_argument(
         "--architecture",
-        choices=("single_head", "bucketed"),
-        default="single_head",
-        help="F3 production = single_head; bucketed = legacy multi-expert pilots",
+        choices=("single_head", "bucketed", "dual_hidden"),
+        default="dual_hidden",
+        help="dual_hidden = 2-layer FFNN (default today); single_head = F3; bucketed = legacy",
     )
     parser.add_argument("--hidden-dim", type=int, default=128, choices=[128, 256])
+    parser.add_argument(
+        "--hidden2-dim",
+        type=int,
+        default=256,
+        help="Second hidden width for dual_hidden (default 256)",
+    )
     parser.add_argument("--epochs", type=int, default=10)
     parser.add_argument("--batch-size", type=int, default=512)
     parser.add_argument("--lr", type=float, default=1e-3)
@@ -199,12 +207,18 @@ def main(argv: list[str] | None = None) -> int:
     )
 
     architecture: Architecture = args.architecture
-    model = build_nnue(architecture, hidden_dim=args.hidden_dim).to(device)
+    model = build_nnue(
+        architecture,
+        hidden_dim=args.hidden_dim,
+        hidden2_dim=args.hidden2_dim,
+    ).to(device)
     optimizer = torch.optim.Adam(model.parameters(), lr=args.lr)
 
     stamp = time.strftime("%Y%m%d_%H%M%S", time.gmtime())
     if args.run_name:
         run_name = args.run_name
+    elif architecture == "dual_hidden":
+        run_name = f"dual_W{args.hidden_dim}_H{args.hidden2_dim}_{stamp}"
     elif architecture == "single_head":
         run_name = f"single_W{args.hidden_dim}_{stamp}"
     else:
@@ -219,6 +233,7 @@ def main(argv: list[str] | None = None) -> int:
         "rows_train": len(train_ds),
         "rows_val": len(val_ds),
         "hidden_dim": args.hidden_dim,
+        "hidden2_dim": args.hidden2_dim,
         "epochs": args.epochs,
         "batch_size": args.batch_size,
         "lr": args.lr,
@@ -228,7 +243,10 @@ def main(argv: list[str] | None = None) -> int:
 
     print(f"Architecture: {architecture}")
     print(f"Train rows: {len(train_ds):,} | Val rows: {len(val_ds):,}")
-    print(f"Parameters: {model.count_parameters():,} | hidden_dim={args.hidden_dim}")
+    print(
+        f"Parameters: {model.count_parameters():,} | "
+        f"hidden_dim={args.hidden_dim} hidden2_dim={args.hidden2_dim}"
+    )
     print(f"Output: {run_dir}")
 
     history: list[dict[str, float]] = []
@@ -255,6 +273,7 @@ def main(argv: list[str] | None = None) -> int:
                     model,
                     architecture=architecture,
                     hidden_dim=args.hidden_dim,
+                    hidden2_dim=args.hidden2_dim,
                     val_mse=metrics["mse"],
                     epoch=epoch,
                 ),
@@ -267,6 +286,7 @@ def main(argv: list[str] | None = None) -> int:
             model,
             architecture=architecture,
             hidden_dim=args.hidden_dim,
+            hidden2_dim=args.hidden2_dim,
             val_mse=history[-1]["mse"] if history else float("nan"),
             epoch=args.epochs,
         ),

@@ -45,6 +45,7 @@ class NnueEvaluator:
         self.device = torch.device(device)
         self._model: nn.Module | None = None
         self.hidden_dim = 128
+        self.hidden2_dim = 256
         self.architecture: Architecture = "single_head"
 
     def load(self) -> None:
@@ -55,25 +56,38 @@ class NnueEvaluator:
                 f"NNUE checkpoint not found: {self.checkpoint} — run scripts/train_nnue.py"
             )
 
-        payload = torch.load(self.checkpoint, map_location=self.device, weights_only=True)
+        # weights_only=False: payload includes architecture strings / scalars.
+        payload = torch.load(self.checkpoint, map_location=self.device, weights_only=False)
         # Support both full payload (best.pt) and raw state_dict (old last.pt).
         if isinstance(payload, dict) and "model_state_dict" in payload:
             state = payload["model_state_dict"]
             self.hidden_dim = int(payload.get("hidden_dim", 128))
+            self.hidden2_dim = int(payload.get("hidden2_dim", 256))
             arch_raw = payload.get("architecture")
-            self.architecture = (
-                arch_raw
-                if arch_raw in ("single_head", "bucketed")
-                else infer_architecture(state)
-            )
+            inferred = infer_architecture(state)
+            # Prefer keys in the file when present; fall back to state_dict shape.
+            if arch_raw in ("single_head", "bucketed", "dual_hidden"):
+                self.architecture = arch_raw  # type: ignore[assignment]
+            else:
+                self.architecture = inferred
+            # If metadata disagrees with weights (e.g. l2 present), trust weights.
+            if inferred == "dual_hidden" and self.architecture != "dual_hidden":
+                self.architecture = "dual_hidden"
             num_buckets = int(payload.get("num_buckets", 8))
+            if "l2.weight" in state:
+                self.hidden2_dim = int(state["l2.weight"].shape[0])
+            if "l1.weight" in state:
+                self.hidden_dim = int(state["l1.weight"].shape[0])
         else:
             state = payload
             self.hidden_dim = 128
+            self.hidden2_dim = 256
             self.architecture = infer_architecture(state)
             num_buckets = 8
             if "l1.weight" in state:
                 self.hidden_dim = int(state["l1.weight"].shape[0])
+            if "l2.weight" in state:
+                self.hidden2_dim = int(state["l2.weight"].shape[0])
 
         l1_in = state["l1.weight"].shape[1]
         if l1_in != FEATURE_DIM:
@@ -84,6 +98,7 @@ class NnueEvaluator:
         model = build_nnue(
             self.architecture,
             hidden_dim=self.hidden_dim,
+            hidden2_dim=self.hidden2_dim,
             num_buckets=num_buckets,
         )
         model.load_state_dict(state)

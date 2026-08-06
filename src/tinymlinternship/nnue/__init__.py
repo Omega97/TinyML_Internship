@@ -2,6 +2,7 @@ from tinymlinternship.nnue.dataset import ChessbenchDataset, indices_to_binary
 from tinymlinternship.nnue.model import (
     Architecture,
     BucketedNNUE,
+    DualHiddenNNUE,
     SingleHeadNNUE,
     build_nnue,
     crelu,
@@ -12,6 +13,7 @@ __all__ = [
     "Architecture",
     "BucketedNNUE",
     "ChessbenchDataset",
+    "DualHiddenNNUE",
     "SingleHeadNNUE",
     "build_nnue",
     "crelu",

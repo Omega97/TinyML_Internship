@@ -13,6 +13,7 @@ sys.path.insert(0, str(Path(__file__).parent.parent / "src"))
 
 from tinymlinternship.config.settings import NNUE_CHECKPOINT_DEFAULT
 from tinymlinternship.engine import ENGINE_VERSION, EVAL_CHOICES, make_eval_fn, search
+from tinymlinternship.engine.search import search_timed
 
 
 def _parse_moves(move_str: str) -> list[chess.Move]:
@@ -36,7 +37,25 @@ def main(argv: list[str] | None = None) -> int:
         default=NNUE_CHECKPOINT_DEFAULT,
         help="NNUE checkpoint path (--eval nnue)",
     )
-    parser.add_argument("--depth", type=int, default=1, help="Search depth in full moves (default: 1)")
+    parser.add_argument(
+        "--depth",
+        type=int,
+        default=1,
+        help="Fixed search depth in full moves (ignored if --movetime is set; default: 1)",
+    )
+    parser.add_argument(
+        "--movetime",
+        type=float,
+        default=None,
+        metavar="SEC",
+        help="Per-move wall-clock budget in seconds (iterative deepening; depth not fixed)",
+    )
+    parser.add_argument(
+        "--max-search-depth",
+        type=int,
+        default=64,
+        help="Cap iterative depth when using --movetime (default: 64)",
+    )
     parser.add_argument(
         "--fen",
         default=chess.STARTING_FEN,
@@ -76,13 +95,23 @@ def main(argv: list[str] | None = None) -> int:
         args.eval,
         nnue_checkpoint=args.nnue_checkpoint if args.eval == "nnue" else None,
     )
-    result = search(
-        board,
-        args.depth,
-        eval_fn=eval_fn,
-        quiescence=args.quiescence,
-        max_qsearch_depth=args.max_qsearch_depth,
-    )
+    if args.movetime is not None:
+        result = search_timed(
+            board,
+            args.movetime,
+            eval_fn=eval_fn,
+            quiescence=args.quiescence,
+            max_qsearch_depth=args.max_qsearch_depth,
+            max_depth=args.max_search_depth,
+        )
+    else:
+        result = search(
+            board,
+            args.depth,
+            eval_fn=eval_fn,
+            quiescence=args.quiescence,
+            max_qsearch_depth=args.max_qsearch_depth,
+        )
     if result is None:
         print("nomove")
         return 1
