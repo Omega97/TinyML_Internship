@@ -61,7 +61,7 @@ Same Hybrid depth-5 policy was gated with Stockfish ACPL (not required to build 
 | ------ | ------- |
 | **ACPL** (3 games, SF 100 ms/move) | **~42** |
 | **Elo heuristic** (`≈ 2855 − 10×ACPL`, floor 400) | **~2435** |
-| Artifact | `plots/PGN_and_JSON/cfish_hybrid_d5_gate_acpl.json` |
+| Artifact | `images/plots/PGN_and_JSON/cfish_hybrid_d5_gate_acpl.json` |
 
 More detail: [NOTES/Cfish.md](../NOTES/Cfish.md) · [PROJECT.md](../PROJECT.md) (Cfish / First NNUE) · [ASSETS.md](../ASSETS.md).
 
@@ -69,7 +69,7 @@ More detail: [NOTES/Cfish.md](../NOTES/Cfish.md) · [PROJECT.md](../PROJECT.md) 
 
 ## 1. Self-play → PGN
 
-Play **one** Hybrid game at **depth 5** (max 80 half-moves) and write PGN under `images/games/` (and a copy under `plots/` if you leave the default secondary path):
+Play **one** Hybrid game at **depth 5** (max 80 half-moves) and write PGN under `images/games/` (and a copy under `images/plots/` if you leave the default secondary path):
 
 ```powershell
 py -3.12 scripts/cfish_selfplay_pgn.py `
@@ -86,7 +86,7 @@ What you get:
 - `images/games/cfish_hybrid_d5_demo.pgn` — main output (`--output`)
 - `images/games/Cfish-hybrid-d5_vs_Cfish-hybrid-d5_YYYY-MM-DD.pgn` — dated copy (`--also-games-dir`)
 
-Defaults if you omit flags: 3 games, depth 5, output `plots/PGN_and_JSON/cfish_hybrid_d5_gate.pgn`.
+Defaults if you omit flags: 3 games, depth 5, output `images/plots/PGN_and_JSON/cfish_hybrid_d5_gate.pgn`.
 
 For a multi-game gate batch (no GIF):
 

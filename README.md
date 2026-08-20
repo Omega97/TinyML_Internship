@@ -52,7 +52,7 @@ py -3.12 scripts/record_engine_game.py
 ```
 
 <div align="center">
-    <img src="plots/sardine_nnue_architecture.png" width="600">
+    <img src="images/plots/sardine_nnue_architecture.png" width="600">
 </div>
 
 See [NOTES/Commands.md](NOTES/Commands.md) for all commands.
@@ -62,7 +62,7 @@ See [NOTES/Commands.md](NOTES/Commands.md) for all commands.
 ## Games
 
 **Engine self-play demos** (how each GIF was produced → result).  
-**White / Black Elo** = Stockfish ACPL heuristic on that demo PGN (`Elo ≈ 2855 − 10×ACPL`, floor **400**), via `scripts/eval_game_elo.py`. Same agent plays both colors; single-game Elo is noisy when huge blunders/mates inflate ACPL. Multi-game ladder (bot ranking): [ASSETS.md](ASSETS.md) / `plots/PGN_and_JSON/*_gate_acpl.json` (e.g. HCE d1 **~400**, pilot NNUE d1 **~1465**, Cfish Hybrid d5 **~2435**).
+**White / Black Elo** = Stockfish ACPL heuristic on that demo PGN (`Elo ≈ 2855 − 10×ACPL`, floor **400**), via `scripts/eval_game_elo.py`. Same agent plays both colors; single-game Elo is noisy when huge blunders/mates inflate ACPL. Multi-game ladder (bot ranking): [ASSETS.md](ASSETS.md) / `images/plots/PGN_and_JSON/*_gate_acpl.json` (e.g. HCE d1 **~400**, pilot NNUE d1 **~1465**, Cfish Hybrid d5 **~2435**).
 
 | Description                                                                                                                                                                              | GIF                                                           |
 | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------- |

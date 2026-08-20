@@ -103,7 +103,7 @@ Encoder **844-dim** (716 base + 128 tattico). Checkpoint di produzione per `--ev
 - [agents/nnue-w128-844-d1.md](agents/nnue-w128-844-d1.md) — depth 1, qsearch off
 - [agents/nnue-w128-844-d2.md](agents/nnue-w128-844-d2.md) — depth 2
 
-**Demo:** [`images/nnue_d2_game.gif`](../images/games/nnue_d2_game.gif) · architettura: [`plots/sardine_nnue_architecture.png`](../plots/sardine_nnue_architecture.png)
+**Demo:** [`images/nnue_d2_game.gif`](../images/games/nnue_d2_game.gif) · architettura: [`images/plots/sardine_nnue_architecture.png`](../images/plots/sardine_nnue_architecture.png)
 
 ```bash
 py -3.12 scripts/run_engine.py --eval nnue --nnue-checkpoint models/checkpoints/nnue/pilot_W128_844/best.pt --depth 2
@@ -133,9 +133,9 @@ Primo pilot su encoder **716-dim** (pre-tactical). Non usare con l'engine 844-di
 
 | Backend | Modello / checkpoint | ACPL (cp) | Artefatti |
 |---------|----------------------|-----------|-----------|
-| **NNUE** | `pilot_W128_844/best.pt` | **121.1** | `plots/nnue_d1_gate_acpl.json` |
-| **HCE** | euristica built-in | **275.0** | `plots/hce_d1_gate_acpl.json` |
-| **Sunfish** | repo `models/teacher/sunfish/` | **818.3** | `plots/sunfish_d1_gate_acpl.json` |
+| **NNUE** | `pilot_W128_844/best.pt` | **121.1** | `images/plots/PGN_and_JSON/nnue_d1_gate_acpl.json` |
+| **HCE** | euristica built-in | **275.0** | `images/plots/PGN_and_JSON/hce_d1_gate_acpl.json` |
+| **Sunfish** | repo `models/teacher/sunfish/` | **818.3** | `images/plots/PGN_and_JSON/sunfish_d1_gate_acpl.json` |
 
 **HCE depth-2 demo:** [`images/hce_d2_game.gif`](../images/games/hce_d2_game.gif) · scheda [agents/hce-d2-qsearch.md](agents/hce-d2-qsearch.md)
 

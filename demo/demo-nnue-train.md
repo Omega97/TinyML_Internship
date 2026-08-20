@@ -11,15 +11,15 @@ Run from the **repo root**.
 
 ## Prerequisites (checklist)
 
-| Item | Status / path |
-| ---- | ------------- |
-| Unified dataset | `data/processed/board_eval/dataset.json` (~37k labeled) |
-| Train / val parquet | `data/processed/board_eval/splits/train.parquet` · `val.parquet` (~35.3k / 1.9k) |
-| Model | `DualHiddenNNUE` in `src/tinymlinternship/nnue/model.py` (`--architecture dual_hidden`) |
-| Train CLI | `scripts/train_nnue.py` |
-| Eval CLI | `scripts/run_engine.py --eval nnue --nnue-checkpoint …` |
-| ACPL judge | Stockfish on PATH / `STOCKFISH_PATH` · `scripts/eval_bot_acpl.py` |
-| PyTorch | `pip install torch` · `pip install -e .` |
+| Item                | Status / path                                                                           |
+| ------------------- | --------------------------------------------------------------------------------------- |
+| Unified dataset     | `data/processed/board_eval/dataset.json` (~37k labeled)                                 |
+| Train / val parquet | `data/processed/board_eval/splits/train.parquet` · `val.parquet` (~35.3k / 1.9k)        |
+| Model               | `DualHiddenNNUE` in `src/tinymlinternship/nnue/model.py` (`--architecture dual_hidden`) |
+| Train CLI           | `scripts/train_nnue.py`                                                                 |
+| Eval CLI            | `scripts/run_engine.py --eval nnue --nnue-checkpoint …`                                 |
+| ACPL judge          | Stockfish on PATH / `STOCKFISH_PATH` · `scripts/eval_bot_acpl.py`                       |
+| PyTorch             | `pip install torch` · `pip install -e .`                                                |
 
 Rebuild dataset (if needed):
 
@@ -95,8 +95,8 @@ $env:STOCKFISH_PATH = (Resolve-Path tools\stockfish\stockfish\stockfish-windows-
 py -3.12 scripts/eval_bot_acpl.py --eval nnue `
   --nnue-checkpoint models/checkpoints/nnue/dual_base_W128_H128_ep40/best.pt `
   --depth 1 --no-quiescence --games 3 --max-plies 80 --sf-movetime-ms 100 `
-  --output-pgn plots/PGN_and_JSON/dual_base_W128_H128_d1_gate.pgn `
-  --json plots/PGN_and_JSON/dual_base_W128_H128_d1_gate_acpl.json `
+  --output-pgn images/plots/PGN_and_JSON/dual_base_W128_H128_d1_gate.pgn `
+  --json images/plots/PGN_and_JSON/dual_base_W128_H128_d1_gate_acpl.json `
   --no-gif --verbose --no-progress
 ```
 

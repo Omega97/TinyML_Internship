@@ -59,7 +59,7 @@ In-process **SARDINE** (Python), **not** Cfish / stock NNUE.
 
 ### Strength snapshot (optional)
 
-Depth-1 HCE self-play is a **weak** baseline on the ACPL ladder (often near Elo floor ~400). Artifact example: `plots/PGN_and_JSON/hce_d1_gate_acpl.json`. Stronger HCE demo: depth **2** + qsearch (see below).
+Depth-1 HCE self-play is a **weak** baseline on the ACPL ladder (often near Elo floor ~400). Artifact example: `images/plots/PGN_and_JSON/hce_d1_gate_acpl.json`. Stronger HCE demo: depth **2** + qsearch (see below).
 
 ---
 

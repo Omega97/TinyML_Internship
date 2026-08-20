@@ -490,7 +490,7 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument(
         "--output",
         type=Path,
-        default=PROJECT_ROOT / "plots" / "sardine_nnue_architecture.png",
+        default=PROJECT_ROOT / "images" / "plots" / "sardine_nnue_architecture.png",
     )
     parser.add_argument("--hidden-dim", type=int, default=128, choices=[128, 256])
     parser.add_argument("--dpi", type=int, default=160)

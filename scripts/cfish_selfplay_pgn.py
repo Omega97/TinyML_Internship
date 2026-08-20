@@ -26,7 +26,7 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument(
         "--output",
         type=Path,
-        default=_REPO_ROOT / "plots" / "PGN_and_JSON" / "cfish_hybrid_d5_gate.pgn",
+        default=_REPO_ROOT / "images" / "plots" / "PGN_and_JSON" / "cfish_hybrid_d5_gate.pgn",
     )
     parser.add_argument(
         "--also-games-dir",

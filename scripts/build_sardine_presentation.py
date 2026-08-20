@@ -89,9 +89,9 @@ def _add_speaker_notes(slide, text: str) -> None:
 
 def _generate_acpl_chart(out_path: Path) -> None:
     data = {
-        "NNUE pilot": json.loads((PROJECT_ROOT / "plots/nnue_d1_gate_acpl.json").read_text())["acpl"],
-        "HCE": json.loads((PROJECT_ROOT / "plots/hce_d1_gate_acpl.json").read_text())["acpl"],
-        "Sunfish": json.loads((PROJECT_ROOT / "plots/sunfish_d1_gate_acpl.json").read_text())["acpl"],
+        "NNUE pilot": json.loads((PROJECT_ROOT / "images/plots/PGN_and_JSON/nnue_d1_gate_acpl.json").read_text())["acpl"],
+        "HCE": json.loads((PROJECT_ROOT / "images/plots/PGN_and_JSON/hce_d1_gate_acpl.json").read_text())["acpl"],
+        "Sunfish": json.loads((PROJECT_ROOT / "images/plots/PGN_and_JSON/sunfish_d1_gate_acpl.json").read_text())["acpl"],
     }
     elos = {k: max(400, round(2855 - 10 * v)) for k, v in data.items()}
 
@@ -214,7 +214,7 @@ def build() -> Path:
     _generate_accumulator_diagram(acc_diagram)
 
     logo = PROJECT_ROOT / "images" / "logo" / "SARDINE-logo-dark-small.png"
-    arch = PROJECT_ROOT / "plots" / "sardine_nnue_architecture.png"
+    arch = PROJECT_ROOT / "images" / "plots" / "sardine_nnue_architecture.png"
     sardine_img = ASSETS / (
         "sardine-fish-isolated-on-a-transparent-background-showcasing-its-shiny-scales-and-streamlined-body-"
         "a-sardine-fish-isolated-on-transparent-background-free-png.png"

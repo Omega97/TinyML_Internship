@@ -76,7 +76,7 @@ Separate pattern tables: skip for v1. Geometric zeros (impossible pawn ranks, ki
 ### NNUE Architecture
 
 <div align="center">
-    <img src="plots/sardine_nnue_architecture.png" width="600">
+    <img src="images/plots/sardine_nnue_architecture.png" width="600">
 </div>
 
 
@@ -379,7 +379,7 @@ metric, value, unit, platform ∈ {pc, wio}, recipe_id, commit, timestamp, host_
 - `-O3` vs `-Os` wall-clock comparison
 - Move time under ~1 s budget; peak RAM if measurable
 
-Bulk logs under `bench/runs/<timestamp>/` or `plots/` (large binaries gitignored as needed).
+Bulk logs under `bench/runs/<timestamp>/` or `images/plots/` (large binaries gitignored as needed).
 
 ### Parity & correctness
 
@@ -426,7 +426,7 @@ ACPL-mapped Elo **alone** is insufficient for the ≥1700 claim.
 | Library | `src/tinymlinternship/bot_eval/` (ACPL, paths, future match helpers, metric schema) |
 | CLIs | `scripts/eval_bot_acpl.py`, `eval_game_elo.py`, future `bench_*.py` / match runners — thin wrappers |
 | Recipes | `NOTES/agents/*.md` (+ machine-readable twin if needed) |
-| Outputs | `plots/`, `bench/runs/`, golden vectors next to tests or `tests/goldens/` |
+| Outputs | `images/plots/`, `bench/runs/`, golden vectors next to tests or `tests/goldens/` |
 
 ### Implementation order (practical)
 

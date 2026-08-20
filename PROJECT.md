@@ -49,7 +49,7 @@ _Progress vs repo as of ~2026-08-03. **This checklist is the sole product progre
 	- **Mean per-game Elo:** **~2646** (range across games **2631–2667**)
 	- Top blunders (combined CPL): `…d6` / `Be3` ~65 cp (opening inaccuracy, not tactical collapse)
 	- **nps microbench** (startpos, d2, qsearch cap 6, 50 searches): ~**28k nps** (Python; not Cfish-class)
-	- Artifacts: `plots/PGN_and_JSON/hce_d2_q6_10game_gate.pgn`, `hce_d2_q6_10game_gate_acpl.json`
+	- Artifacts: `images/plots/PGN_and_JSON/hce_d2_q6_10game_gate.pgn`, `hce_d2_q6_10game_gate_acpl.json`
 	- Prior multi-game d2 no-q: `hce_d2_gate_acpl.json` (16 games, ACPL **24.5** / Elo **~2610**, 2026-07-10) — consistent order of magnitude
 	- CLI: `scripts/eval_bot_acpl.py --eval hce --depth 2 --games 10 --sf-movetime-ms 100` · lib: `bot_eval/`
 	- *Cfish pure-classical UCI baseline remains optional/distinct if ever needed; this ticks the PC HCE strength gate.*
@@ -71,10 +71,10 @@ _Progress vs repo as of ~2026-08-03. **This checklist is the sole product progre
 	  
 - [x] Evaluation with Stockfish
 	- Cfish Hybrid self-play + Stockfish ACPL (2026-08-04): `scripts/cfish_selfplay_pgn.py` + `scripts/eval_bot_acpl.py --pgn …`
-	- Artifacts: `plots/PGN_and_JSON/cfish_hybrid_d5_gate.pgn`, `cfish_hybrid_d5_gate_acpl.json` · copy `images/games/Cfish-hybrid-d5_vs_Cfish-hybrid-d5_2026-08-04.pgn`
+	- Artifacts: `images/plots/PGN_and_JSON/cfish_hybrid_d5_gate.pgn`, `cfish_hybrid_d5_gate_acpl.json` · copy `images/games/Cfish-hybrid-d5_vs_Cfish-hybrid-d5_2026-08-04.pgn`
 	- Protocol: 3 games, depth 5 Hybrid, max 80 plies; SF judge movetime 100 ms
 	- Combined: **ACPL 42.0** (σ=73) · Elo heuristic **2435** (2327–2542) · 178 moves · play nps mean ~427k
-	- *Judge = Stockfish on PATH / `STOCKFISH_PATH` (local download used under `tools/stockfish/` if not on PATH). ACPL gates for HCE / pilot NNUE / Sunfish / Lc0 already under `plots/PGN_and_JSON/`.*
+	- *Judge = Stockfish on PATH / `STOCKFISH_PATH` (local download used under `tools/stockfish/` if not on PATH). ACPL gates for HCE / pilot NNUE / Sunfish / Lc0 already under `images/plots/PGN_and_JSON/`.*
 
 ### Dataset
 
@@ -125,7 +125,7 @@ _Progress vs repo as of ~2026-08-03. **This checklist is the sole product progre
 	- bench the nps
 	- CLI: `scripts/eval_bot_acpl.py` · lib: `src/tinymlinternship/bot_eval/acpl.py`
 	- self-play: `scripts/record_engine_game.py --eval nnue` · NNUE hook: `src/tinymlinternship/engine/eval_nnue.py`
-	- artifacts: `plots/PGN_and_JSON/nnue_d1_gate.pgn`, `plots/PGN_and_JSON/nnue_d1_gate_acpl.json` (also `nnue_d2_*`)
+	- artifacts: `images/plots/PGN_and_JSON/nnue_d1_gate.pgn`, `images/plots/PGN_and_JSON/nnue_d1_gate_acpl.json` (also `nnue_d2_*`)
 	- **F3 single-head mini gate (2026-08-05):** `single_W128_mini_d1_gate*` — ACPL **~583** / Elo floor **400** (worse than random ~276; pilot multi-head d1 ~139 remains reference student)
 	- demos: `images/nnue_d1_game.gif`, `images/nnue_d2_game.gif` (and related under `images/games/`)
 	- *Playing-strength path **not** closed by mini single-head. **nps** microbench still open. Known issue: NNUE d2 ACPL collapse vs d1 (pilot).*
@@ -153,7 +153,7 @@ _Progress vs repo as of ~2026-08-03. **This checklist is the sole product progre
 - [x] Piece-count distribution study
 	- script: `scripts/plot_piece_count_distribution.py`
 	- data: `data/excel/piece_count_distribution.xlsx`, `data/excel/piece_count_distribution_10k.xlsx`
-	- plot: `plots/piece_count_distribution.png`, `plots/piece_count_distribution_10k.png`
+	- plot: `images/plots/piece_count_distribution.png`, `images/plots/piece_count_distribution_10k.png`
        
 - [x] Feature encoder (716 base + tactical → 844)
 	- `src/tinymlinternship/features/index_map.py`, `encoder.py`, `mirror.py`, `tactical.py`, `bucket.py`

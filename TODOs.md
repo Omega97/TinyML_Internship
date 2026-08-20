@@ -4,15 +4,15 @@
 Architecture: [blueprint](NOTES/SARDINE%20Engine%20Blueprint.md) (**B1**). Labels/data: [ASSETS.md](ASSETS.md) (**C1/E1**). Authority: [ai-feed.md](ai-feed.md).  
 _Last updated: 2026-08-05 — F3 single-head path + mini train + ACPL gate; **F3** single head until §D._
 
-| PROJECT section | This file |
-| --------------- | --------- |
-| Run Cfish | §1 |
-| First NNUE | §2 |
-| Dataset | §3 |
-| Train the Network | §4 |
-| On the Hardware | §5 (+ §8 device eng) |
-| For the Thesis | §6 |
-| Stretch Goals (encoder / search) | §7 |
+| PROJECT section                  | This file            |
+| -------------------------------- | -------------------- |
+| Run Cfish                        | §1                   |
+| First NNUE                       | §2                   |
+| Dataset                          | §3                   |
+| Train the Network                | §4                   |
+| On the Hardware                  | §5 (+ §8 device eng) |
+| For the Thesis                   | §6                   |
+| Stretch Goals (encoder / search) | §7                   |
 
 When a checkbox conflicts, **PROJECT wins** for product status; update both when closing a gate.
 
@@ -34,7 +34,7 @@ _PROJECT: Cfish smoke [x] · HCE/Cfish eval with Stockfish [ ]._
 - [x] Formal UCI recipe — `go depth 5` → `bestmove` + archived **nps** (2026-08-04; depth-12 ~1.8M nps Hybrid)
 - [x] Fix `scripts/cfish.py` stale `./cfish` path → `src/cfish/cfish.exe` + cwd `src/cfish/`
 - [ ] **Cfish classical / HCE-style baseline ACPL** (if distinct from Python HCE gate) — `eval_bot_acpl.py` / UCI self-play; PROJECT open item
-- [x] Python HCE ACPL gate already archived — `plots/PGN_and_JSON/hce_d1_gate*` (not a substitute for Cfish UCI baseline)
+- [x] Python HCE ACPL gate already archived — `images/plots/PGN_and_JSON/hce_d1_gate*` (not a substitute for Cfish UCI baseline)
 
 ---
 
@@ -45,7 +45,7 @@ _PROJECT: download / wire / hybrid smoke [x] · Cfish ACPL eval [ ]._
 - [x] Stock NNUE on disk — `src/cfish/nn-62ef826d1a6d.nnue` (`make net` in `src/cfish/`)
 - [x] Default EvalFile / INCBIN — `evaluate.h`, `nnue.c`, `ucioption.c`
 - [x] Hybrid path available with net present (dedicated hybrid-only log optional)
-- [x] **Cfish self-play + Stockfish ACPL** (D1 judge) — 2026-08-04 Hybrid d5, 3 games: ACPL **42.0** · Elo **2435**; `plots/PGN_and_JSON/cfish_hybrid_d5_gate*`; CLI `scripts/cfish_selfplay_pgn.py`
+- [x] **Cfish self-play + Stockfish ACPL** (D1 judge) — 2026-08-04 Hybrid d5, 3 games: ACPL **42.0** · Elo **2435**; `images/plots/PGN_and_JSON/cfish_hybrid_d5_gate*`; CLI `scripts/cfish_selfplay_pgn.py`
 - [x] In-process ACPL stack ready — `scripts/eval_bot_acpl.py`, `src/tinymlinternship/bot_eval/` (used for HCE / pilot NNUE / Sunfish / Lc0 / Cfish)
 - *Stock net ≠ SARDINE student. Custom SARDINE weights in Cfish = later / optional; device path is own C port.*
 
@@ -83,8 +83,8 @@ Architecture (**F3** production): L1 `844 → W` dual POV → concat `2W` → **
 - [ ] **nnue-pytorch** adapt — 844-dim, single head, gradual L1 prune, 100 ep
 - [ ] L1 gradual pruning 70–80% during training; sparse flash export
 - [ ] PTQ int8 + tanh LUT; measure fp32→int8 gap (QAT only if MSE/Elo gap too large)
-- [x] ACPL on pilot NNUE (D1) — `plots/PGN_and_JSON/nnue_d1_gate*`; d2 collapse known
-- [x] ACPL on single-head mini (D1) — `plots/PGN_and_JSON/single_W128_mini_d1_gate*` · ACPL **~583** / Elo **400** (worse than random ~276; **not** a strength win)
+- [x] ACPL on pilot NNUE (D1) — `images/plots/PGN_and_JSON/nnue_d1_gate*`; d2 collapse known
+- [x] ACPL on single-head mini (D1) — `images/plots/PGN_and_JSON/single_W128_mini_d1_gate*` · ACPL **~583** / Elo **400** (worse than random ~276; **not** a strength win)
 - [ ] Playing-strength student ≥ pilot ladder (need more data / better train before Elo gate)
 - [ ] **nps** microbench for student / search (still open; PROJECT notes)
 - [ ] Teacher-only depth=1 playing-strength baseline (after a *playable* single-head net)

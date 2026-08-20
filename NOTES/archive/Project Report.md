@@ -184,7 +184,7 @@ Settimana del **primo NNUE pilot**, del **gate ACPL** e dell'encoder tattico **8
 #### Repo work
 - NNUE: `src/tinymlinternship/nnue/` (`model.py`, `dataset.py`), checkpoints `models/checkpoints/nnue/pilot_W128_*`
 - Features: `tactical.py` → **844** dim; tests tattici
-- Eval: `bot_eval/acpl.py`, [scripts/eval_bot_acpl.py](../../scripts/eval_bot_acpl.py); artefatti `plots/*_d1_gate*`, `*_d2_gate*`
+- Eval: `bot_eval/acpl.py`, [scripts/eval_bot_acpl.py](../../scripts/eval_bot_acpl.py); artefatti `images/plots/*_d1_gate*`, `*_d2_gate*`
 - Teachers: Lc0, Sunfish under `models/teacher/`; Stockfish install (poi PATH-only)
 - Scripts: `download_teacher.py`, `download_chessbench.py`, `prepare_chessbench_dataset.py`, `label_positions.py`, `sunfish_selfplay_pgn.py`, `plot_nnue_architecture.py`
 - Agent cards: `NOTES/agents/`; skill `AI-SKILLS/sardine-repo/`

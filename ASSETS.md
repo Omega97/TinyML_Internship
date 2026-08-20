@@ -66,13 +66,13 @@ Labels for training are Lc0 WDL → **`expected_reward`** (White POV, \([-1,+1]\
 
 | Title | Path | Description |
 | ----- | ---- | ----------- |
-| **Cfish Hybrid d5** | `plots/PGN_and_JSON/cfish_hybrid_d5_gate_acpl.json` | Stock Cfish Hybrid, depth 5 self-play; ACPL **~42** / Elo heur. **~2435**. |
-| **NNUE pilot d1** | `plots/PGN_and_JSON/nnue_d1_gate_acpl.json` | Student `pilot_W128_844` depth-1 gate (multi-game ladder). |
-| **F3 single-head mini d1** | `plots/PGN_and_JSON/single_W128_mini_d1_gate_acpl.json` | First single-head student gate; ACPL **~583** / Elo floor **400** (below random). |
-| **HCE d1** | `plots/PGN_and_JSON/hce_d1_gate_acpl.json` | Python handcrafted eval depth-1 baseline. |
-| **Random d1** | `plots/PGN_and_JSON/random_d1_gate_acpl.json` | Untrained null floor; ACPL **~276** / Elo floor **400**. |
-| **Sunfish / Lc0 gates** | `plots/PGN_and_JSON/sunfish_*_gate_acpl.json`, `lc0_*_gate_acpl.json` | Other ladder points at d1/d2. |
-| **Omar human games** | `plots/PGN_and_JSON/omar_game_acpl.json`, `omar_game_2_3_acpl.json` | Per-side Stockfish ACPL on sample human PGNs under `images/games/`. |
+| **Cfish Hybrid d5** | `images/plots/PGN_and_JSON/cfish_hybrid_d5_gate_acpl.json` | Stock Cfish Hybrid, depth 5 self-play; ACPL **~42** / Elo heur. **~2435**. |
+| **NNUE pilot d1** | `images/plots/PGN_and_JSON/nnue_d1_gate_acpl.json` | Student `pilot_W128_844` depth-1 gate (multi-game ladder). |
+| **F3 single-head mini d1** | `images/plots/PGN_and_JSON/single_W128_mini_d1_gate_acpl.json` | First single-head student gate; ACPL **~583** / Elo floor **400** (below random). |
+| **HCE d1** | `images/plots/PGN_and_JSON/hce_d1_gate_acpl.json` | Python handcrafted eval depth-1 baseline. |
+| **Random d1** | `images/plots/PGN_and_JSON/random_d1_gate_acpl.json` | Untrained null floor; ACPL **~276** / Elo floor **400**. |
+| **Sunfish / Lc0 gates** | `images/plots/PGN_and_JSON/sunfish_*_gate_acpl.json`, `images/plots/PGN_and_JSON/lc0_*_gate_acpl.json` | Other ladder points at d1/d2. |
+| **Omar human games** | `images/plots/PGN_and_JSON/omar_game_acpl.json`, `images/plots/PGN_and_JSON/omar_game_2_3_acpl.json` | Per-side Stockfish ACPL on sample human PGNs under `images/games/`. |
 
 (PGNs for many gates live next to the JSON files; `*.pgn` is gitignored.)
 

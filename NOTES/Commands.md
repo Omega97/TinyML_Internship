@@ -70,7 +70,7 @@ Blueprint §Bot Evaluation (A1): Stockfish analizza le mosse; **non** è un matc
 ```bash
 py -3.12 scripts/eval_bot_acpl.py --eval nnue --depth 1 --max-plies 80 --no-quiescence --sf-movetime-ms 100 --verbose
 py -3.12 scripts/eval_bot_acpl.py --eval hce --depth 1 --max-plies 80 --no-quiescence --sf-movetime-ms 100
-py -3.12 scripts/eval_bot_acpl.py --pgn plots/nnue_d1_gate.pgn --sf-movetime-ms 100 --json plots/nnue_d1_gate_acpl.json
+py -3.12 scripts/eval_bot_acpl.py --pgn images/plots/PGN_and_JSON/nnue_d1_gate.pgn --sf-movetime-ms 100 --json images/plots/PGN_and_JSON/nnue_d1_gate_acpl.json
 ```
 
 #### Elo per giocatore (bianco e nero separati)
@@ -81,8 +81,8 @@ py -3.12 scripts/eval_bot_acpl.py --pgn plots/nnue_d1_gate.pgn --sf-movetime-ms 
 
 ```bash
 # Da PGN (formato obbligatorio per --pgn)
-py -3.12 scripts/eval_game_elo.py --pgn plots/nnue_d1_gate.pgn --sf-movetime-ms 100
-py -3.12 scripts/eval_game_elo.py --pgn images/sardine_game.pgn --sf-movetime-ms 100 --json plots/game_elo_by_side.json
+py -3.12 scripts/eval_game_elo.py --pgn images/plots/PGN_and_JSON/nnue_d1_gate.pgn --sf-movetime-ms 100
+py -3.12 scripts/eval_game_elo.py --pgn images/sardine_game.pgn --sf-movetime-ms 100 --json images/plots/game_elo_by_side.json
 
 # Da lista mosse UCI (alternativa senza file)
 py -3.12 scripts/eval_game_elo.py --moves "e2e4 e7e5 g1f3 b8c6" --white "BotA" --black "BotB" --sf-movetime-ms 100

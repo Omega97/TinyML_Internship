@@ -11,6 +11,9 @@ import chess
 
 BOARD_EVAL_DIR_NAME = "board_eval"
 DATASET_JSON_NAME = "dataset.json"
+# Per-source slim tables live in this subfolder; the join is the parquet in BOARD_EVAL_DIR_NAME.
+FEN_VALUE_VISITS_DIR_NAME = "fen_value_visits"
+FEN_VALUE_VISITS_JOINED_NAME = "fen_value_visits.parquet"
 
 # Canonical per-hash fields (2026-08-06)
 CANONICAL_TAGS: tuple[str, ...] = (
@@ -185,3 +188,72 @@ def load_dataset_json(path: Path | str) -> dict[str, dict[str, Any]]:
     if "data" in doc and isinstance(doc["data"], dict):
         return doc["data"]
     return doc
+
+
+def _slim_shell(fen: str) -> dict[str, Any]:
+    board = chess.Board(fen)
+    return {
+        "fen": board.fen(),
+        "visits": 0,
+        "_value_sum": 0.0,
+        "_value_n": 0,
+    }
+
+
+def bump_visits(store: dict[str, dict[str, Any]], fen: str) -> str:
+    """Count one observation of ``fen`` (EPD hash; halfmove/fullmove ignored)."""
+    key = board_hash(fen)
+    if key not in store:
+        store[key] = _slim_shell(fen)
+    store[key]["visits"] = int(store[key]["visits"]) + 1
+    return key
+
+
+def add_teacher_value(store: dict[str, dict[str, Any]], fen: str, value: float) -> str:
+    """Attach / average a teacher scalar on ``fen`` (does not increment visits)."""
+    key = board_hash(fen)
+    if key not in store:
+        store[key] = _slim_shell(fen)
+    rec = store[key]
+    rec["_value_sum"] = float(rec["_value_sum"]) + float(value)
+    rec["_value_n"] = int(rec["_value_n"]) + 1
+    rec["fen"] = chess.Board(fen).fen()
+    return key
+
+
+def fen_value_visits_source_filename(source: str) -> str:
+    """``fen_value_visits_<source>.parquet`` (lowercase slug)."""
+    slug_chars: list[str] = []
+    for char in source.strip().lower():
+        if char.isalnum() or char in "-_":
+            slug_chars.append(char)
+        else:
+            slug_chars.append("_")
+    slug = "".join(slug_chars).strip("_") or "unknown"
+    while "__" in slug:
+        slug = slug.replace("__", "_")
+    return f"fen_value_visits_{slug}.parquet"
+
+
+def slim_fen_value_visits(
+    store: Mapping[str, Mapping[str, Any]],
+    *,
+    labeled_only: bool = True,
+) -> list[dict[str, Any]]:
+    """Rows with columns ``fen``, ``value`` (teacher), ``visits`` (observation count)."""
+    rows: list[dict[str, Any]] = []
+    for rec in store.values():
+        n_lab = int(rec.get("_value_n", 0))
+        if labeled_only and n_lab <= 0:
+            continue
+        visits = int(rec.get("visits", 0))
+        if visits <= 0:
+            visits = max(n_lab, 1)
+        rows.append(
+            {
+                "fen": str(rec["fen"]),
+                "value": float(rec["_value_sum"]) / n_lab,
+                "visits": visits,
+            }
+        )
+    return rows

@@ -59,7 +59,7 @@ In-process **SARDINE** (Python) with a **trained student value net** — not Cfi
 
 ### Strength snapshot (optional)
 
-Depth-1 pilot NNUE sits **above** random/HCE on the ACPL ladder (historical multi-game gate ~**ACPL 139** / Elo heur. **~1465**). Artifact: `plots/PGN_and_JSON/nnue_d1_gate_acpl.json`.  
+Depth-1 pilot NNUE sits **above** random/HCE on the ACPL ladder (historical multi-game gate ~**ACPL 139** / Elo heur. **~1465**). Artifact: `images/plots/PGN_and_JSON/nnue_d1_gate_acpl.json`.  
 **Depth 2** with this pilot often **collapses** (known issue) — prefer d1 for demos unless you intentionally stress search.
 
 ---

@@ -32,7 +32,7 @@ TinyMLInternship/
 ├── tests/
 ├── data/{raw,processed,excel} ← local datasets (mostly gitignored)
 ├── models/{checkpoints,teacher}
-├── NOTES/, plots/, images/, presentations/
+├── NOTES/, images/, presentations/
 ├── AI-SKILLS/                 ← project agent skills (gitignored)
 └── PRIVATE/                   ← personal (gitignored)
 ```

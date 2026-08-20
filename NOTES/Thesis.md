@@ -8,7 +8,7 @@
 **Objective:** construct a dispatcher function $g_\phi$ that partitions the state space $\mathcal{S}$ (*of all board positions in the dataset*) into $B$ discrete buckets, maximizing the variety of the resulting *task vectors* in the weight space $\mathcal{W}$ (*the same weights that we want to fine-tune; L2 + value*). Because the dispatcher can only observe $\mathcal{S}$ while the optimization target resides in $\mathcal{W}$ (*during inference we have only the state, not the task vector*), we propose the following decoupled, two-step heuristic.
 
 <div align="center">
-    <img src="../plots/thesis_dispatcher_architecture.png" width="600">
+    <img src="../images/plots/thesis_dispatcher_architecture.png" width="600">
 </div>
 
 #### Training
