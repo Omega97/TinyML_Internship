@@ -8,7 +8,7 @@ using the same visual language as scripts/plot_nnue_architecture.py.
 
 Usage:
   py -3.12 scripts/plot_thesis_dispatcher.py
-  → plots/thesis_dispatcher_architecture.png
+  → images/plots/thesis_dispatcher_architecture.png
 """
 from __future__ import annotations
 
@@ -459,7 +459,7 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument(
         "--output",
         type=Path,
-        default=PROJECT_ROOT / "plots" / "thesis_dispatcher_architecture.png",
+        default=PROJECT_ROOT / "images" / "plots" / "thesis_dispatcher_architecture.png",
     )
     parser.add_argument("--dpi", type=int, default=160)
     args = parser.parse_args(argv)

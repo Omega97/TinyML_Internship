@@ -99,7 +99,7 @@ def main() -> None:
     parser.add_argument(
         "--output",
         type=Path,
-        default=PROJECT_ROOT / "plots" / "piece_count_distribution.png",
+        default=PROJECT_ROOT / "images" / "plots" / "piece_count_distribution.png",
     )
     parser.add_argument(
         "--excel-output",
