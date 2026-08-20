@@ -38,7 +38,7 @@
 
 - [ ] Train an **NNUE** $f_w(s)=v$ with **sparse input**, two hidden layers, *CReLU*, *tanh* output:
 	- **Input**: the board state, sparse representation.
-	- **L1**: a **shared** FFNN `844 → W` (sparse, int8 weights $w^{(1)}$). Called **twice** per position: once on the **own‑side features**, once on the **opponent‑side features** (board mirrored). The two output vectors (`h_own` and `h_opp`, each of size `W`) form the **dual‑POV accumulator** (the activations are recycled via incremental add/sub on make/unmake). They are **concatenated** to size `2W` **after** L1, just before the expert head.
+	- **L1**: a **shared** FFNN `844 → W` (sparse, approx. 128x2 neurons, int8 weights $w^{(1)}$). Called **twice** per position: once on the **own‑side features**, once on the **opponent‑side features** (board mirrored). The two output vectors (`h_own` and `h_opp`, each of size `W`) form the **dual‑POV accumulator** (the activations are recycled via incremental add/sub on make/unmake). They are **concatenated** to size `2W` **after** L1, just before the expert head. Both sets of activations are used as a single embedding vector $h \equiv a^{(1)}$.
 	- **L2**: second hidden layer (approx. 256 neurons, param $w^{(2)}$).
 	- **Output**: One single neuron, represents the expected reward (proba white win - proba white lose) of the position (param $w^{(3)}$).
 
