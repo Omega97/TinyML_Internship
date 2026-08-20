@@ -1,13 +1,10 @@
 [project]
 name = "tinymlinternship"
 version = "0.1.0"
-description = "TinyML Chess Engine - Running compressed chess AI on edge devices (XIAO)"
+description = "SARDINE — tiny-hardware chess bot (Goal.md)"
 readme = "README.md"
 requires-python = ">=3.9"
 license = {text = "MIT"}
-authors = [
-    {name = "Your Name", email = "your.email@example.com"},
-]
 
 dependencies = [
     "pandas",
@@ -23,14 +20,6 @@ dev = [
     "isort",
     "flake8",
     "mypy",
-    "ipykernel",           # for notebooks
-]
-viz = [
-    "pygame",
-    "gifpgn",
-    "pillow",
-    "imageio",
-    "chess-gif",
 ]
 data = [
     "pyarrow",
@@ -44,14 +33,7 @@ train = [
 
 [tool.setuptools.packages.find]
 where = ["src"]
-namespaces = false
-
-[tool.setuptools.package-data]
-"tinymlinternship" = ["**/*.txt", "**/*.md"]
-
-# =============================================
-# Tool configurations
-# =============================================
+include = ["tinymlinternship*"]
 
 [tool.black]
 line-length = 100
@@ -59,16 +41,9 @@ target-version = ['py39']
 
 [tool.isort]
 profile = "black"
-src_paths = ["src"]
 
 [tool.pytest.ini_options]
 minversion = "7.0"
 addopts = "-ra --tb=short"
 testpaths = ["tests"]
 pythonpath = ["src"]
-
-[tool.mypy]
-python_version = "3.9"
-warn_return_any = true
-warn_unused_configs = true
-disallow_untyped_defs = true

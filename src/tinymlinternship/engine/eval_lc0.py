@@ -14,8 +14,9 @@ from pathlib import Path
 
 import chess
 
-from tinymlinternship.config.settings import LC0_BINARY, LC0_NETWORK_BT4, LC0_NETWORK_DEFAULT
-from tinymlinternship.engine.eval_hce import MATE_SCORE
+from tinymlinternship.config.settings import LC0_BINARY, LC0_NETWORK_DEFAULT
+
+MATE_SCORE = 32_000
 
 WDL_PERMILLE_RE = re.compile(r"\bwdl\s+(\d+)\s+(\d+)\s+(\d+)\b", re.IGNORECASE)
 CP_SCALE = 1000  # map expected reward in [-1, 1] to centipawn-like search scores

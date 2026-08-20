@@ -38,7 +38,7 @@ LABELED_RECOMMENDED_COLUMNS: tuple[str, ...] = (
     "teacher_network",
 )
 
-VALID_SOURCES = frozenset({"lichess", "lc0"})
+VALID_SOURCES = frozenset({"lichess", "lc0", "lichess_puzzles", "unknown"})
 
 LABEL_FORMULA = "expected_reward = (W - L) / 1000 from STM WDL, flipped to White POV"
 

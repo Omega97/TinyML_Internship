@@ -1,3 +1,1 @@
-from pkgutil import extend_path
-
-__path__ = extend_path(__path__, __name__)
+"""SARDINE live package (Goal.md §1 data helpers)."""

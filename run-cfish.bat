@@ -10,7 +10,7 @@ if not exist "%EXE%" (
     echo [error] cfish.exe not found:
     echo   %EXE%
     echo.
-    echo Build it first - see NOTES\Cfish.md
+    echo Build it first:
     echo   cd src\cfish
     echo   make build numa=no ARCH=x86-64
     echo.

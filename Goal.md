@@ -1,6 +1,7 @@
 
-# Chess bot project
+# Chess bot project - SARDINE
 
+**Small Artificial RAM-restricted Deep Intelligent Neural Engine**
 
 > *Building a small and efficient chess bot, that can run on extremely limited hardware. The following is a clear description of the steps to complete the project.*
 
