@@ -35,13 +35,16 @@ CHESS_LITE_WEIGHTS = HF_TEACHER_DIR / "chess_lite" / "chess_lite.pth"
 ARTORIA_SMALL_CKPT = HF_TEACHER_DIR / "artoria-zero" / "small" / "checkpoint.pt"
 ARTORIA_SMALL_CONFIG = HF_TEACHER_DIR / "artoria-zero" / "small" / "config.json"
 
-# Example specific files
-LICHESS_CSV = RAW_DATA_DIR / "games.csv"
+# Conversion sources for fen-value-visits (Goal §1) live under data/raw/
+LICHESS_RAW_DIR = RAW_DATA_DIR / "lichess"
+KAGGLE_RAW_DIR = RAW_DATA_DIR / "kaggle"
+LICHESS_CSV = KAGGLE_RAW_DIR / "games.csv"
 LC0_RAW_DIR = RAW_DATA_DIR / "lc0"
 LC0_TARS_DIR = LC0_RAW_DIR / "tars"
 LC0_CHUNKS_DIR = LC0_RAW_DIR / "chunks"
 LC0_MANIFEST = LC0_RAW_DIR / "manifest.json"
-LC0_PROCESSED_DIR = PROCESSED_DATA_DIR / "lc0"
+# FEN extracts from Lc0 chunks (still a conversion source, not teacher labels)
+LC0_PROCESSED_DIR = LC0_RAW_DIR
 CHESSBENCH_RAW_DIR = RAW_DATA_DIR / "chessbench"
 CHESSBENCH_PROCESSED_DIR = PROCESSED_DATA_DIR / "chessbench"
 
