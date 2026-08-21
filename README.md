@@ -2,7 +2,7 @@
 
 **Small Artificial RAM-restricted Deep Intelligent Neural Engine**
 
-Tiny-hardware chess bot. Spec and step list: **[Goal.md](Goal.md)**.
+Tiny-hardware chess bot. Spec: **[Goal.md](Goal.md)**. Status: **[PROJECT.md](PROJECT.md)**.
 
 Do this in order. Do not skip ahead.
 
@@ -18,8 +18,8 @@ Old pipeline (8-bucket / single-head Python engine, HCE product path, ICTP 2026-
 
 ### Live tree
 
-- `data/raw/` — downloaded games (Lc0 chunks, Lichess smoke, Kaggle `games.csv`)
-- `data/processed/board_eval/fen_value_visits/` — Goal §1 JSON (+ parquet) slices
+- `data/raw/` — conversion sources (Lc0, Lichess, Kaggle) for fen-value-visits JSON
+- `data/processed/board_eval/fen_value_visits/` — Goal §1 JSON slices; joined table will live in `data/processed/board_eval/`
 - `models/teacher/lc0/` — Lc0 binary + `791556.pb.gz`; stronger nets in `models/teacher/networks/`
 - `src/cfish/` — Cfish search (Goal §4). Launch: `run-cfish.bat`
 - `tools/stockfish/` — ACPL judge (Goal §5)
