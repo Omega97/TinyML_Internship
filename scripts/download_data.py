@@ -20,6 +20,7 @@ from tinymlinternship.config.settings import (
 def ensure_dirs():
     """Create necessary directories if they don't exist."""
     RAW_DATA_DIR.mkdir(parents=True, exist_ok=True)
+    LICHESS_CSV.parent.mkdir(parents=True, exist_ok=True)
     PROCESSED_DATA_DIR.mkdir(parents=True, exist_ok=True)
     print(f"Data directories ready under: {PROJECT_ROOT}")
 
@@ -35,7 +36,8 @@ def download_lichess_dataset():
     source_csv = Path(path) / "games.csv"
 
     # Destination
-    dest_csv = RAW_DATA_DIR / "games.csv"
+    dest_csv = LICHESS_CSV
+    dest_csv.parent.mkdir(parents=True, exist_ok=True)
 
     if source_csv.exists():
         import shutil

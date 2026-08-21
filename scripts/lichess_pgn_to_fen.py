@@ -9,7 +9,7 @@ Example::
 
     py -3.12 scripts/lichess_pgn_to_fen.py \\
         --input images/games/hce_d1_vs_hce_d1_2026-07-10.pgn \\
-        --max-games 16 --output data/processed/lichess/smoke_fens.parquet
+        --max-games 16 --output data/raw/lichess/smoke_fens.parquet
 """
 
 from __future__ import annotations
@@ -27,7 +27,7 @@ import chess
 import chess.pgn
 import pandas as pd
 
-from tinymlinternship.config.settings import PROCESSED_DATA_DIR, PROJECT_ROOT
+from tinymlinternship.config.settings import LICHESS_RAW_DIR, PROJECT_ROOT
 from tinymlinternship.features.bucket import (
     NUM_BUCKETS,
     bucket_id,
@@ -35,7 +35,7 @@ from tinymlinternship.features.bucket import (
     piece_count,
 )
 
-DEFAULT_OUTPUT = PROCESSED_DATA_DIR / "lichess" / "positions.parquet"
+DEFAULT_OUTPUT = LICHESS_RAW_DIR / "positions.parquet"
 
 
 def iter_games(pgn_path: Path) -> Iterator[chess.pgn.Game]:

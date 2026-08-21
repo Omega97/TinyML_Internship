@@ -8,7 +8,7 @@ Example::
 
     py -3.12 scripts/inspect_dataset.py
     py -3.12 scripts/inspect_dataset.py data/processed/labeled/val.parquet
-    py -3.12 scripts/inspect_dataset.py data/raw/games.csv
+    py -3.12 scripts/inspect_dataset.py data/raw/kaggle/games.csv
 """
 
 from __future__ import annotations

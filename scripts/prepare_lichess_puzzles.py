@@ -9,7 +9,7 @@ position.
 Example::
 
     py -3.12 scripts/prepare_lichess_puzzles.py --limit 4000
-    py -3.12 scripts/label_positions.py --input data/processed/lichess/puzzles_sample.parquet \\
+    py -3.12 scripts/label_positions.py --input data/raw/lichess/puzzles_sample.parquet \\
         --output data/processed/labeled/lichess_puzzles.parquet
 """
 
@@ -26,12 +26,12 @@ sys.path.insert(0, str(Path(__file__).parent.parent / "src"))
 import chess
 import pandas as pd
 
-from tinymlinternship.config.settings import PROCESSED_DATA_DIR, PROJECT_ROOT
+from tinymlinternship.config.settings import LICHESS_RAW_DIR, PROJECT_ROOT
 from tinymlinternship.data.schema import ensure_prelabel_columns
 
 HF_DATASET = "Lichess/chess-puzzles"
 SOURCE_NAME = "lichess_puzzles"
-DEFAULT_OUTPUT = PROCESSED_DATA_DIR / "lichess" / "puzzles_sample.parquet"
+DEFAULT_OUTPUT = LICHESS_RAW_DIR / "puzzles_sample.parquet"
 
 
 def puzzle_player_fen(fen: str, moves: str) -> str:

@@ -34,7 +34,7 @@ sys.path.insert(0, str(Path(__file__).parent.parent / "src"))
 
 import pandas as pd
 
-from tinymlinternship.config.settings import PROCESSED_DATA_DIR, PROJECT_ROOT
+from tinymlinternship.config.settings import PROCESSED_DATA_DIR, PROJECT_ROOT, RAW_DATA_DIR
 from tinymlinternship.data.board_store import (
     BOARD_EVAL_DIR_NAME,
     FEN_VALUE_VISITS_DIR_NAME,
@@ -55,16 +55,20 @@ VALUE_SOURCES = [
 
 # Observation counts — raw extracts only (same policy as build_dataset_json.py)
 VISIT_SOURCES = [
-    PROCESSED_DATA_DIR / "lc0" / "positions.parquet",
-    PROCESSED_DATA_DIR / "lichess" / "positions.parquet",
-    PROCESSED_DATA_DIR / "lichess" / "kaggle_games_positions.parquet",
-    PROCESSED_DATA_DIR / "lichess" / "puzzles_sample.parquet",
+    RAW_DATA_DIR / "lc0" / "positions.parquet",
+    RAW_DATA_DIR / "lichess" / "positions.parquet",
+    RAW_DATA_DIR / "kaggle" / "kaggle_games_positions.parquet",
+    RAW_DATA_DIR / "lichess" / "puzzles_sample.parquet",
+    RAW_DATA_DIR / "lichess" / "puzzles_sample_16k.parquet",
 ]
 
 # Extra labeled parquets written as their own files (values not mixed into the join).
 EXTRA_VALUE_SLICES: list[tuple[Path, str]] = [
     (PROCESSED_DATA_DIR / "labeled" / "lc0_large_25k.parquet", "lc0_large_25k"),
+    (PROCESSED_DATA_DIR / "labeled" / "lc0_large_40k.parquet", "lc0_large_40k"),
     (PROCESSED_DATA_DIR / "labeled" / "lichess_kaggle_10k.parquet", "lichess_kaggle_10k"),
+    (PROCESSED_DATA_DIR / "labeled" / "lichess_kaggle_40k.parquet", "lichess_kaggle_40k"),
+    (PROCESSED_DATA_DIR / "labeled" / "lichess_puzzles_16k.parquet", "lichess_puzzles_16k"),
 ]
 
 DEFAULT_OUTPUT = PROCESSED_DATA_DIR / BOARD_EVAL_DIR_NAME / FEN_VALUE_VISITS_JOINED_NAME
