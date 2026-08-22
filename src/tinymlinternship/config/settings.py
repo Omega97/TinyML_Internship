@@ -37,6 +37,11 @@ ARTORIA_SMALL_CONFIG = HF_TEACHER_DIR / "artoria-zero" / "small" / "config.json"
 
 # Conversion sources for fen-value-visits (Goal §1) live under data/raw/
 LICHESS_RAW_DIR = RAW_DATA_DIR / "lichess"
+LICHESS_DUMPS_DIR = LICHESS_RAW_DIR / "dumps"
+LICHESS_DUMP_MANIFEST = LICHESS_RAW_DIR / "dump_manifest.json"
+LICHESS_DUMP_BASE_URL = "https://database.lichess.org/standard"
+LICHESS_DUMP_LIST_URL = f"{LICHESS_DUMP_BASE_URL}/list.txt"
+LICHESS_DUMP_SHA256_URL = f"{LICHESS_DUMP_BASE_URL}/sha256sums.txt"
 KAGGLE_RAW_DIR = RAW_DATA_DIR / "kaggle"
 LICHESS_CSV = KAGGLE_RAW_DIR / "games.csv"
 LC0_RAW_DIR = RAW_DATA_DIR / "lc0"

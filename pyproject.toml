@@ -25,6 +25,8 @@ data = [
     "pyarrow",
     "matplotlib",
     "openpyxl",
+    "zstandard",
+    "tqdm",
 ]
 train = [
     "torch",
