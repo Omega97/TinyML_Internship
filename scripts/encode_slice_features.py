@@ -5,7 +5,8 @@ For every child of ``data/processed/board_eval/fen_value_visits/``:
 
     <slice>/fen_value_visits_….json  →  <slice>/features.npz
 
-Arrays: sparse dual-POV 844 indices + White-POV ``value``. **No visits.**
+Arrays: sparse dual-POV 844 indices + STM ``wdl`` ``(N, 3)``. **No visits.**
+JSON that only has White-POV ``value`` is converted to STM WDL at encode time.
 Training loads the npz; chess encoding is not repeated.
 
     py -3.12 -u scripts/encode_slice_features.py
@@ -39,7 +40,14 @@ def _resolve(path: Path) -> Path:
 
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(
-        description="Encode each slice JSON to features.npz in the same folder"
+        description="Encode each slice JSON to features.npz (sparse 844 + STM WDL)"
+    )
+    parser.add_argument(
+        "slice",
+        nargs="?",
+        type=Path,
+        default=None,
+        help="One slice folder (default: every child of --root)",
     )
     parser.add_argument(
         "--root",
@@ -50,8 +58,15 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--rebuild", action="store_true")
     args = parser.parse_args(argv)
 
-    root = _resolve(args.root)
-    folders = discover_slice_folders(root)
+    if args.slice is not None:
+        folder = _resolve(args.slice)
+        if slice_source_json(folder) is None:
+            print(f"no slice JSON in {folder}", file=sys.stderr)
+            return 1
+        folders = [folder]
+    else:
+        root = _resolve(args.root)
+        folders = discover_slice_folders(root)
     if not folders:
         print(f"no slice folders in {root}", file=sys.stderr)
         return 1
