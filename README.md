@@ -109,3 +109,28 @@ pip install -e ".[viz]"
 py -3.12 LEGACY/scripts/record_engine_game.py --eval hce --depth 1 --no-quiescence --headless --output images/games/hce_d1_game.gif
 py -3.12 LEGACY/scripts/record_engine_game.py --eval nnue --depth 1 --headless --output images/games/nnue_d1_game.gif
 ```
+
+---
+
+## Notes
+### Dual POV
+
+The same weights in the L1 layer are called twice, to produce two sets of activations:
+- **1st call**: board from the **side‑to‑move**'s POV (no transform).
+- **2nd call**: board is **rank‑flipped** (mirrored vertically, ranks 1↔8) and colors are swapped.
+
+This way, the network does not have to re-learn symmetrical patterns (e.g., pawns always move forward, castling is always on the same side from each player's perspective).
+
+## Board Mirroring
+
+In the current pipeline, **board mirroring** is baked into the 844 encoder when each FEN is turned into `features.npz`. Training never sees a board — only those already-mirrored sparse indices.
+
+### STM Reorder (Perspective‑Invariance)
+
+The two accumulator vectors (`h_own` and `h_opp`) are **reordered** before being concatenated and fed to the expert head. The vector corresponding to the **side to move** always comes first, and the opponent's vector comes second. This makes the evaluation output **perspective‑invariant** — the network always evaluates from the point of view of the player whose turn it is.
+
+### CReLU
+
+The Concatenated Rectified Linear Unit (CReLU) is an activation function for deep learning that doubles the output channel dimension by applying both positive and negative ReLU transformations: $f(x) = [\text{ReLU}(x), \text{ReLU}(-x)]$. It captures opposite-phase features in early convolutional layers. 
+
+---
