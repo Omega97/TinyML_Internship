@@ -1,19 +1,24 @@
 #!/usr/bin/env python3
-"""Stream a Lichess monthly ``.pgn.zst`` dump → unique {fen, value, visits} JSON.
+"""Stream a Lichess monthly ``.pgn.zst`` dump → unique {fen, wdl, value, visits} JSON.
 
 Takes 1-based game numbers ``n`` (inclusive) and ``m`` (exclusive): games
 ``[n, m)``. Skip is ``[Event `` header count (no chess parse). Unique EPDs are
 kept unless ``--max-unique`` is set; later games in the range only increment
 visits for positions already in that set.
 
-Teacher: Lc0 WDL → White-POV expected reward. Output (and parquet twin) under
+Teacher: Lc0 STM WDL probabilities ``[W, D, L]`` plus White-POV ``value = ±(W-L)``.
+Output (and parquet twin) under
 ``data/processed/board_eval/fen_value_visits/<stem>/``:
 
     fen_value_visits_lichess_db_standard_rated_2026-07_<n>-<m>.json
 
-Example (first 10 games, ``[1, 11)``)::
+Default ``--dropout 0.90`` keeps each ply independently with probability 0.10
+(decorrelates consecutive positions from the same game). Slice stem gets
+``_d90``. ``--dropout 0`` keeps every ply and omits the suffix.
 
-    py -3.12 scripts/lichess_dump_to_fen_value_visits.py 1 11
+Example (first 10 games, stem ``…_0-10_d90``)::
+
+    py -3.12 -u scripts/lichess_dump_to_fen_value_visits.py 0 10
 """
 
 from __future__ import annotations
@@ -22,6 +27,7 @@ import argparse
 import hashlib
 import io
 import json
+import random
 import sys
 import time
 from pathlib import Path
@@ -45,20 +51,9 @@ from tinymlinternship.data.board_store import (
     FEN_VALUE_VISITS_DIR_NAME,
     fen_value_visits_slice_path,
 )
-from tinymlinternship.engine.eval_lc0 import Lc0Teacher, wdl_to_expected_reward_white
+from tinymlinternship.data.wdl import dumps_labeled_json, labeled_payload, stm_wdl_from_white_value
+from tinymlinternship.engine.eval_lc0 import Lc0Teacher
 
-
-def _terminal_wdl_and_reward(board: chess.Board) -> tuple[tuple[int, int, int], float] | None:
-    if board.is_checkmate():
-        return (0, 0, 1000), (-1.0 if board.turn == chess.WHITE else 1.0)
-    if (
-        board.is_stalemate()
-        or board.is_insufficient_material()
-        or board.can_claim_threefold_repetition()
-        or board.can_claim_fifty_moves()
-    ):
-        return (0, 1000, 0), 0.0
-    return None
 
 DEFAULT_DUMP = LICHESS_DUMPS_DIR / "lichess_db_standard_rated_2026-07.pgn.zst"
 PROGRESS_INTERVAL_S = 1.0
@@ -100,24 +95,38 @@ def dump_month_id(path: Path) -> str:
 
 
 def game_range_to_skip_max(n: int, m: int) -> tuple[int, int]:
-    """1-based half-open ``[n, m)`` → (skip_games, max_games)."""
-    if n < 1:
-        raise ValueError("n must be >= 1 (1-based game numbers)")
+    """Half-open ``[n, m)`` → (skip_games, max_games).
+
+    ``n >= 1`` is 1-based (``1 11`` = first 10 games). ``n == 0`` is the start of
+    the dump so the slice stem can be ``0-m`` (``0 10`` = first 10 games, same
+    as ``1 11``).
+    """
+    if n < 0:
+        raise ValueError("n must be >= 0 (0 = start of dump; 1-based otherwise)")
     if m <= n:
         raise ValueError("m must be > n (range is [n, m), m exclusive)")
+    if n == 0:
+        return 0, m
     return n - 1, m - n
 
 
-def slice_json_name(dump: Path, n: int, m: int) -> str:
-    return f"fen_value_visits_{dump_month_id(dump)}_{n}-{m}.json"
+def dropout_suffix(dropout: float) -> str:
+    """``0.90`` → ``_d90``; ``0`` → empty (old slice names)."""
+    if dropout <= 0.0:
+        return ""
+    return f"_d{int(round(float(dropout) * 100))}"
 
 
-def slice_extract_name(dump: Path, n: int, m: int) -> str:
-    return f"{dump_month_id(dump)}_{n}-{m}_extract.parquet"
+def slice_json_name(dump: Path, n: int, m: int, *, dropout: float = 0.0) -> str:
+    return f"fen_value_visits_{dump_month_id(dump)}_{n}-{m}{dropout_suffix(dropout)}.json"
 
 
-def slice_labeled_name(dump: Path, n: int, m: int) -> str:
-    return f"{dump_month_id(dump)}_{n}-{m}.parquet"
+def slice_extract_name(dump: Path, n: int, m: int, *, dropout: float = 0.0) -> str:
+    return f"{dump_month_id(dump)}_{n}-{m}{dropout_suffix(dropout)}_extract.parquet"
+
+
+def slice_labeled_name(dump: Path, n: int, m: int, *, dropout: float = 0.0) -> str:
+    return f"{dump_month_id(dump)}_{n}-{m}{dropout_suffix(dropout)}.parquet"
 
 
 def _epd_key(board: chess.Board) -> str:
@@ -226,15 +235,27 @@ def collect_unique(
     progress_every: int,
     stop_when_unique_full: bool = False,
     include_startpos: bool = True,
+    dropout: float = 0.0,
+    seed: int = 0,
 ) -> tuple[list[dict], dict]:
+    if dropout < 0.0 or dropout >= 1.0:
+        raise ValueError("dropout must be in [0, 1)")
     store: dict[str, dict] = {}
     games = 0
     plies = 0
     broken = 0
+    considered = 0
+    dropped = 0
     t0 = time.perf_counter()
     unlimited = max_unique is None or max_unique <= 0
+    rng = random.Random(int(seed))
 
     def _count(board: chess.Board) -> None:
+        nonlocal considered, dropped
+        considered += 1
+        if dropout > 0.0 and rng.random() < dropout:
+            dropped += 1
+            return
         key = _epd_key(board)
         rec = store.get(key)
         if rec is not None:
@@ -289,7 +310,13 @@ def collect_unique(
                 games += 1
                 if not ok:
                     broken += 1
-                bar.set_postfix(unique=len(store), plies=plies, broken=broken, refresh=False)
+                bar.set_postfix(
+                    unique=len(store),
+                    plies=plies,
+                    kept=considered - dropped,
+                    broken=broken,
+                    refresh=False,
+                )
                 bar.update(1)
                 if (
                     stop_when_unique_full
@@ -318,6 +345,11 @@ def collect_unique(
         "max_unique": max_unique,
         "stop_when_unique_full": stop_when_unique_full,
         "include_startpos": include_startpos,
+        "dropout": float(dropout),
+        "seed": int(seed),
+        "plies_considered": considered,
+        "plies_dropped": dropped,
+        "plies_kept": considered - dropped,
         "elapsed_s": round(time.perf_counter() - t0, 1),
     }
     return rows, stats
@@ -330,14 +362,20 @@ def label_extract(
     batch: int,
     network: Path,
     progress: bool = True,
+    force: bool = False,
 ) -> int:
     df = pd.read_parquet(extract)
     n = len(df)
-    if "expected_reward" in df.columns and df["expected_reward"].notna().all():
+    if (
+        not force
+        and "expected_reward" in df.columns
+        and df["expected_reward"].notna().all()
+        and all(col in df.columns for col in ("wdl_win", "wdl_draw", "wdl_loss"))
+    ):
         print(f"already labeled: {labeled}")
         return n
     start = 0
-    if labeled.exists():
+    if labeled.exists() and not force:
         prev = pd.read_parquet(labeled)
         start = len(prev)
         print(f"resume labels at {start:,}/{n:,}")
@@ -360,18 +398,19 @@ def label_extract(
             while start < n:
                 end = min(n, start + batch)
                 chunk = df.iloc[start:end]
+                wdls: list[tuple[float, float, float]] = []
                 rewards: list[float] = []
                 for fen in chunk["fen"].astype(str).tolist():
                     board = chess.Board(fen)
-                    terminal = _terminal_wdl_and_reward(board)
-                    if terminal is not None:
-                        (_w, _d, _l), reward = terminal
-                    else:
-                        win, draw, loss = teacher.evaluate_wdl(board)
-                        reward = wdl_to_expected_reward_white(board, win, draw, loss)
-                    rewards.append(float(reward))
+                    wdl = teacher.evaluate_stm_wdl(board)
+                    payload = labeled_payload(fen, wdl, 1)
+                    wdls.append(tuple(payload["wdl"]))
+                    rewards.append(float(payload["value"]))
                     bar.update(1)
                 piece = chunk.copy()
+                piece["wdl_win"] = [row[0] for row in wdls]
+                piece["wdl_draw"] = [row[1] for row in wdls]
+                piece["wdl_loss"] = [row[2] for row in wdls]
                 piece["expected_reward"] = rewards
                 piece["teacher_network"] = teacher_name
                 piece["source"] = "lichess"
@@ -383,18 +422,17 @@ def label_extract(
 
 def write_json(labeled: Path, json_path: Path) -> None:
     df = pd.read_parquet(labeled)
-    payload = [
-        {
-            "fen": str(row["fen"]),
-            "value": float(row["expected_reward"]),
-            "visits": int(row["visits"]),
-        }
-        for row in df.sort_values(["visits", "fen"], ascending=[False, True]).to_dict(
-            orient="records"
-        )
-    ]
+    payload = []
+    for row in df.sort_values(["visits", "fen"], ascending=[False, True]).to_dict(
+        orient="records"
+    ):
+        if all(key in row and row[key] is not None for key in ("wdl_win", "wdl_draw", "wdl_loss")):
+            wdl = (float(row["wdl_win"]), float(row["wdl_draw"]), float(row["wdl_loss"]))
+        else:
+            wdl = stm_wdl_from_white_value(str(row["fen"]), float(row["expected_reward"]))
+        payload.append(labeled_payload(str(row["fen"]), wdl, int(row["visits"])))
     json_path.parent.mkdir(parents=True, exist_ok=True)
-    json_path.write_text(json.dumps(payload, indent=2) + "\n", encoding="utf-8")
+    json_path.write_text(dumps_labeled_json(payload), encoding="utf-8")
     pq = json_path.with_suffix(".parquet")
     pd.DataFrame(payload).to_parquet(pq, index=False)
     print(f"JSON {len(payload):,} → {json_path} + {pq.name}")
@@ -402,10 +440,14 @@ def write_json(labeled: Path, json_path: Path) -> None:
 
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(
-        description="Lichess dump games [n, m) → fen-value-visits JSON (m exclusive)"
+        description="Lichess dump games [n, m) → {fen, wdl, value, visits} JSON (m exclusive)"
     )
-    parser.add_argument("n", type=int, help="First game number (1-based, inclusive)")
-    parser.add_argument("m", type=int, help="End game number (1-based, exclusive)")
+    parser.add_argument(
+        "n",
+        type=int,
+        help="First game (0 = start of dump; 1-based if n>=1), inclusive",
+    )
+    parser.add_argument("m", type=int, help="End game number (exclusive)")
     parser.add_argument("--input", type=Path, default=DEFAULT_DUMP)
     parser.add_argument(
         "--max-unique",
@@ -420,6 +462,18 @@ def main(argv: list[str] | None = None) -> int:
     )
     parser.add_argument("--no-startpos", action="store_true", help="Do not record the initial FEN")
     parser.add_argument(
+        "--dropout",
+        type=float,
+        default=0.90,
+        help="Drop each ply independently with this probability (default 0.90 → keep 1/10, stem _d90)",
+    )
+    parser.add_argument(
+        "--seed",
+        type=int,
+        default=0,
+        help="RNG seed for ply dropout (default 0)",
+    )
+    parser.add_argument(
         "--progress-every",
         type=int,
         default=1,
@@ -428,6 +482,11 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--batch", type=int, default=20_000, help="Label checkpoint size")
     parser.add_argument("--skip-extract", action="store_true")
     parser.add_argument("--skip-label", action="store_true")
+    parser.add_argument(
+        "--force-label",
+        action="store_true",
+        help="Re-run Lc0 even if a labeled parquet already exists (needed for WDL rebuild)",
+    )
     parser.add_argument(
         "--extract",
         type=Path,
@@ -452,19 +511,30 @@ def main(argv: list[str] | None = None) -> int:
     except ValueError as exc:
         print(str(exc), file=sys.stderr)
         return 2
+    if args.dropout < 0.0 or args.dropout >= 1.0:
+        print("--dropout must be in [0, 1)", file=sys.stderr)
+        return 2
 
     dump = args.input if args.input.is_absolute() else (PROJECT_ROOT / args.input)
     extract = args.extract or (
-        PROJECT_ROOT / "data" / "raw" / "lichess" / slice_extract_name(dump, args.n, args.m)
+        PROJECT_ROOT
+        / "data"
+        / "raw"
+        / "lichess"
+        / slice_extract_name(dump, args.n, args.m, dropout=args.dropout)
     )
     if args.extract and not args.extract.is_absolute():
         extract = PROJECT_ROOT / args.extract
-    labeled = args.labeled or (PROCESSED_DATA_DIR / "labeled" / slice_labeled_name(dump, args.n, args.m))
+    labeled = args.labeled or (
+        PROCESSED_DATA_DIR
+        / "labeled"
+        / slice_labeled_name(dump, args.n, args.m, dropout=args.dropout)
+    )
     if args.labeled and not Path(args.labeled).is_absolute():
         labeled = PROJECT_ROOT / args.labeled
     json_path = args.output or fen_value_visits_slice_path(
         PROCESSED_DATA_DIR / BOARD_EVAL_DIR_NAME / FEN_VALUE_VISITS_DIR_NAME,
-        slice_json_name(dump, args.n, args.m),
+        slice_json_name(dump, args.n, args.m, dropout=args.dropout),
     )
     if args.output and not Path(args.output).is_absolute():
         json_path = PROJECT_ROOT / args.output
@@ -480,7 +550,7 @@ def main(argv: list[str] | None = None) -> int:
             return 1
         print(
             f"extracting games [{args.n:,}, {args.m:,}) from {dump} "
-            f"(skip={skip_games:,}, count={max_games:,}) …",
+            f"(skip={skip_games:,}, count={max_games:,}, dropout={args.dropout:g}) …",
             flush=True,
         )
         rows, stats = collect_unique(
@@ -491,6 +561,8 @@ def main(argv: list[str] | None = None) -> int:
             progress_every=args.progress_every,
             stop_when_unique_full=args.stop_when_unique_full,
             include_startpos=not args.no_startpos,
+            dropout=args.dropout,
+            seed=args.seed,
         )
         stats["n"] = args.n
         stats["m"] = args.m
@@ -517,6 +589,7 @@ def main(argv: list[str] | None = None) -> int:
             batch=args.batch,
             network=LC0_NETWORK_DEFAULT.resolve(),
             progress=bool(args.progress_every),
+            force=bool(args.force_label),
         )
 
     if not labeled.is_file():
