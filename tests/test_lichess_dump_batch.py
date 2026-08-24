@@ -31,8 +31,16 @@ def _game(event: str, san: str) -> str:
 
 def test_game_range_and_slice_names():
     dump = _load_script()
-    assert dump.game_range_to_skip_max(1, 10) == (0, 10)
-    assert dump.game_range_to_skip_max(20_000_001, 21_000_000) == (20_000_000, 1_000_000)
+    assert dump.game_range_to_skip_max(1, 11) == (0, 10)
+    assert dump.game_range_to_skip_max(1, 10) == (0, 9)
+    assert dump.game_range_to_skip_max(1000, 2000) == (999, 1000)
+    assert dump.game_range_to_skip_max(20_000_001, 21_000_001) == (20_000_000, 1_000_000)
+    try:
+        dump.game_range_to_skip_max(1, 1)
+    except ValueError as exc:
+        assert "exclusive" in str(exc).lower() or "m must be" in str(exc)
+    else:
+        raise AssertionError("expected ValueError for empty [n, m)")
     path = dump.DEFAULT_DUMP
     assert dump.dump_month_id(path) == "lichess_db_standard_rated_2026-07"
     assert dump.slice_json_name(path, 1, 10) == (

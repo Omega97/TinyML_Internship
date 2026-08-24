@@ -7,6 +7,7 @@ from pathlib import Path
 from tinymlinternship.data.board_store import (
     add_teacher_value,
     bump_visits,
+    fen_value_visits_slice_path,
     fen_value_visits_source_filename,
     slim_fen_value_visits,
 )
@@ -23,6 +24,8 @@ def test_source_filename_slug():
     assert fen_value_visits_source_filename("kaggle games") == "fen_value_visits_kaggle_games.parquet"
     assert fen_value_visits_source_filename("lc0_large_25k") == "fen_value_visits_lc0_large_25k.parquet"
     assert fen_value_visits_source_filename("lichess_kaggle_10k") == "fen_value_visits_lichess_kaggle_10k.parquet"
+    nested = fen_value_visits_slice_path(Path("slices"), "fen_value_visits_lc0.json")
+    assert nested == Path("slices") / "fen_value_visits_lc0" / "fen_value_visits_lc0.json"
 
 
 def test_visits_use_epd_hash_and_skip_unlabeled():
@@ -87,6 +90,21 @@ def test_discover_slices_prefers_parquet(tmp_path: Path):
     assert names == ["fen_value_visits_a.parquet", "fen_value_visits_b.json"]
 
 
+def test_discover_slices_nested_folders(tmp_path: Path):
+    join = _load_join()
+    nested = tmp_path / "fen_value_visits_a"
+    nested.mkdir()
+    (nested / "fen_value_visits_a.json").write_text("[]\n", encoding="utf-8")
+    (nested / "fen_value_visits_a.parquet").write_bytes(b"not-a-real-parquet")
+    other = tmp_path / "fen_value_visits_b"
+    other.mkdir()
+    (other / "fen_value_visits_b.json").write_text("[]\n", encoding="utf-8")
+    found = join.discover_slices(tmp_path)
+    names = [p.name for p in found]
+    assert names == ["fen_value_visits_a.parquet", "fen_value_visits_b.json"]
+    assert found[0].parent.name == "fen_value_visits_a"
+
+
 def test_join_sums_visits_weights_value_and_sorts(tmp_path: Path):
     join = _load_join()
     src = tmp_path / "slices"
@@ -98,7 +116,7 @@ def test_join_sums_visits_weights_value_and_sorts(tmp_path: Path):
     b = [
         {"fen": START_LATER, "value": 0.4, "visits": 1},
         {"fen": E4, "value": -0.1, "visits": 4},
-        {"fen": UNLABELED, "value": 0.0, "visits": 2},
+        {"fen": UNLABELED, "value": 0.123456, "visits": 2},
     ]
     (src / "fen_value_visits_a.json").write_text(json.dumps(a) + "\n", encoding="utf-8")
     (src / "fen_value_visits_b.json").write_text(json.dumps(b) + "\n", encoding="utf-8")
@@ -112,8 +130,46 @@ def test_join_sums_visits_weights_value_and_sorts(tmp_path: Path):
     assert len(rows) == 3
     start = by_epd[join.epd_key(START)]
     assert start["visits"] == 4
-    assert abs(start["value"] - (0.2 * 3 + 0.4 * 1) / 4) < 1e-9
+    assert start["value"] == round((0.2 * 3 + 0.4 * 1) / 4, 3)
     e4 = by_epd[join.epd_key(E4)]
     assert e4["visits"] == 5
-    assert abs(e4["value"] - (-0.5 * 1 + -0.1 * 4) / 5) < 1e-9
+    assert e4["value"] == round((-0.5 * 1 + -0.1 * 4) / 5, 3)
+    unlabeled = by_epd[join.epd_key(UNLABELED)]
+    assert unlabeled["value"] == 0.123
     assert rows[0]["visits"] >= rows[1]["visits"] >= rows[2]["visits"]
+
+
+COUNT_SCRIPT = Path(__file__).parent.parent / "scripts" / "count_fen_value_visits.py"
+
+
+def _load_count():
+    spec = importlib.util.spec_from_file_location("count_fen_value_visits", COUNT_SCRIPT)
+    assert spec is not None and spec.loader is not None
+    mod = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(mod)
+    return mod
+
+
+def test_count_unique_and_total_rows(tmp_path: Path):
+    count = _load_count()
+    a_dir = tmp_path / "fen_value_visits_a"
+    b_dir = tmp_path / "fen_value_visits_b"
+    a_dir.mkdir()
+    b_dir.mkdir()
+    a = [
+        {"fen": START, "value": 0.2, "visits": 3},
+        {"fen": E4, "value": -0.5, "visits": 1},
+    ]
+    b = [
+        {"fen": START_LATER, "value": 0.4, "visits": 1},
+        {"fen": UNLABELED, "value": 0.1, "visits": 2},
+    ]
+    (a_dir / "fen_value_visits_a.json").write_text(json.dumps(a) + "\n", encoding="utf-8")
+    (b_dir / "fen_value_visits_b.json").write_text(json.dumps(b) + "\n", encoding="utf-8")
+    assert count.main(["--input-dir", str(tmp_path), "--quiet"]) == 0
+    stats = count.count_slices(count.discover_slices(tmp_path))
+    assert stats["n_slices"] == 2
+    assert stats["total_rows"] == 4
+    assert stats["unique_epds"] == 3  # START and START_LATER share an EPD
+    assert stats["visits_sum"] == 7
+    assert stats["cross_slice_overlap_rows"] == 1
