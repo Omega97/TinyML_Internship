@@ -31,6 +31,8 @@ data = [
 train = [
     "torch",
     "pyarrow",
+    "matplotlib",
+    "tqdm",
 ]
 
 [tool.setuptools.packages.find]
