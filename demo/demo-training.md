@@ -64,6 +64,11 @@ If a slice is missing `features.npz`, encode first:
 py -3.12 -u scripts/encode_slice_features.py
 ```
 
+**IMPORTANT**: validate the results on the test set *(change the name of the model)*:
+```powershell
+py -3.12 -u scripts/inspect_nnue_positions.py dual_W64_H128
+```
+
 ---
 
 ## Encode slices (once)

@@ -5,8 +5,11 @@
 # Generate data
 cd C:\Users\monfalcone\PycharmProjects\TinyMLInternship
 
-# Games [20000, 22000) — n included, m excluded
+# Parse games — n included, m excluded
 py -3.12 -u scripts/lichess_dump_to_fen_value_visits.py 30000 32000
+
+# Count unique EPDs vs total slice rows (does not write the join)
+py -3.12 -u scripts/count_fen_value_visits.py
 
 # Join all datasets
 py -3.12 -u scripts/join_fen_value_visits.py
