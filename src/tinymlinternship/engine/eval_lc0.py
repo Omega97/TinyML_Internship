@@ -1,8 +1,9 @@
 """
-Lc0 teacher evaluation for 1-ply search baseline.
+Lc0 teacher evaluation.
 
-Uses a persistent ``lc0`` UCI process (``go nodes 1``) and maps WDL permille to
-centipawns from White's perspective for the existing negamax search stack.
+Uses a persistent ``lc0`` UCI process. Default is ``go nodes 1`` (value head
+only). ``go depth N`` is Lc0's MCTS depth stopper (average tree depth), not
+Stockfish-style αβ depth. Maps WDL permille to White-POV expected reward.
 """
 
 from __future__ import annotations
@@ -19,6 +20,7 @@ from tinymlinternship.config.settings import LC0_BINARY, LC0_NETWORK_DEFAULT
 MATE_SCORE = 32_000
 
 WDL_PERMILLE_RE = re.compile(r"\bwdl\s+(\d+)\s+(\d+)\s+(\d+)\b", re.IGNORECASE)
+MATE_RE = re.compile(r"\bscore mate (-?\d+)\b", re.IGNORECASE)
 CP_SCALE = 1000  # map expected reward in [-1, 1] to centipawn-like search scores
 
 
@@ -27,6 +29,49 @@ def parse_wdl_permille(line: str) -> tuple[int, int, int] | None:
     if match is None:
         return None
     return int(match.group(1)), int(match.group(2)), int(match.group(3))
+
+
+def mate_to_wdl_permille(mate_ply: int) -> tuple[int, int, int]:
+    """UCI ``score mate N`` is from side to move."""
+    if mate_ply > 0:
+        return 1000, 0, 0
+    if mate_ply < 0:
+        return 0, 0, 1000
+    return 0, 1000, 0
+
+
+def wdl_from_uci_lines(lines: list[str]) -> tuple[int, int, int] | None:
+    """Last WDL on the search, else WDL synthesized from the last mate score."""
+    last_wdl: tuple[int, int, int] | None = None
+    last_mate: int | None = None
+    for line in lines:
+        parsed = parse_wdl_permille(line)
+        if parsed is not None:
+            last_wdl = parsed
+        mate = MATE_RE.search(line)
+        if mate is not None:
+            last_mate = int(mate.group(1))
+    if last_wdl is not None:
+        return last_wdl
+    if last_mate is not None:
+        return mate_to_wdl_permille(last_mate)
+    return None
+
+
+def go_command(*, depth: int | None = None, nodes: int | None = None) -> str:
+    """Build a UCI ``go`` line. ``nodes 1`` is the value-head-only baseline."""
+    parts = ["go"]
+    if depth is not None:
+        if depth < 1:
+            raise ValueError("depth must be >= 1")
+        parts.extend(["depth", str(int(depth))])
+    if nodes is not None:
+        if nodes < 1:
+            raise ValueError("nodes must be >= 1")
+        parts.extend(["nodes", str(int(nodes))])
+    if len(parts) == 1:
+        parts.extend(["nodes", "1"])
+    return " ".join(parts)
 
 
 def wdl_to_expected_reward_white(board: chess.Board, win: int, draw: int, loss: int) -> float:
@@ -49,10 +94,14 @@ class Lc0Teacher:
         binary: str | None = None,
         weights: str | None = None,
         backend: str = "blas",
+        go: str = "go nodes 1",
+        smart_pruning_factor: float | None = None,
     ) -> None:
         self.binary = str(binary or LC0_BINARY)
         self.weights = str(weights or LC0_NETWORK_DEFAULT)
         self.backend = backend
+        self.go = go
+        self.smart_pruning_factor = smart_pruning_factor
         self._proc: subprocess.Popen[bytes] | None = None
 
     def start(self) -> None:
@@ -76,8 +125,12 @@ class Lc0Teacher:
             bufsize=0,
         )
         self._send("uci")
-        self._read_until(b"uciok")
+        self._read_until(b"uciok", limit=2000)
         self._send("setoption name UCI_ShowWDL value true")
+        if self.smart_pruning_factor is not None:
+            self._send(
+                f"setoption name SmartPruningFactor value {self.smart_pruning_factor}"
+            )
         self._send("isready")
         self._read_until(b"readyok")
 
@@ -118,17 +171,19 @@ class Lc0Teacher:
                 break
         return lines
 
-    def evaluate_wdl(self, board: chess.Board) -> tuple[int, int, int]:
+    def evaluate_wdl(
+        self, board: chess.Board, *, go: str | None = None
+    ) -> tuple[int, int, int]:
         self.start()
         fen = board.fen()
+        cmd = go or self.go
         self._send(f"position fen {fen}")
-        self._send("go nodes 1")
-        lines = self._read_until(b"bestmove")
-        for line in reversed(lines):
-            parsed = parse_wdl_permille(line)
-            if parsed is not None:
-                return parsed
-        raise RuntimeError(f"lc0 returned no WDL for fen={fen!r}")
+        self._send(cmd)
+        lines = self._read_until(b"bestmove", limit=2000)
+        parsed = wdl_from_uci_lines(lines)
+        if parsed is not None:
+            return parsed
+        raise RuntimeError(f"lc0 returned no WDL for fen={fen!r} go={cmd!r}")
 
     def evaluate_expected_reward(self, board: chess.Board) -> float:
         if board.is_checkmate():

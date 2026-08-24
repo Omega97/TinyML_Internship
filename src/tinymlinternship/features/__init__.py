@@ -1,5 +1,54 @@
-"""Board metadata helpers used while labeling (not the 8-expert router)."""
+"""844-feature encoder + board metadata helpers."""
 
-from tinymlinternship.features.bucket import bucket_id, has_queen, piece_count
+from tinymlinternship.features.bucket import NUM_BUCKETS, bucket_id, has_queen, piece_count
+from tinymlinternship.features.encoder import encode_dual, encode_perspective, validate_features
+from tinymlinternship.features.index_map import (
+    BASE_FEATURE_DIM,
+    FEATURE_DIM,
+    TACTICAL_SQUARES,
+    castling_index,
+    ep_file_index,
+    is_pawn_rank_inactive,
+    is_valid_index,
+    king_attacker_index,
+    king_enemy_index,
+    king_self_index,
+    meta_base,
+    piece_square_count,
+    piece_square_index,
+    tactical_base,
+    under_attack_index,
+)
+from tinymlinternship.features.mirror import (
+    mirror_for_perspective,
+    needs_horizontal_mirror,
+    perspective_board,
+)
 
-__all__ = ["bucket_id", "has_queen", "piece_count"]
+__all__ = [
+    "BASE_FEATURE_DIM",
+    "FEATURE_DIM",
+    "NUM_BUCKETS",
+    "TACTICAL_SQUARES",
+    "bucket_id",
+    "castling_index",
+    "encode_dual",
+    "encode_perspective",
+    "ep_file_index",
+    "has_queen",
+    "is_pawn_rank_inactive",
+    "is_valid_index",
+    "king_attacker_index",
+    "king_enemy_index",
+    "king_self_index",
+    "meta_base",
+    "mirror_for_perspective",
+    "needs_horizontal_mirror",
+    "perspective_board",
+    "piece_count",
+    "piece_square_count",
+    "piece_square_index",
+    "tactical_base",
+    "under_attack_index",
+    "validate_features",
+]

@@ -221,6 +221,12 @@ def add_teacher_value(store: dict[str, dict[str, Any]], fen: str, value: float) 
     return key
 
 
+def fen_value_visits_slice_path(sources_dir: Path, filename: str | Path) -> Path:
+    """``sources_dir / <stem> / <filename>`` — one folder per slice."""
+    name = Path(filename).name
+    return Path(sources_dir) / Path(name).stem / name
+
+
 def fen_value_visits_source_filename(source: str) -> str:
     """``fen_value_visits_<source>.parquet`` (lowercase slug)."""
     slug_chars: list[str] = []
