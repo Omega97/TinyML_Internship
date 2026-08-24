@@ -2,7 +2,7 @@
 
 Stream a **slice** of a Lichess standard-rated monthly dump (`.pgn.zst`) into Goal §1 JSON: unique `{fen, value, visits}` plus a parquet twin.
 
-Do **not** decompress the whole dump to disk. The converter streams zstd, skips games by `[Event ` header count (no chess parse on the skip), then parses games `n`–`m` (1-based, inclusive).
+Do **not** decompress the whole dump to disk. The converter streams zstd, skips games by `[Event ` header count (no chess parse on the skip), then parses games `[n, m)` (1-based, **n included, m excluded**).
 
 Run from the **repo root**.
 
@@ -35,14 +35,14 @@ py -3.12 scripts/download_lichess_dump.py --month 2026-07
 py -3.12 scripts/lichess_dump_to_fen_value_visits.py n m
 ```
 
-`n` and `m` are **1-based inclusive** game numbers in the dump. Example: `1 10` is the first ten games.
+`n` is **included**, `m` is **excluded** (Python `range` style). Adjacent batches `1 1000` then `1000 2000` do not share a game. Example: `1 11` is the first ten games.
 
 stderr shows three tqdm bars (skip, extract, label), redrawn about once a second, with rate and **ETA**. Pass `--progress-every 0` to hide them.
 
 ### Smoke (first 10 games)
 
 ```powershell
-py -3.12 -u scripts/lichess_dump_to_fen_value_visits.py 1 10 --progress-every 1
+py -3.12 -u scripts/lichess_dump_to_fen_value_visits.py 1 11 --progress-every 1
 ```
 
 Expected: ~10 games, ~657 plies, **645** unique EPDs, then Lc0 labels. Wall time on this machine was ~52 s (extract is ~0.1 s; labeling dominates).
@@ -50,8 +50,8 @@ Expected: ~10 games, ~657 plies, **645** unique EPDs, then Lc0 labels. Wall time
 ### Larger slice
 
 ```powershell
-# games 20_000_001 through 21_000_000
-py -3.12 -u scripts/lichess_dump_to_fen_value_visits.py 20000001 21000000 --progress-every 10000
+# games [20_000_001, 21_000_001) — one million games
+py -3.12 -u scripts/lichess_dump_to_fen_value_visits.py 20000001 21000001 --progress-every 10000
 ```
 
 Skipping millions of games still streams the compressed file from the start (header count only). Plan for minutes of skip time before parse starts.
@@ -65,7 +65,7 @@ Skipping millions of games still streams the compressed file from the start (hea
 | Extract | `data/raw/lichess/lichess_db_standard_rated_2026-07_<n>-<m>_extract.parquet` |
 | Extract stats | same stem + `.stats.json` |
 | Labeled parquet | `data/processed/labeled/lichess_db_standard_rated_2026-07_<n>-<m>.parquet` |
-| **JSON + parquet twin** | `data/processed/board_eval/fen_value_visits/fen_value_visits_lichess_db_standard_rated_2026-07_<n>-<m>.json` |
+| **JSON + parquet twin** | `data/processed/board_eval/fen_value_visits/fen_value_visits_lichess_db_standard_rated_2026-07_<n>-<m>/fen_value_visits_lichess_db_standard_rated_2026-07_<n>-<m>.json` |
 
 JSON objects:
 
@@ -107,7 +107,7 @@ Labeling can be resumed: if the labeled parquet is shorter than the extract, it 
 ## Inspect
 
 ```powershell
-py -3.12 scripts/inspect_fen_value_visits.py data/processed/board_eval/fen_value_visits/fen_value_visits_lichess_db_standard_rated_2026-07_1-10.json
+py -3.12 scripts/inspect_fen_value_visits.py data/processed/board_eval/fen_value_visits/fen_value_visits_lichess_db_standard_rated_2026-07_1-10/fen_value_visits_lichess_db_standard_rated_2026-07_1-10.json
 ```
 
 Smoke JSON already on disk: `fen_value_visits_lichess_db_standard_rated_2026-07_1-10.json` (645 rows).
