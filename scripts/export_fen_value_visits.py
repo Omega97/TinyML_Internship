@@ -41,6 +41,7 @@ from tinymlinternship.data.board_store import (
     FEN_VALUE_VISITS_JOINED_NAME,
     add_teacher_value,
     bump_visits,
+    fen_value_visits_slice_path,
     fen_value_visits_source_filename,
     slim_fen_value_visits,
 )
@@ -257,7 +258,9 @@ def main(argv: list[str] | None = None) -> int:
             src_rows = slim_fen_value_visits(subset, labeled_only=True)
             if not src_rows:
                 continue
-            src_path = sources_dir / fen_value_visits_source_filename(source)
+            src_path = fen_value_visits_slice_path(
+                sources_dir, fen_value_visits_source_filename(source)
+            )
             _write_table(src_rows, src_path, also_json=True)
             rel = str(src_path.relative_to(PROJECT_ROOT))
             source_files[source] = rel
@@ -278,7 +281,9 @@ def main(argv: list[str] | None = None) -> int:
         if not extra_rows:
             print(f"no labeled rows in extra {slug}", file=sys.stderr)
             continue
-        extra_out = sources_dir / fen_value_visits_source_filename(slug)
+        extra_out = fen_value_visits_slice_path(
+            sources_dir, fen_value_visits_source_filename(slug)
+        )
         extra_df = _write_table(extra_rows, extra_out, also_json=True)
         rel = str(extra_out.relative_to(PROJECT_ROOT))
         extra_files[slug] = rel

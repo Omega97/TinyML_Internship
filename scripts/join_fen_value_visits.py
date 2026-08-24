@@ -2,9 +2,10 @@
 """Join per-source ``{fen, value, visits}`` slices into one table.
 
 Reads every ``fen_value_visits_*`` JSON/parquet under
-``data/processed/board_eval/fen_value_visits/`` (parquet preferred when both
-exist). Same EPD (board + STM + castling + EP; clocks ignored) is merged:
-visits are **summed**, value is the **visit-weighted** mean of slice values.
+``data/processed/board_eval/fen_value_visits/<slice>/`` (parquet preferred when
+both exist). Same EPD (board + STM + castling + EP; clocks ignored) is merged:
+visits are **summed**, value is the **visit-weighted** mean of slice values
+rounded to 3 decimal digits.
 
 Writes, sorted by visits descending (then fen ascending):
 
@@ -54,11 +55,15 @@ def epd_key(fen: str) -> str:
 
 
 def discover_slices(sources_dir: Path) -> list[Path]:
-    """One path per stem; parquet wins over JSON so twins are not double-counted."""
+    """One path per stem; parquet wins over JSON so twins are not double-counted.
+
+    Slices live in ``sources_dir/<stem>/fen_value_visits_*.{json,parquet}``
+    (also accepts files still sitting directly in ``sources_dir``).
+    """
     by_stem: dict[str, Path] = {}
     if not sources_dir.is_dir():
         return []
-    for path in sources_dir.glob(SLICE_GLOB):
+    for path in sources_dir.rglob(SLICE_GLOB):
         if path.suffix.lower() not in SLICE_SUFFIXES or not path.is_file():
             continue
         prev = by_stem.get(path.stem)
@@ -98,7 +103,7 @@ def merge_slices(frames: list[pd.DataFrame]) -> pd.DataFrame:
     fen_keep = order.drop_duplicates("epd", keep="first").set_index("epd")["fen"]
     grouped = df.groupby("epd", sort=False, as_index=True)
     visits = grouped["visits"].sum()
-    value = grouped["wv"].sum() / visits
+    value = (grouped["wv"].sum() / visits).round(3)
     out = pd.DataFrame(
         {
             "fen": fen_keep.reindex(visits.index),
@@ -116,7 +121,11 @@ def write_join(df: pd.DataFrame, parquet_path: Path, *, also_json: bool = True) 
     if also_json:
         json_path = parquet_path.with_suffix(".json")
         payload = [
-            {"fen": str(row["fen"]), "value": float(row["value"]), "visits": int(row["visits"])}
+            {
+                "fen": str(row["fen"]),
+                "value": round(float(row["value"]), 3),
+                "visits": int(row["visits"]),
+            }
             for row in df.to_dict(orient="records")
         ]
         json_path.write_text(json.dumps(payload, indent=2) + "\n", encoding="utf-8")
@@ -183,7 +192,7 @@ def main(argv: list[str] | None = None) -> int:
         "columns": ["fen", "value", "visits"],
         "key": "EPD (fen fields 1–4); halfmove/fullmove ignored",
         "visits": "sum of visits over slices for the same EPD",
-        "value": "visit-weighted mean of slice teacher values",
+        "value": "visit-weighted mean of slice teacher values, rounded to 3 decimal digits",
         "order": "visits descending, then fen ascending",
         "n_positions": int(len(joined)),
         "visits_sum": visits_sum,

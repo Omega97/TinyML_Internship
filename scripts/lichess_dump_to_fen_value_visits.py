@@ -1,19 +1,19 @@
 #!/usr/bin/env python3
 """Stream a Lichess monthly ``.pgn.zst`` dump → unique {fen, value, visits} JSON.
 
-Takes 1-based inclusive game numbers ``n`` and ``m``. Games ``n`` through ``m``
-are parsed (skip is ``[Event `` header count, no chess parse). Unique EPDs are
+Takes 1-based game numbers ``n`` (inclusive) and ``m`` (exclusive): games
+``[n, m)``. Skip is ``[Event `` header count (no chess parse). Unique EPDs are
 kept unless ``--max-unique`` is set; later games in the range only increment
 visits for positions already in that set.
 
 Teacher: Lc0 WDL → White-POV expected reward. Output (and parquet twin) under
-``data/processed/board_eval/fen_value_visits/``:
+``data/processed/board_eval/fen_value_visits/<stem>/``:
 
     fen_value_visits_lichess_db_standard_rated_2026-07_<n>-<m>.json
 
-Example (first 10 games)::
+Example (first 10 games, ``[1, 11)``)::
 
-    py -3.12 scripts/lichess_dump_to_fen_value_visits.py 1 10
+    py -3.12 scripts/lichess_dump_to_fen_value_visits.py 1 11
 """
 
 from __future__ import annotations
@@ -40,7 +40,11 @@ from tinymlinternship.config.settings import (
     PROCESSED_DATA_DIR,
     PROJECT_ROOT,
 )
-from tinymlinternship.data.board_store import BOARD_EVAL_DIR_NAME, FEN_VALUE_VISITS_DIR_NAME
+from tinymlinternship.data.board_store import (
+    BOARD_EVAL_DIR_NAME,
+    FEN_VALUE_VISITS_DIR_NAME,
+    fen_value_visits_slice_path,
+)
 from tinymlinternship.engine.eval_lc0 import Lc0Teacher, wdl_to_expected_reward_white
 
 
@@ -96,12 +100,12 @@ def dump_month_id(path: Path) -> str:
 
 
 def game_range_to_skip_max(n: int, m: int) -> tuple[int, int]:
-    """1-based inclusive ``n``..``m`` → (skip_games, max_games)."""
+    """1-based half-open ``[n, m)`` → (skip_games, max_games)."""
     if n < 1:
         raise ValueError("n must be >= 1 (1-based game numbers)")
-    if m < n:
-        raise ValueError("m must be >= n")
-    return n - 1, m - n + 1
+    if m <= n:
+        raise ValueError("m must be > n (range is [n, m), m exclusive)")
+    return n - 1, m - n
 
 
 def slice_json_name(dump: Path, n: int, m: int) -> str:
@@ -397,15 +401,17 @@ def write_json(labeled: Path, json_path: Path) -> None:
 
 
 def main(argv: list[str] | None = None) -> int:
-    parser = argparse.ArgumentParser(description="Lichess dump games n..m → fen-value-visits JSON")
+    parser = argparse.ArgumentParser(
+        description="Lichess dump games [n, m) → fen-value-visits JSON (m exclusive)"
+    )
     parser.add_argument("n", type=int, help="First game number (1-based, inclusive)")
-    parser.add_argument("m", type=int, help="Last game number (1-based, inclusive)")
+    parser.add_argument("m", type=int, help="End game number (1-based, exclusive)")
     parser.add_argument("--input", type=Path, default=DEFAULT_DUMP)
     parser.add_argument(
         "--max-unique",
         type=int,
         default=0,
-        help="Cap unique EPDs (0 = keep all from games n..m)",
+        help="Cap unique EPDs (0 = keep all from games [n, m))",
     )
     parser.add_argument(
         "--stop-when-unique-full",
@@ -456,11 +462,9 @@ def main(argv: list[str] | None = None) -> int:
     labeled = args.labeled or (PROCESSED_DATA_DIR / "labeled" / slice_labeled_name(dump, args.n, args.m))
     if args.labeled and not Path(args.labeled).is_absolute():
         labeled = PROJECT_ROOT / args.labeled
-    json_path = args.output or (
-        PROCESSED_DATA_DIR
-        / BOARD_EVAL_DIR_NAME
-        / FEN_VALUE_VISITS_DIR_NAME
-        / slice_json_name(dump, args.n, args.m)
+    json_path = args.output or fen_value_visits_slice_path(
+        PROCESSED_DATA_DIR / BOARD_EVAL_DIR_NAME / FEN_VALUE_VISITS_DIR_NAME,
+        slice_json_name(dump, args.n, args.m),
     )
     if args.output and not Path(args.output).is_absolute():
         json_path = PROJECT_ROOT / args.output
@@ -475,7 +479,7 @@ def main(argv: list[str] | None = None) -> int:
             print(f"dump not found: {dump}", file=sys.stderr)
             return 1
         print(
-            f"extracting games {args.n:,}–{args.m:,} from {dump} "
+            f"extracting games [{args.n:,}, {args.m:,}) from {dump} "
             f"(skip={skip_games:,}, count={max_games:,}) …",
             flush=True,
         )

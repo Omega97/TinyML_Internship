@@ -53,7 +53,7 @@ def main(argv: list[str] | None = None) -> int:
 
     paths = [_resolve(p) for p in args.paths] if args.paths else [_resolve(DEFAULT_PATH)]
     if args.sources:
-        for child in sorted(SOURCES_DIR.glob("fen_value_visits_*.parquet")):
+        for child in sorted(SOURCES_DIR.rglob("fen_value_visits_*.parquet")):
             resolved = child.resolve()
             if resolved not in paths:
                 paths.append(resolved)

@@ -26,6 +26,7 @@ from tinymlinternship.data.board_store import (
     FEN_VALUE_VISITS_DIR_NAME,
     add_teacher_value,
     bump_visits,
+    fen_value_visits_slice_path,
     fen_value_visits_source_filename,
     slim_fen_value_visits,
 )
@@ -109,9 +110,9 @@ def main(argv: list[str] | None = None) -> int:
     out = pd.DataFrame(rows, columns=["fen", "value", "visits"])
     out["visits"] = out["visits"].astype("int64")
     out = out.sort_values(["visits", "fen"], ascending=[False, True]).reset_index(drop=True)
-    pq = out_dir / fen_value_visits_source_filename(source)
+    pq = fen_value_visits_slice_path(out_dir, fen_value_visits_source_filename(source))
     js = pq.with_suffix(".json")
-    out_dir.mkdir(parents=True, exist_ok=True)
+    pq.parent.mkdir(parents=True, exist_ok=True)
     out.to_parquet(pq, index=False)
     payload = [
         {"fen": str(r["fen"]), "value": float(r["value"]), "visits": int(r["visits"])}
