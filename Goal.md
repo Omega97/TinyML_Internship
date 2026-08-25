@@ -15,18 +15,21 @@
     
 - [ ] Run the *value function* on the downloaded positions to create a JSON fen-value-visits, where you have:
 	- the **FEN** code of the position, 
-	- the **value** $\hat v \in [-1, +1]$ given by the value function (the expected value of the white player, for simplicity), and 
+	- the teacher **WDL** $\hat p = (W, D, L)$ from the **side to move** (Lc0 permille / 1000; \(W+D+L=1\)),
+	- the derived White-POV **value** $v = \pm(W-L)\in[-1,+1]$ (sign-flipped when Black to move), and
 	- the number of **visits** of the position (how many times it was found in the dataset).
 
 ```json
 [
   {
     "fen": "r1bqk2r/pppp1ppp/2n2n2/2b1p3/2B1P3/2N2N2/PPPP1PPP/R1BQK2R w KQkq - 6 5",
-    "value": 0.037,
+    "wdl": [0.501, 0.399, 0.100],
+    "value": 0.401,
     "visits": 30
   },
   {
     "fen": "rnbqkbnr/pppppppp/8/8/8/8/PPPPPPPP/RNBQKBNR w KQkq - 0 1",
+    "wdl": [0.333, 0.334, 0.333],
     "value": 0.0,
     "visits": 63
   }
@@ -37,11 +40,11 @@
 
 ## 2 - Training the model
 
-- [ ] Train an **NNUE** $f_w(s)=v$ with **sparse input**, two hidden layers, *CReLU*, *tanh* output:
+- [ ] Train an **NNUE** $f_w(s)=(W,D,L)$ with **sparse input**, two hidden layers, *CReLU*, *softmax* WDL output:
 	- **Input**: the board state, sparse representation.
 	- **L1**: a **shared** FFNN `844 → W` (sparse, approx. 128x2 neurons, int8 weights $w^{(1)}$). Called **twice** per position: once on the **own‑side features**, once on the **opponent‑side features** (board mirrored). The two output vectors (`h_own` and `h_opp`, each of size `W`) form the **dual‑POV accumulator** (the activations are recycled via incremental add/sub on make/unmake). They are **concatenated** to size `2W` **after** L1, just before the expert head. Both sets of activations are used as a single embedding vector $h \equiv a^{(1)}$.
 	- **L2**: second hidden layer (approx. 256 neurons, param $w^{(2)}$).
-	- **Output**: One single neuron, represents the expected reward (proba white win - proba white lose) of the position (param $w^{(3)}$).
+	- **Output**: Three logits → **softmax** STM \((W, D, L)\) on \([0,1]\). Loss is **cross-entropy** against the teacher WDL. (param $w^{(3)}$).
 
 ---
 
@@ -65,14 +68,14 @@
 - [ ] The eval (forward) step:
 	1. Run L1. The accumulator activations $h \equiv a^{(1)}$ are the representation of the state.
 	2. Route with dispatcher logits only: $b = \arg\max(W_\phi\, h)$ (no softmax).
-	3. Run expert head $i=b$ (L2 + output) on $h$ to get $v$.
+	3. Run expert head $i=b$ (L2 + output) on $h$ to get STM \((W,D,L)\). Search can use \(v_{\text{STM}}=W-L\).
     
 - [ ] Recycle L1 in the spirit of NNUE: on make/unmake, add/remove the moved piece's feature contributions on both POVs instead of re-encoding the whole board. Full re-encode only on king-mirror or irreversible resets. Then only L2 + output (and the tiny dispatcher) run at the node.
     
 - [ ] **Search = Cfish αβ, student eval.** Keep Cfish's search stack as-is (PVS αβ, quiescence, transposition table, move ordering). Do not reimplement search. Replace *only* the value function that `evaluate(pos)` / `nnue_evaluate(pos)` returns:
 	- **Vanilla baseline:** plug the base net $f_w$ into that hook.
 	- **MoE:** same hook, but eval is dispatcher $b=\arg\max(W_\phi h)$ then expert $f^{(b)}_{w'}$.
-	- Map $v \in [-1,+1]$ onto Cfish's internal `Value` (centipawn-like) so comparisons, mate scores, and qsearch still work.
+	- Map \(v_{\text{STM}}=W-L \in [-1,+1]\) onto Cfish's internal `Value` (centipawn-like) so comparisons, mate scores, and qsearch still work.
 	- Keep Cfish's incremental NNUE accumulators: expose L1 as the same add/remove-feature update Cfish already uses on make/unmake.
 	- Drive the engine with ordinary UCI (`position …`, `go depth …` / `go movetime …`), same as stock Cfish.
 
