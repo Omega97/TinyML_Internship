@@ -21,8 +21,8 @@ Tiny-hardware chess bot (Wio-class: **~1700 Elo**, **~1 s/move**, **192 KB RAM**
 
 | Step | What |
 |------|------|
-| 1 | Unique `{fen, value, visits}` table from games + an Lc0 teacher |
-| 2 | Train a dual-POV 2-hidden NNUE \(f_w\) (sparse 844 → L1 accumulator → L2 → tanh \(v\)) |
+| 1 | Unique `{fen, wdl, visits}` table from games + an Lc0 teacher |
+| 2 | Train a dual-POV 2-hidden NNUE \(f_w\) (sparse 844 → L1 accumulator → L2 → WDL softmax) |
 | 3 | Task-vector clusters, linear dispatcher on \(h\), freeze L1, fine-tune expert heads |
 | 4 | Keep **Cfish** αβ; replace only `evaluate` / `nnue_evaluate` |
 | 5 | ACPL and STS supporting; BayesElo match vanilla vs MoE is the ship gate |
@@ -34,10 +34,11 @@ Tiny-hardware chess bot (Wio-class: **~1700 Elo**, **~1 s/move**, **192 KB RAM**
 | **Input** | Sparse **844** (piece-square + king file-mirror + castling + EP + tactical planes) |
 | **L1** | Shared `844 → W` (`W = 64` in the current student), **dual POV**: own-side + opponent-side (board mirrored). CReLU. Concat `[STM ‖ opp]` → `2W`. Incremental add/sub on make/unmake. |
 | **L2** | `2W → 128` CReLU |
-| **Output** | One neuron, **tanh** → White-POV expected reward \(v \in [-1,+1]\) |
-| **Teacher** | Lc0 (`791556.pb.gz`): WDL → \(v = (W-L)/1000\), flipped to White |
+| **Output** | Three logits, **softmax** → STM \((W, D, L)\) on \([0,1]\), \(W+D+L=1\) |
+| **Teacher** | Lc0 (`791556.pb.gz`): native STM WDL. Soft labels; loss is cross-entropy. White-POV \(v = \pm(W-L)\) is derived. |
 | **Search** | **Cfish** αβ (stock eval until the student hook lands). Launch: `run-cfish.bat` |
 | **MoE (later)** | Cluster task vectors on the head, linear dispatcher on \(h\), freeze L1, fine-tune expert heads |
+
 
 <div align="center">
     <img src="images/plots/sardine_nnue_architecture.png" width="600">
@@ -52,16 +53,16 @@ white / black sparse 844
         │
    L2 Linear 128 → 128 + CReLU
         │
-   head Linear 128 → 1 + tanh → White-POV value ∈ [-1, +1]
+   head Linear 128 → 3 + softmax → STM WDL (Win, Draw, and Loss **for the current player**) ∈ [0, 1]
 ```
 
-~70 721 parameters at the default widths. Train from per-slice `features.npz` (test = Lichess dump games `100000–101000`).
+~70 979 parameters at the default widths. Train from per-slice `features.npz` (test = `…_100000-105000_d80_draw5`). Re-encode slices after the WDL schema change.
 
 ```powershell
 pip install -e ".[train]"
-py -3.12 -u scripts/encode_slice_features.py
-py -3.12 -u scripts/train_nnue.py --epochs 5 --smoke --run-name dual_W64_H128_smoke --plot plots/nnue_smoke_mse.png
-py -3.12 -u scripts/train_nnue.py --epochs 10 --run-name dual_W64_H128 --plot plots/nnue_mse.png
+py -3.12 -u scripts/encode_slice_features.py --rebuild
+py -3.12 -u scripts/train_nnue.py --epochs 5 --smoke --run-name dual_W64_H128_wdl_smoke --plot plots/nnue_smoke_ce.png
+py -3.12 -u scripts/train_nnue.py --epochs 10 --run-name dual_W64_H128_wdl --plot plots/nnue_ce.png
 ```
 
 See [demo/demo-training.md](demo/demo-training.md) for the fast command and artifact paths.
