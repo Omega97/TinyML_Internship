@@ -362,6 +362,37 @@ def test_rank_rows_best_and_worst():
     assert [row["fen"] for row in worst] == ["d", "c"]
 
 
+def test_maybe_subset_dataset_is_fixed_and_smaller():
+    import importlib.util
+    from pathlib import Path
+
+    from torch.utils.data import Dataset, Subset
+
+    path = Path(__file__).parent.parent / "scripts" / "train_nnue.py"
+    spec = importlib.util.spec_from_file_location("train_nnue", path)
+    assert spec is not None and spec.loader is not None
+    train = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(train)
+
+    class _Idx(Dataset):
+        def __len__(self) -> int:
+            return 100
+
+        def __getitem__(self, i: int) -> int:
+            return i
+
+    ds = _Idx()
+    a = train.maybe_subset_dataset(ds, 10, seed=0)
+    b = train.maybe_subset_dataset(ds, 10, seed=0)
+    c = train.maybe_subset_dataset(ds, 10, seed=1)
+    assert isinstance(a, Subset)
+    assert len(a) == 10
+    assert list(a.indices) == list(b.indices)
+    assert list(a.indices) != list(c.indices)
+    assert train.maybe_subset_dataset(ds, 0) is ds
+    assert train.maybe_subset_dataset(ds, 1000) is ds
+
+
 def test_inspect_sample_subset_is_deterministic():
     import importlib.util
     from pathlib import Path

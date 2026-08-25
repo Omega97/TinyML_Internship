@@ -56,6 +56,14 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--lr", type=float, default=1e-3)
     parser.add_argument("--max-train", type=int, default=0)
     parser.add_argument("--smoke", action="store_true")
+    parser.add_argument(
+        "--test-subset-size",
+        type=int,
+        default=0,
+        help="Per-epoch test rows (0 = full set). Same subset every epoch. "
+        "If set, best.pt is scored on the full test set once at the end.",
+    )
+    parser.add_argument("--test-subset-seed", type=int, default=0)
     parser.add_argument("--workers", type=int, default=0)
     parser.add_argument("--device", type=str, default=None)
     parser.add_argument("--output-dir", type=Path, default=NNUE_CHECKPOINTS_DIR)
@@ -102,11 +110,16 @@ def main(argv: list[str] | None = None) -> int:
         progress=True,
     )
     train_ds = MixedSliceDataset(slice_dss)
-    test_ds = FenValueVisitsDataset(
+    test_ds_full = FenValueVisitsDataset(
         test_folder,
         rebuild_cache=args.rebuild_cache,
         progress=True,
     )
+    n_test_full = len(test_ds_full)
+    test_ds = tn.maybe_subset_dataset(
+        test_ds_full, args.test_subset_size, args.test_subset_seed
+    )
+    n_test_eval = len(test_ds)
     pool = len(train_ds)
     if batches_per_epoch > 0:
         n_batches = batches_per_epoch
@@ -115,9 +128,15 @@ def main(argv: list[str] | None = None) -> int:
     else:
         n_batches = max(1, pool // batch_size)
     print(
-        f"  train pool {pool:,} in {len(slice_dss)} slices | test {len(test_ds):,} | "
+        f"  train pool {pool:,} in {len(slice_dss)} slices | "
+        f"test {n_test_eval:,}/{n_test_full:,} | "
         f"batch {batch_size} mixed across slices × {n_batches} steps/epoch"
     )
+    if n_test_eval < n_test_full:
+        print(
+            f"  per-epoch test subset {n_test_eval:,} of {n_test_full:,} "
+            f"(seed={args.test_subset_seed}); full eval of best.pt at the end"
+        )
     if args.encode_only:
         print("encode-only: slice DBs ready")
         return 0
@@ -161,7 +180,10 @@ def main(argv: list[str] | None = None) -> int:
         "test_slice": test_name,
         "rows_train_pool": pool,
         "n_train_slices": len(slice_dss),
-        "rows_test": len(test_ds),
+        "rows_test": n_test_eval,
+        "rows_test_full": n_test_full,
+        "test_subset_size": int(args.test_subset_size),
+        "test_subset_seed": int(args.test_subset_seed),
         "architecture": "linear_wdl",
         "hidden": "none",
         "epochs": args.epochs,
@@ -181,13 +203,14 @@ def main(argv: list[str] | None = None) -> int:
     print(
         f"linear 844×2 → 3 WDL softmax | {model.count_parameters():,} params | "
         f"loss=soft CE | train steps {n_batches}×{batch_size} | "
-        f"test {len(test_ds):,} | {device}"
+        f"test {n_test_eval:,}/{n_test_full:,} | {device}"
     )
     print(f"Output: {run_dir}")
 
     history: list[dict] = []
     best_test = float("inf")
     best_path = run_dir / "best.pt"
+    history.append(tn.eval_untrained(model, train_loader, test_loader, device))
 
     for epoch in range(1, args.epochs + 1):
         t0 = time.perf_counter()
@@ -202,11 +225,7 @@ def main(argv: list[str] | None = None) -> int:
             "seconds": elapsed,
         }
         history.append(row)
-        print(
-            f"epoch {epoch:02d} | train_ce={train_ce:.6f} | "
-            f"test_ce={metrics['ce']:.6f} | test_mae={metrics['mae']:.6f} | "
-            f"{elapsed:.1f}s"
-        )
+        tn.log_epoch(epoch, train_ce, metrics["ce"], metrics["mae"], elapsed)
         payload = {
             "model_state_dict": model.state_dict(),
             "architecture": "linear_wdl",
@@ -225,6 +244,16 @@ def main(argv: list[str] | None = None) -> int:
     (run_dir / "ce.png").write_bytes(plot_path.read_bytes())
     print(f"Best test_ce={best_test:.6f} → {best_path}")
     print(f"CE plot → {plot_path}")
+    if n_test_eval < n_test_full and best_path.is_file():
+        full_loader = DataLoader(
+            test_ds_full,
+            batch_size=batch_size,
+            shuffle=False,
+            num_workers=args.workers,
+            collate_fn=collate_sparse,
+            pin_memory=pin,
+        )
+        tn.report_full_test(model, best_path, full_loader, device)
     return 0
 
 
