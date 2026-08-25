@@ -1,4 +1,4 @@
-"""Dual-POV two-hidden NNUE (Goal §2)."""
+"""Dual-POV two-hidden NNUE (Goal §2) with a 3-way STM WDL head."""
 
 from __future__ import annotations
 
@@ -16,10 +16,11 @@ def crelu(x: torch.Tensor, clip: float = 127.0) -> torch.Tensor:
 class DualHiddenNNUE(nn.Module):
     """
     Shared L1 ``844 → W`` on each POV, CReLU, concat ``[STM, opp]`` → ``2W``,
-    L2 ``2W → H`` CReLU, head ``H → 1`` tanh. Target is White-POV expected reward.
+    L2 ``2W → H`` CReLU, head ``H → 3`` logits. Softmax is STM ``(W, D, L)``.
     """
 
-    architecture = "dual_hidden"
+    architecture = "dual_hidden_wdl"
+    n_outputs = 3
 
     def __init__(
         self,
@@ -35,7 +36,8 @@ class DualHiddenNNUE(nn.Module):
         self.crelu_clip = crelu_clip
         self.l1 = nn.Linear(feature_dim, hidden_dim, bias=True)
         self.l2 = nn.Linear(hidden_dim * 2, hidden2_dim, bias=True)
-        self.head = nn.Linear(hidden2_dim, 1, bias=True)
+        self.head = nn.Linear(hidden2_dim, 3, bias=True)
+        self.softmax = nn.Softmax(dim=-1)
         self._reset_parameters()
 
     def _reset_parameters(self) -> None:
@@ -64,7 +66,7 @@ class DualHiddenNNUE(nn.Module):
         opp_h = torch.where(stm_mask, black_h, white_h)
         concat = torch.cat([stm_h, opp_h], dim=1)
         h2 = crelu(self.l2(concat), self.crelu_clip)
-        return torch.tanh(self.head(h2)).squeeze(-1)
+        return self.head(h2)  # STM WDL logits; softmax in loss / probabilities()
 
     def forward(
         self,
@@ -91,6 +93,79 @@ class DualHiddenNNUE(nn.Module):
             self.l1_sparse(black_idx, black_mask),
             stm_white,
         )
+
+    def probabilities(self, logits: torch.Tensor) -> torch.Tensor:
+        return self.softmax(logits)
+
+    def stm_value(self, logits: torch.Tensor) -> torch.Tensor:
+        probs = self.probabilities(logits)
+        return probs[..., 0] - probs[..., 2]
+
+    def count_parameters(self) -> int:
+        return sum(p.numel() for p in self.parameters() if p.requires_grad)
+
+
+class LinearWDLNNUE(nn.Module):
+    """No hidden layers: concat ``[STM ‖ opp]`` ``2×844 → 3`` logits, softmax STM WDL."""
+
+    architecture = "linear_wdl"
+    n_outputs = 3
+
+    def __init__(self, feature_dim: int = FEATURE_DIM) -> None:
+        super().__init__()
+        self.feature_dim = feature_dim
+        self.head = nn.Linear(feature_dim * 2, 3, bias=True)
+        self.softmax = nn.Softmax(dim=-1)
+        nn.init.kaiming_uniform_(self.head.weight, a=5**0.5)
+        nn.init.zeros_(self.head.bias)
+
+    def _stm_opp(
+        self,
+        white: torch.Tensor,
+        black: torch.Tensor,
+        stm_white: torch.Tensor,
+    ) -> tuple[torch.Tensor, torch.Tensor]:
+        mask = stm_white.unsqueeze(1)
+        stm = torch.where(mask, white, black)
+        opp = torch.where(mask, black, white)
+        return stm, opp
+
+    def forward(
+        self,
+        white_features: torch.Tensor,
+        black_features: torch.Tensor,
+        stm_white: torch.Tensor,
+    ) -> torch.Tensor:
+        stm, opp = self._stm_opp(white_features, black_features, stm_white)
+        return self.head(torch.cat([stm, opp], dim=1))
+
+    def _sparse_dot(self, indices: torch.Tensor, mask: torch.Tensor, weight_t: torch.Tensor) -> torch.Tensor:
+        safe = indices.long().clamp(min=0, max=self.feature_dim - 1)
+        gathered = F.embedding(safe, weight_t)
+        gathered = gathered * mask.unsqueeze(-1).to(dtype=gathered.dtype)
+        return gathered.sum(dim=1)
+
+    def forward_sparse(
+        self,
+        white_idx: torch.Tensor,
+        white_mask: torch.Tensor,
+        black_idx: torch.Tensor,
+        black_mask: torch.Tensor,
+        stm_white: torch.Tensor,
+    ) -> torch.Tensor:
+        stm_idx, opp_idx = self._stm_opp(white_idx, black_idx, stm_white)
+        stm_mask, opp_mask = self._stm_opp(white_mask, black_mask, stm_white)
+        w = self.head.weight
+        stm_part = self._sparse_dot(stm_idx, stm_mask, w[:, : self.feature_dim].t())
+        opp_part = self._sparse_dot(opp_idx, opp_mask, w[:, self.feature_dim :].t())
+        return stm_part + opp_part + self.head.bias
+
+    def probabilities(self, logits: torch.Tensor) -> torch.Tensor:
+        return self.softmax(logits)
+
+    def stm_value(self, logits: torch.Tensor) -> torch.Tensor:
+        probs = self.probabilities(logits)
+        return probs[..., 0] - probs[..., 2]
 
     def count_parameters(self) -> int:
         return sum(p.numel() for p in self.parameters() if p.requires_grad)

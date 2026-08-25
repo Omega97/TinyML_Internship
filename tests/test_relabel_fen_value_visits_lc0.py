@@ -23,6 +23,13 @@ def _load():
     return mod
 
 
+def test_depth_zero_is_one_eval():
+    relabel = _load()
+    assert relabel.uci_go(depth=0, nodes=None) == "go nodes 1"
+    assert relabel.uci_go(depth=0, nodes=8) == "go nodes 8"
+    assert relabel.uci_go(depth=1, nodes=None) == "go depth 1"
+
+
 def test_go_command_depth_and_nodes():
     assert go_command() == "go nodes 1"
     assert go_command(depth=1) == "go depth 1"
@@ -55,10 +62,38 @@ def test_default_output_suffix():
     )
 
 
+def test_discover_targets_file_folder_and_parent(tmp_path: Path):
+    relabel = _load()
+    parent = tmp_path / "fen_value_visits"
+    a = parent / "fen_value_visits_a"
+    b = parent / "fen_value_visits_b"
+    a.mkdir(parents=True)
+    b.mkdir()
+    a_json = a / "fen_value_visits_a.json"
+    b_json = b / "fen_value_visits_b.json"
+    a_json.write_text("[]\n", encoding="utf-8")
+    b_json.write_text("[]\n", encoding="utf-8")
+    (a / "features.meta.json").write_text("{}\n", encoding="utf-8")
+    (a / "fen_value_visits_a_depth2.json").write_text("[]\n", encoding="utf-8")
+    assert relabel.discover_targets(a_json) == [a_json.resolve()]
+    assert relabel.discover_targets(a) == [a_json.resolve()]
+    found = relabel.discover_targets(parent)
+    assert found == [a_json.resolve(), b_json.resolve()]
+
+
+def test_depth_defaults_to_one():
+    relabel = _load()
+    src = Path("slice.json")
+    assert relabel.default_output(src, depth=1, nodes=None).name == "slice_depth1.json"
+
+
 def test_slim_row_rounds_value_keeps_visits():
     relabel = _load()
-    row = relabel.slim_row({"fen": "x", "value": 0.644, "visits": 3}, -0.9994)
-    assert row == {"fen": "x", "value": -0.999, "visits": 3}
+    row = relabel.slim_row({"fen": "x", "value": 0.644, "visits": 3}, (0.0, 0.0, 1.0))
+    assert row["fen"] == "x"
+    assert row["visits"] == 3
+    assert row["wdl"] == [0.0, 0.0, 1.0]
+    assert row["value"] == -1.0
 
 
 def test_progress_bar_disable_is_noop():

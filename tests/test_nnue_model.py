@@ -10,7 +10,7 @@ import numpy as np
 
 from tinymlinternship.features import FEATURE_DIM, encode_dual
 from tinymlinternship.nnue.dataset import FenValueVisitsDataset, _pad_indices
-from tinymlinternship.nnue.model import DualHiddenNNUE
+from tinymlinternship.nnue.model import DualHiddenNNUE, LinearWDLNNUE
 
 
 def _dense_from_indices(indices: list[int]) -> torch.Tensor:
@@ -26,9 +26,76 @@ def test_dual_hidden_output_range_startpos():
     white = _dense_from_indices(white_idx).unsqueeze(0)
     black = _dense_from_indices(black_idx).unsqueeze(0)
     stm = torch.tensor([True])
-    out = model(white, black, stm)
-    assert out.shape == (1,)
-    assert -1.0 <= out.item() <= 1.0
+    logits = model(white, black, stm)
+    assert logits.shape == (1, 3)
+    probs = model.probabilities(logits)
+    assert torch.allclose(probs.sum(dim=-1), torch.ones(1), atol=1e-6)
+    assert (probs >= 0).all()
+    v = model.stm_value(logits)
+    assert -1.0 <= v.item() <= 1.0
+
+
+def test_linear_wdl_sparse_matches_dense_and_softmax():
+    torch.manual_seed(0)
+    model = LinearWDLNNUE()
+    assert model.count_parameters() == 844 * 2 * 3 + 3
+    white_idx, black_idx = encode_dual(chess.Board())
+    w_pad, w_n = _pad_indices(white_idx, 128)
+    b_pad, b_n = _pad_indices(black_idx, 128)
+    w_mask = np.arange(128) < w_n
+    b_mask = np.arange(128) < b_n
+    stm = torch.tensor([True])
+    dense = model(
+        _dense_from_indices(white_idx).unsqueeze(0),
+        _dense_from_indices(black_idx).unsqueeze(0),
+        stm,
+    )
+    sparse = model.forward_sparse(
+        torch.from_numpy(w_pad).unsqueeze(0),
+        torch.from_numpy(w_mask).unsqueeze(0),
+        torch.from_numpy(b_pad).unsqueeze(0),
+        torch.from_numpy(b_mask).unsqueeze(0),
+        stm,
+    )
+    assert dense.shape == (1, 3)
+    assert torch.allclose(dense, sparse, atol=1e-5)
+    probs = model.probabilities(dense)
+    assert torch.allclose(probs.sum(dim=-1), torch.ones(1), atol=1e-6)
+
+
+def test_soft_ce_loss_on_wdl_batch():
+    import importlib.util
+    from pathlib import Path
+
+    path = Path(__file__).parent.parent / "scripts" / "train_nnue.py"
+    spec = importlib.util.spec_from_file_location("train_nnue", path)
+    assert spec is not None and spec.loader is not None
+    train = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(train)
+
+    torch.manual_seed(0)
+    model = DualHiddenNNUE(hidden_dim=8, hidden2_dim=16)
+    white_idx, black_idx = encode_dual(chess.Board())
+    w_pad, w_n = _pad_indices(white_idx, 128)
+    b_pad, b_n = _pad_indices(black_idx, 128)
+    w_mask = np.arange(128) < w_n
+    b_mask = np.arange(128) < b_n
+    stm = torch.tensor([True, True])
+    logits = model.forward_sparse(
+        torch.from_numpy(np.stack([w_pad, w_pad])),
+        torch.from_numpy(np.stack([w_mask, w_mask])),
+        torch.from_numpy(np.stack([b_pad, b_pad])),
+        torch.from_numpy(np.stack([b_mask, b_mask])),
+        stm,
+    )
+    assert logits.shape == (2, 3)
+    target = torch.tensor([[0.312, 0.469, 0.219], [0.8, 0.1, 0.1]])
+    weight = torch.ones(2)
+    loss = train.ce_loss(logits, target, weight)
+    assert loss.ndim == 0
+    assert loss.detach().item() > 0
+    probs = model.probabilities(logits)
+    assert torch.allclose(probs.sum(dim=-1), torch.ones(2), atol=1e-6)
 
 
 def test_sparse_l1_matches_dense():
@@ -53,19 +120,22 @@ def test_sparse_l1_matches_dense():
         stm,
     )
     assert torch.allclose(dense, sparse, atol=1e-5)
+    assert dense.shape == (1, 3)
 
 
 def test_concat_order_uses_stm():
-    """Black to move uses black accumulator first; output still in [-1, 1]."""
+    """Black to move uses black accumulator first; softmax is a 3-simplex."""
     model = DualHiddenNNUE(hidden_dim=8, hidden2_dim=16)
     fen = "rnbqkbnr/pppppppp/8/8/4P3/8/PPPP1PPP/RNBQKBNR b KQkq e3 0 1"
     white_idx, black_idx = encode_dual(chess.Board(fen))
-    out = model(
+    logits = model(
         _dense_from_indices(white_idx).unsqueeze(0),
         _dense_from_indices(black_idx).unsqueeze(0),
         torch.tensor([False]),
     )
-    assert -1.0 <= out.item() <= 1.0
+    probs = model.probabilities(logits)
+    assert logits.shape == (1, 3)
+    assert torch.allclose(probs.sum(dim=-1), torch.ones(1), atol=1e-6)
 
 
 def test_dataset_excludes_test_epds():
@@ -84,7 +154,8 @@ def test_dataset_excludes_test_epds():
     holdout = {"rnbqkbnr/pppppppp/8/8/4P3/8/PPPP1PPP/RNBQKBNR b KQkq -"}
     ds = FenValueVisitsDataset(df, exclude_epds=holdout)
     assert len(ds) == 1
-    assert ds[0]["target"].item() == 0.0
+    assert ds[0]["target"].shape == (3,)
+    assert float(ds[0]["target"].sum()) == pytest.approx(1.0, abs=1e-5)
 
 
 def test_feature_cache_roundtrip(tmp_path):
@@ -112,7 +183,7 @@ def test_feature_cache_roundtrip(tmp_path):
     pd.DataFrame(rows).to_parquet(table)
     cache_dir, first = ensure_feature_cache(table, progress=False)
     assert cache_is_valid(cache_dir, table, max_active=128)
-    assert first["value"].shape[0] == 2
+    assert first["wdl"].shape == (2, 3)
     second = load_feature_cache(cache_dir)
     assert (first["white_idx"] == second["white_idx"]).all()
     assert (first["epd_hash"] == second["epd_hash"]).all()
@@ -121,7 +192,7 @@ def test_feature_cache_roundtrip(tmp_path):
     ds = FenValueVisitsDataset(table, exclude_epds=holdout, progress=False)
     assert ds.cache_dir == cache_dir
     assert len(ds) == 1
-    assert ds[0]["target"].item() == 0.0
+    assert ds[0]["target"].shape == (3,)
     assert ds[0]["white_idx"].dtype == torch.int16
 
 
@@ -157,10 +228,12 @@ def test_slice_feature_db_omits_visits(tmp_path):
     assert set(arrays) == set(SLICE_DB_ARRAYS)
     assert "visits" not in arrays
     loaded = load_slice_feature_db(folder)
-    assert loaded["value"].tolist() == pytest.approx([0.25, -0.5], abs=1e-6)
+    assert loaded["wdl"].shape == (2, 3)
+    assert loaded["wdl"].sum(axis=1) == pytest.approx([1.0, 1.0], abs=1e-5)
     ds = FenValueVisitsDataset(folder, progress=False)
     assert len(ds) == 2
     assert ds[0]["weight"].item() == 1.0
+    assert ds[0]["target"].shape == (3,)
     assert ds[0]["white_mask"].any()
 
 
@@ -187,7 +260,8 @@ def test_from_slice_root_skips_test_folder(tmp_path):
         progress=False,
     )
     assert len(ds) == 1
-    assert ds[0]["target"].item() == pytest.approx(0.1, abs=1e-6)
+    assert ds[0]["target"].shape == (3,)
+    assert float(ds[0]["target"][0] - ds[0]["target"][2]) == pytest.approx(0.1, abs=5e-3)
 
 
 def test_across_slice_batch_samples_every_folder(tmp_path):
@@ -220,7 +294,8 @@ def test_across_slice_batch_samples_every_folder(tmp_path):
     for packed_batch in sampler:
         assert len(packed_batch) == 8
         for packed in packed_batch:
-            seen_values.add(round(mixed[packed]["target"].item(), 3))
+            tgt = mixed[packed]["target"]
+            seen_values.add(round(float(tgt[0] - tgt[2]), 1))
     assert seen_values == {0.1, 0.9}
 
 
@@ -236,8 +311,22 @@ def test_rank_rows_best_and_worst():
     mod = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(mod)
     fens = ["a", "b", "c", "d"]
-    teacher = np.array([0.0, 0.5, -0.2, 0.9])
-    pred = np.array([0.0, 0.4, 0.8, -0.9])
+    teacher = np.array(
+        [
+            [1.00, 0.00, 0.00],
+            [0.50, 0.40, 0.10],
+            [0.20, 0.60, 0.20],
+            [0.90, 0.05, 0.05],
+        ]
+    )
+    pred = np.array(
+        [
+            [0.98, 0.01, 0.01],
+            [0.48, 0.42, 0.10],
+            [0.70, 0.20, 0.10],
+            [0.05, 0.05, 0.90],
+        ]
+    )
     best, worst = mod.rank_rows(fens, teacher, pred, n=2)
     assert [row["fen"] for row in best] == ["a", "b"]
     assert [row["fen"] for row in worst] == ["d", "c"]

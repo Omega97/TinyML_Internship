@@ -38,6 +38,36 @@ def _resolve(path: Path) -> Path:
     return path if path.is_absolute() else (PROJECT_ROOT / path).resolve()
 
 
+def encode_slice_folder(
+    folder: Path,
+    *,
+    rebuild: bool = False,
+    progress: bool = True,
+) -> Path:
+    """JSON/parquet in ``folder`` → ``folder/features.npz``. Rebuild if the source changed."""
+    folder = _resolve(folder)
+    source = slice_source_json(folder)
+    if source is None:
+        raise FileNotFoundError(f"no slice JSON in {folder}")
+    npz = slice_features_path(folder)
+    if not rebuild and slice_db_is_valid(folder, source, max_active=128):
+        try:
+            print(f"ok    {npz.relative_to(PROJECT_ROOT)}")
+        except ValueError:
+            print(f"ok    {npz}")
+        return npz
+    try:
+        print(f"encode {source.relative_to(PROJECT_ROOT)}")
+    except ValueError:
+        print(f"encode {source}")
+    ensure_slice_feature_db(folder, rebuild=rebuild, progress=progress)
+    try:
+        print(f"wrote  {npz.relative_to(PROJECT_ROOT)}")
+    except ValueError:
+        print(f"wrote  {npz}")
+    return npz
+
+
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(
         description="Encode each slice JSON to features.npz (sparse 844 + STM WDL)"
@@ -68,19 +98,12 @@ def main(argv: list[str] | None = None) -> int:
         root = _resolve(args.root)
         folders = discover_slice_folders(root)
     if not folders:
-        print(f"no slice folders in {root}", file=sys.stderr)
+        where = args.slice if args.slice is not None else args.root
+        print(f"no slice folders in {where}", file=sys.stderr)
         return 1
 
     for folder in folders:
-        source = slice_source_json(folder)
-        assert source is not None
-        npz = slice_features_path(folder)
-        if not args.rebuild and slice_db_is_valid(folder, source, max_active=128):
-            print(f"ok    {npz.relative_to(PROJECT_ROOT)}")
-            continue
-        print(f"encode {source.relative_to(PROJECT_ROOT)}")
-        ensure_slice_feature_db(folder, rebuild=args.rebuild, progress=True)
-        print(f"wrote  {npz.relative_to(PROJECT_ROOT)}")
+        encode_slice_folder(folder, rebuild=args.rebuild, progress=True)
     return 0
 
 

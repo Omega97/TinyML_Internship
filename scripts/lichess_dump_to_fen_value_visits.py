@@ -7,18 +7,28 @@ kept unless ``--max-unique`` is set; later games in the range only increment
 visits for positions already in that set.
 
 Teacher: Lc0 STM WDL probabilities ``[W, D, L]`` plus White-POV ``value = ±(W-L)``.
-Output (and parquet twin) under
-``data/processed/board_eval/fen_value_visits/<stem>/``:
+Then encodes the slice to ``features.npz`` (same as ``encode_slice_features.py``).
+Output under ``data/processed/board_eval/fen_value_visits/<stem>/``:
 
     fen_value_visits_lichess_db_standard_rated_2026-07_<n>-<m>.json
+    features.npz
 
 Default ``--dropout 0.90`` keeps each ply independently with probability 0.10
 (decorrelates consecutive positions from the same game). Slice stem gets
 ``_d90``. ``--dropout 0`` keeps every ply and omits the suffix.
 
+``--max-draw P`` keeps only positions with STM draw probability ``D < P``
+(decisive slice). Stem gets ``_draw30`` when ``P=0.30``. Applied after Lc0
+labels; extract/labeled parquet still hold every unique EPD.
+
+``--max-moves N`` keeps startpos plus the first N full moves (2N half-moves).
+Stem gets ``_m10`` when N=10. ``N=0`` keeps the whole game.
+
 Example (first 10 games, stem ``…_0-10_d90``)::
 
     py -3.12 -u scripts/lichess_dump_to_fen_value_visits.py 0 10
+    py -3.12 -u scripts/lichess_dump_to_fen_value_visits.py 0 10 --max-draw 0.30
+    py -3.12 -u scripts/lichess_dump_to_fen_value_visits.py 100000 105000 --dropout 0 --max-moves 10
 """
 
 from __future__ import annotations
@@ -32,7 +42,9 @@ import sys
 import time
 from pathlib import Path
 
-sys.path.insert(0, str(Path(__file__).parent.parent / "src"))
+_SCRIPTS = Path(__file__).parent
+sys.path.insert(0, str(_SCRIPTS.parent / "src"))
+sys.path.insert(0, str(_SCRIPTS))
 
 import chess
 import chess.pgn
@@ -117,16 +129,68 @@ def dropout_suffix(dropout: float) -> str:
     return f"_d{int(round(float(dropout) * 100))}"
 
 
-def slice_json_name(dump: Path, n: int, m: int, *, dropout: float = 0.0) -> str:
-    return f"fen_value_visits_{dump_month_id(dump)}_{n}-{m}{dropout_suffix(dropout)}.json"
+def max_draw_suffix(max_draw: float | None) -> str:
+    """``0.30`` → ``_draw30``; ``None`` / ``>=1`` → empty."""
+    if max_draw is None or float(max_draw) >= 1.0:
+        return ""
+    if float(max_draw) < 0.0:
+        raise ValueError("max_draw must be >= 0")
+    return f"_draw{int(round(float(max_draw) * 100))}"
 
 
-def slice_extract_name(dump: Path, n: int, m: int, *, dropout: float = 0.0) -> str:
-    return f"{dump_month_id(dump)}_{n}-{m}{dropout_suffix(dropout)}_extract.parquet"
+def max_moves_suffix(max_moves: int) -> str:
+    """``10`` → ``_m10``; ``0`` → empty."""
+    if max_moves <= 0:
+        return ""
+    return f"_m{int(max_moves)}"
 
 
-def slice_labeled_name(dump: Path, n: int, m: int, *, dropout: float = 0.0) -> str:
-    return f"{dump_month_id(dump)}_{n}-{m}{dropout_suffix(dropout)}.parquet"
+def slice_stem_extra(
+    *,
+    dropout: float = 0.0,
+    max_moves: int = 0,
+    max_draw: float | None = None,
+) -> str:
+    return f"{dropout_suffix(dropout)}{max_moves_suffix(max_moves)}{max_draw_suffix(max_draw)}"
+
+
+def slice_json_name(
+    dump: Path,
+    n: int,
+    m: int,
+    *,
+    dropout: float = 0.0,
+    max_moves: int = 0,
+    max_draw: float | None = None,
+) -> str:
+    return (
+        f"fen_value_visits_{dump_month_id(dump)}_{n}-{m}"
+        f"{slice_stem_extra(dropout=dropout, max_moves=max_moves, max_draw=max_draw)}.json"
+    )
+
+
+def slice_extract_name(
+    dump: Path,
+    n: int,
+    m: int,
+    *,
+    dropout: float = 0.0,
+    max_moves: int = 0,
+) -> str:
+    extra = f"{dropout_suffix(dropout)}{max_moves_suffix(max_moves)}"
+    return f"{dump_month_id(dump)}_{n}-{m}{extra}_extract.parquet"
+
+
+def slice_labeled_name(
+    dump: Path,
+    n: int,
+    m: int,
+    *,
+    dropout: float = 0.0,
+    max_moves: int = 0,
+) -> str:
+    extra = f"{dropout_suffix(dropout)}{max_moves_suffix(max_moves)}"
+    return f"{dump_month_id(dump)}_{n}-{m}{extra}.parquet"
 
 
 def _epd_key(board: chess.Board) -> str:
@@ -237,9 +301,12 @@ def collect_unique(
     include_startpos: bool = True,
     dropout: float = 0.0,
     seed: int = 0,
+    max_moves: int = 0,
 ) -> tuple[list[dict], dict]:
     if dropout < 0.0 or dropout >= 1.0:
         raise ValueError("dropout must be in [0, 1)")
+    if max_moves < 0:
+        raise ValueError("max_moves must be >= 0")
     store: dict[str, dict] = {}
     games = 0
     plies = 0
@@ -249,6 +316,7 @@ def collect_unique(
     t0 = time.perf_counter()
     unlimited = max_unique is None or max_unique <= 0
     rng = random.Random(int(seed))
+    ply_cap = 2 * int(max_moves) if max_moves > 0 else None
 
     def _count(board: chess.Board) -> None:
         nonlocal considered, dropped
@@ -267,6 +335,7 @@ def collect_unique(
         def begin_game(self) -> None:
             self.board = chess.Board()
             self.ok = True
+            self.done = False
             if include_startpos:
                 _count(self.board)
 
@@ -275,12 +344,15 @@ def collect_unique(
 
         def visit_move(self, board: chess.Board, move: chess.Move) -> None:
             nonlocal plies
-            if not self.ok:
+            if not self.ok or self.done:
                 return
             try:
                 self.board.push(move)
             except (ValueError, chess.IllegalMoveError, chess.InvalidMoveError):
                 self.ok = False
+                return
+            if ply_cap is not None and self.board.ply() > ply_cap:
+                self.done = True
                 return
             plies += 1
             _count(self.board)
@@ -350,6 +422,7 @@ def collect_unique(
         "plies_considered": considered,
         "plies_dropped": dropped,
         "plies_kept": considered - dropped,
+        "max_moves": int(max_moves),
         "elapsed_s": round(time.perf_counter() - t0, 1),
     }
     return rows, stats
@@ -420,27 +493,48 @@ def label_extract(
     return n
 
 
-def write_json(labeled: Path, json_path: Path) -> None:
+def wdl_from_labeled_row(row: dict) -> tuple[float, float, float]:
+    if all(key in row and row[key] is not None for key in ("wdl_win", "wdl_draw", "wdl_loss")):
+        return (float(row["wdl_win"]), float(row["wdl_draw"]), float(row["wdl_loss"]))
+    return stm_wdl_from_white_value(str(row["fen"]), float(row["expected_reward"]))
+
+
+def write_json(
+    labeled: Path,
+    json_path: Path,
+    *,
+    max_draw: float | None = None,
+) -> int:
+    """Write JSON/parquet. ``max_draw`` keeps rows with STM ``D < max_draw``."""
     df = pd.read_parquet(labeled)
     payload = []
+    dropped = 0
     for row in df.sort_values(["visits", "fen"], ascending=[False, True]).to_dict(
         orient="records"
     ):
-        if all(key in row and row[key] is not None for key in ("wdl_win", "wdl_draw", "wdl_loss")):
-            wdl = (float(row["wdl_win"]), float(row["wdl_draw"]), float(row["wdl_loss"]))
-        else:
-            wdl = stm_wdl_from_white_value(str(row["fen"]), float(row["expected_reward"]))
+        wdl = wdl_from_labeled_row(row)
+        if max_draw is not None and wdl[1] >= float(max_draw):
+            dropped += 1
+            continue
         payload.append(labeled_payload(str(row["fen"]), wdl, int(row["visits"])))
+    if not payload:
+        raise ValueError(
+            f"no rows left after max-draw filter (labeled {len(df):,}, dropped {dropped:,})"
+        )
     json_path.parent.mkdir(parents=True, exist_ok=True)
     json_path.write_text(dumps_labeled_json(payload), encoding="utf-8")
     pq = json_path.with_suffix(".parquet")
     pd.DataFrame(payload).to_parquet(pq, index=False)
-    print(f"JSON {len(payload):,} → {json_path} + {pq.name}")
+    extra = ""
+    if max_draw is not None:
+        extra = f" (kept D<{max_draw:g}, dropped {dropped:,} draws)"
+    print(f"JSON {len(payload):,} → {json_path} + {pq.name}{extra}")
+    return len(payload)
 
 
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(
-        description="Lichess dump games [n, m) → {fen, wdl, value, visits} JSON (m exclusive)"
+        description="Lichess dump games [n, m) → {fen, wdl, value, visits} JSON + features.npz"
     )
     parser.add_argument(
         "n",
@@ -474,6 +568,18 @@ def main(argv: list[str] | None = None) -> int:
         help="RNG seed for ply dropout (default 0)",
     )
     parser.add_argument(
+        "--max-draw",
+        type=float,
+        default=None,
+        help="Keep only positions with STM draw proba D < P (decisive slice; stem _draw30 if P=0.30)",
+    )
+    parser.add_argument(
+        "--max-moves",
+        type=int,
+        default=0,
+        help="Keep startpos + first N full moves (2N plies). 0 = whole game. 10 → stem _m10",
+    )
+    parser.add_argument(
         "--progress-every",
         type=int,
         default=1,
@@ -482,6 +588,11 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--batch", type=int, default=20_000, help="Label checkpoint size")
     parser.add_argument("--skip-extract", action="store_true")
     parser.add_argument("--skip-label", action="store_true")
+    parser.add_argument(
+        "--skip-encode",
+        action="store_true",
+        help="Do not write features.npz after the JSON (default: encode 844 + STM WDL)",
+    )
     parser.add_argument(
         "--force-label",
         action="store_true",
@@ -514,6 +625,12 @@ def main(argv: list[str] | None = None) -> int:
     if args.dropout < 0.0 or args.dropout >= 1.0:
         print("--dropout must be in [0, 1)", file=sys.stderr)
         return 2
+    if args.max_draw is not None and args.max_draw < 0.0:
+        print("--max-draw must be >= 0", file=sys.stderr)
+        return 2
+    if args.max_moves < 0:
+        print("--max-moves must be >= 0", file=sys.stderr)
+        return 2
 
     dump = args.input if args.input.is_absolute() else (PROJECT_ROOT / args.input)
     extract = args.extract or (
@@ -521,20 +638,31 @@ def main(argv: list[str] | None = None) -> int:
         / "data"
         / "raw"
         / "lichess"
-        / slice_extract_name(dump, args.n, args.m, dropout=args.dropout)
+        / slice_extract_name(
+            dump, args.n, args.m, dropout=args.dropout, max_moves=args.max_moves
+        )
     )
     if args.extract and not args.extract.is_absolute():
         extract = PROJECT_ROOT / args.extract
     labeled = args.labeled or (
         PROCESSED_DATA_DIR
         / "labeled"
-        / slice_labeled_name(dump, args.n, args.m, dropout=args.dropout)
+        / slice_labeled_name(
+            dump, args.n, args.m, dropout=args.dropout, max_moves=args.max_moves
+        )
     )
     if args.labeled and not Path(args.labeled).is_absolute():
         labeled = PROJECT_ROOT / args.labeled
     json_path = args.output or fen_value_visits_slice_path(
         PROCESSED_DATA_DIR / BOARD_EVAL_DIR_NAME / FEN_VALUE_VISITS_DIR_NAME,
-        slice_json_name(dump, args.n, args.m, dropout=args.dropout),
+        slice_json_name(
+            dump,
+            args.n,
+            args.m,
+            dropout=args.dropout,
+            max_moves=args.max_moves,
+            max_draw=args.max_draw,
+        ),
     )
     if args.output and not Path(args.output).is_absolute():
         json_path = PROJECT_ROOT / args.output
@@ -550,7 +678,8 @@ def main(argv: list[str] | None = None) -> int:
             return 1
         print(
             f"extracting games [{args.n:,}, {args.m:,}) from {dump} "
-            f"(skip={skip_games:,}, count={max_games:,}, dropout={args.dropout:g}) …",
+            f"(skip={skip_games:,}, count={max_games:,}, dropout={args.dropout:g}, "
+            f"max_moves={args.max_moves}) …",
             flush=True,
         )
         rows, stats = collect_unique(
@@ -563,6 +692,7 @@ def main(argv: list[str] | None = None) -> int:
             include_startpos=not args.no_startpos,
             dropout=args.dropout,
             seed=args.seed,
+            max_moves=args.max_moves,
         )
         stats["n"] = args.n
         stats["m"] = args.m
@@ -596,7 +726,19 @@ def main(argv: list[str] | None = None) -> int:
         print(f"labeled missing: {labeled} (use --skip-label only after labels exist)", file=sys.stderr)
         return 1
 
-    write_json(labeled, json_path)
+    try:
+        write_json(labeled, json_path, max_draw=args.max_draw)
+    except ValueError as exc:
+        print(str(exc), file=sys.stderr)
+        return 1
+    if not args.skip_encode:
+        from encode_slice_features import encode_slice_folder
+
+        encode_slice_folder(
+            json_path.parent,
+            rebuild=True,
+            progress=bool(args.progress_every),
+        )
     try:
         rel = json_path.relative_to(PROJECT_ROOT)
     except ValueError:

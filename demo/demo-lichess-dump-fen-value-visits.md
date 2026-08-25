@@ -1,6 +1,6 @@
-# Demo — Lichess monthly dump → `{fen, value, visits}`
+# Demo — Lichess monthly dump → `{fen, wdl, value, visits}`
 
-Stream a **slice** of a Lichess standard-rated monthly dump (`.pgn.zst`) into Goal §1 JSON: unique `{fen, value, visits}` plus a parquet twin.
+Stream a **slice** of a Lichess standard-rated monthly dump (`.pgn.zst`) into Goal §1 JSON: unique `{fen, wdl, value, visits}` plus a parquet twin.
 
 Do **not** decompress the whole dump to disk. The converter streams zstd, skips games by `[Event ` header count (no chess parse on the skip), then parses games `[n, m)` (1-based, **n included, m excluded**).
 
@@ -39,10 +39,10 @@ py -3.12 scripts/lichess_dump_to_fen_value_visits.py n m
 
 stderr shows three tqdm bars (skip, extract, label), redrawn about once a second, with rate and **ETA**. Pass `--progress-every 0` to hide them.
 
-### Smoke (first 10 games)
+### Smoke (first 10 games → stem `…_0-10`)
 
 ```powershell
-py -3.12 -u scripts/lichess_dump_to_fen_value_visits.py 1 11 --progress-every 1
+py -3.12 -u scripts/lichess_dump_to_fen_value_visits.py 0 10 --force-label --progress-every 1
 ```
 
 Expected: ~10 games, ~657 plies, **645** unique EPDs, then Lc0 labels. Wall time on this machine was ~52 s (extract is ~0.1 s; labeling dominates).
@@ -66,15 +66,17 @@ Skipping millions of games still streams the compressed file from the start (hea
 | Extract stats | same stem + `.stats.json` |
 | Labeled parquet | `data/processed/labeled/lichess_db_standard_rated_2026-07_<n>-<m>.parquet` |
 | **JSON + parquet twin** | `data/processed/board_eval/fen_value_visits/fen_value_visits_lichess_db_standard_rated_2026-07_<n>-<m>/fen_value_visits_lichess_db_standard_rated_2026-07_<n>-<m>.json` |
+| **features.npz** | same folder (`encode_slice_features.py`; skip with `--skip-encode`) |
 
 JSON objects:
 
 ```json
-{"fen": "...", "value": 0.12, "visits": 3}
+{"fen": "...", "wdl": [0.501, 0.399, 0.100], "value": 0.401, "visits": 3}
 ```
 
 - `fen` — unique EPD (SHA-256 of `board.epd()`).
-- `value` — White-POV expected reward from Lc0 WDL (`(W−L)/1000`).
+- `wdl` — STM `[W, D, L]` from Lc0 (permille / 1000).
+- `value` — White-POV \(\pm(W-L)\).
 - `visits` — how many times that EPD appeared in games `n`–`m`.
 
 Join all slices (sum visits, sort descending):

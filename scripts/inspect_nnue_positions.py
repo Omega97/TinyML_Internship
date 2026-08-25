@@ -1,8 +1,8 @@
 #!/usr/bin/env python3
-"""Rank test-slice positions by |hat v − v| for a named DualHidden checkpoint.
+"""Rank test-slice positions by WDL cross-entropy for a named DualHidden checkpoint.
 
-Prints the 10 closest (best) and 10 farthest (worst) FENs with teacher ``v``
-and model ``hat v``.
+Prints the 10 lowest-CE (best) and 10 highest-CE (worst) FENs with teacher
+STM ``wdl`` and model ``hat wdl``.
 
 The slice JSON is aligned with ``features.npz`` (same unique-EPD order as encode).
 
@@ -26,6 +26,7 @@ import torch
 from torch.utils.data import DataLoader
 
 from tinymlinternship.config.settings import NNUE_CHECKPOINTS_DIR, PROCESSED_DATA_DIR, PROJECT_ROOT
+from tinymlinternship.data.wdl import wdl_from_row
 from tinymlinternship.data.board_store import BOARD_EVAL_DIR_NAME, FEN_VALUE_VISITS_DIR_NAME
 from tinymlinternship.nnue.dataset import (
     FenValueVisitsDataset,
@@ -38,7 +39,7 @@ from tinymlinternship.nnue.dataset import (
 from tinymlinternship.nnue.model import DualHiddenNNUE
 
 DEFAULT_SLICES = PROCESSED_DATA_DIR / BOARD_EVAL_DIR_NAME / FEN_VALUE_VISITS_DIR_NAME
-DEFAULT_TEST_SLICE = "fen_value_visits_lichess_db_standard_rated_2026-07_100000-101000"
+DEFAULT_TEST_SLICE = "fen_value_visits_lichess_db_standard_rated_2026-07_100000-105000_d80_draw5"
 
 
 def _resolve(path: Path) -> Path:
@@ -71,14 +72,16 @@ def aligned_fens(folder: Path) -> list[str]:
     df = df.copy()
     df["epd"] = df["fen"].map(epd_key)
     df = df.drop_duplicates(subset=["epd"], keep="first").reset_index(drop=True)
-    stored = load_slice_feature_db(folder)["value"]
-    values = df["value"].to_numpy(dtype=np.float32)
-    if len(values) != len(stored):
+    stored = load_slice_feature_db(folder)["wdl"]
+    teacher = np.stack(
+        [np.asarray(wdl_from_row(row), dtype=np.float32) for row in df.to_dict(orient="records")]
+    )
+    if len(teacher) != len(stored):
         raise ValueError(
-            f"{folder.name}: JSON unique EPDs {len(values):,} != features.npz {len(stored):,}"
+            f"{folder.name}: JSON unique EPDs {len(teacher):,} != features.npz {len(stored):,}"
         )
-    if not np.allclose(values, stored, atol=1e-3, rtol=0.0):
-        raise ValueError(f"{folder.name}: JSON values do not match features.npz (re-encode the slice)")
+    if not np.allclose(teacher, stored, atol=1e-3, rtol=0.0):
+        raise ValueError(f"{folder.name}: JSON WDL does not match features.npz (re-encode the slice)")
     return df["fen"].astype(str).tolist()
 
 
@@ -110,7 +113,9 @@ def predict(model: DualHiddenNNUE, folder: Path) -> np.ndarray:
                     batch["stm_white"],
                 ).cpu()
             )
-    return torch.cat(chunks).numpy().astype(np.float64)
+    logits = torch.cat(chunks)
+    probs = torch.softmax(logits, dim=-1)
+    return probs.numpy().astype(np.float64)
 
 
 def rank_rows(
@@ -120,20 +125,26 @@ def rank_rows(
     *,
     n: int,
 ) -> tuple[list[dict], list[dict]]:
-    err = np.abs(pred - teacher)
+    t = np.clip(teacher, 1e-8, 1.0)
+    p = np.clip(pred, 1e-8, 1.0)
+    ce = -np.sum(t * np.log(p), axis=-1)
     n = min(int(n), len(fens))
-    best_idx = np.argsort(err)[:n]
-    worst_idx = np.argsort(err)[::-1][:n]
+    best_idx = np.argsort(ce)[:n]
+    worst_idx = np.argsort(ce)[::-1][:n]
 
     def pack(indices: np.ndarray) -> list[dict]:
         rows = []
         for i in indices:
+            tw, td, tl = (float(x) for x in teacher[int(i)])
+            pw, pd, pl = (float(x) for x in pred[int(i)])
             rows.append(
                 {
                     "fen": fens[int(i)],
-                    "v": round(float(teacher[int(i)]), 4),
-                    "hat_v": round(float(pred[int(i)]), 4),
-                    "abs_err": round(float(err[int(i)]), 4),
+                    "wdl": [round(tw, 4), round(td, 4), round(tl, 4)],
+                    "hat_wdl": [round(pw, 4), round(pd, 4), round(pl, 4)],
+                    "v": round(tw - tl, 4),
+                    "hat_v": round(pw - pl, 4),
+                    "ce": round(float(ce[int(i)]), 4),
                 }
             )
         return rows
@@ -143,10 +154,16 @@ def rank_rows(
 
 def _print_block(title: str, rows: list[dict]) -> None:
     print(title)
-    print(f"{'#':>3}  {'v':>7}  {'hat_v':>7}  {'|err|':>7}  fen")
+    print(
+        f"{'#':>3}  {'W':>6} {'D':>6} {'L':>6}  "
+        f"{'pW':>6} {'pD':>6} {'pL':>6}  {'CE':>7}  fen"
+    )
     for i, row in enumerate(rows, start=1):
+        tw, td, tl = row["wdl"]
+        pw, pd, pl = row["hat_wdl"]
         print(
-            f"{i:3d}  {row['v']:7.3f}  {row['hat_v']:7.3f}  {row['abs_err']:7.3f}  {row['fen']}"
+            f"{i:3d}  {tw:6.3f} {td:6.3f} {tl:6.3f}  "
+            f"{pw:6.3f} {pd:6.3f} {pl:6.3f}  {row['ce']:7.3f}  {row['fen']}"
         )
 
 
@@ -187,7 +204,7 @@ def main(argv: list[str] | None = None) -> int:
     print(f"model  {ckpt_path}")
     print(f"slice  {folder}")
     fens = aligned_fens(folder)
-    teacher = load_slice_feature_db(folder)["value"].astype(np.float64)
+    teacher = load_slice_feature_db(folder)["wdl"].astype(np.float64)
     model = load_model(ckpt_path)
     pred = predict(model, folder)
     if len(pred) != len(fens):
@@ -196,9 +213,9 @@ def main(argv: list[str] | None = None) -> int:
 
     best, worst = rank_rows(fens, teacher, pred, n=args.n)
     print()
-    _print_block(f"Top {len(best)} best  (|hat v − v| smallest)", best)
+    _print_block(f"Top {len(best)} best  (lowest CE)", best)
     print()
-    _print_block(f"Top {len(worst)} worst (|hat v − v| largest)", worst)
+    _print_block(f"Top {len(worst)} worst (highest CE)", worst)
 
     if args.json is not None:
         out = _resolve(args.json)

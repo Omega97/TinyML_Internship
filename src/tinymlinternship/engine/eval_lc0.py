@@ -16,6 +16,11 @@ from pathlib import Path
 import chess
 
 from tinymlinternship.config.settings import LC0_BINARY, LC0_NETWORK_DEFAULT
+from tinymlinternship.data.wdl import (
+    permille_to_stm_wdl,
+    terminal_stm_wdl,
+    white_value_from_stm,
+)
 
 MATE_SCORE = 32_000
 
@@ -185,16 +190,17 @@ class Lc0Teacher:
             return parsed
         raise RuntimeError(f"lc0 returned no WDL for fen={fen!r} go={cmd!r}")
 
-    def evaluate_expected_reward(self, board: chess.Board) -> float:
-        if board.is_checkmate():
-            return -1.0 if board.turn == chess.WHITE else 1.0
-        if board.is_stalemate() or board.is_insufficient_material():
-            return 0.0
-        if board.can_claim_threefold_repetition() or board.can_claim_fifty_moves():
-            return 0.0
+    def evaluate_stm_wdl(self, board: chess.Board, *, go: str | None = None) -> tuple[float, float, float]:
+        """STM ``(W, D, L)`` probabilities (teacher, or a terminal assignment)."""
+        terminal = terminal_stm_wdl(board)
+        if terminal is not None:
+            return terminal
+        win, draw, loss = self.evaluate_wdl(board, go=go)
+        return permille_to_stm_wdl(win, draw, loss)
 
-        win, draw, loss = self.evaluate_wdl(board)
-        return wdl_to_expected_reward_white(board, win, draw, loss)
+    def evaluate_expected_reward(self, board: chess.Board) -> float:
+        w, d, l = self.evaluate_stm_wdl(board)
+        return white_value_from_stm(board, w, d, l)
 
     def evaluate_cp(self, board: chess.Board) -> int:
         if board.is_checkmate():

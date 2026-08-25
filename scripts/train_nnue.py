@@ -123,7 +123,12 @@ def train_epoch(
     return running / max(n_batches, 1)
 
 
-def plot_ce(history: list[dict[str, Any]], path: Path) -> None:
+def plot_ce(
+    history: list[dict[str, Any]],
+    path: Path,
+    *,
+    title: str = "Dual-POV NNUE WDL (L1 64×2, L2 128)",
+) -> None:
     import matplotlib.pyplot as plt
 
     epochs = [row["epoch"] for row in history]
@@ -134,8 +139,7 @@ def plot_ce(history: list[dict[str, Any]], path: Path) -> None:
     ax.plot(epochs, test_ce, marker="s", label="test CE")
     ax.set_xlabel("epoch")
     ax.set_ylabel("cross-entropy")
-    ax.set_title("Dual-POV NNUE WDL (L1 64×2, L2 128)")
-    ax.set_xticks(epochs)
+    ax.set_title(title)
     ax.grid(True, alpha=0.3)
     ax.legend()
     fig.tight_layout()

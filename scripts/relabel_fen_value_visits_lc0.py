@@ -1,19 +1,22 @@
 #!/usr/bin/env python3
-"""Recompute ``value`` in a {fen, value, visits} JSON at Lc0 ``go depth N``.
+"""Overwrite STM ``wdl`` (and White-POV ``value``) in existing slice JSON via Lc0.
 
-Keeps ``fen`` and ``visits``. ``value`` is White-POV expected reward in [-1, +1],
-rounded to 3 decimal digits.
+Does **not** re-parse the Lichess dump. Keeps ``fen`` and ``visits``. Faster than
+``lichess_dump_to_fen_value_visits.py`` because extract is skipped; Lc0 eval is
+still one call per unique EPD.
 
-Lc0 ``go depth N`` is MCTS *average* tree depth (not Stockfish αβ). ``--depth``
-is required.
+``wdl`` is ``[W, D, L]`` from the side to move. ``value`` is White-POV
+``±(W-L)``, both rounded to 3 decimal digits.
 
-The input JSON may be a list of objects, JSONL, parquet, or a slightly broken
-list (missing ``{`` / extra commas). Invalid FENs are skipped with a warning.
+Lc0 ``go depth N`` is MCTS *average* tree depth (not Stockfish αβ). Default
+``--depth 1``. Pass a slice JSON, a slice folder, or the whole
+``fen_value_visits/`` parent.
 
 Examples::
 
-    py -3.12 -u scripts/relabel_fen_value_visits_lc0.py path/to/slice.json --depth 2
-    py -3.12 -u scripts/relabel_fen_value_visits_lc0.py path/to/slice.json --depth 4 --in-place
+    py -3.12 -u scripts/relabel_fen_value_visits_lc0.py path/to/slice.json --in-place
+    py -3.12 -u scripts/relabel_fen_value_visits_lc0.py path/to/slice.json --depth 2 --in-place
+    py -3.12 -u scripts/relabel_fen_value_visits_lc0.py data/processed/board_eval/fen_value_visits --in-place
 """
 
 from __future__ import annotations
@@ -35,13 +38,9 @@ from tinymlinternship.config.settings import (
     LC0_NETWORK_PRESETS,
     PROJECT_ROOT,
 )
-from tinymlinternship.engine.eval_lc0 import (
-    Lc0Teacher,
-    go_command,
-    wdl_to_expected_reward_white,
-)
+from tinymlinternship.data.wdl import dumps_labeled_json, labeled_payload, wdl_from_row
+from tinymlinternship.engine.eval_lc0 import Lc0Teacher, go_command
 
-VALUE_DIGITS = 3
 PROGRESS_INTERVAL_S = 1.0
 CHECKPOINT_EVERY = 50
 
@@ -73,6 +72,13 @@ def _resolve(path: Path) -> Path:
     return path if path.is_absolute() else (PROJECT_ROOT / path).resolve()
 
 
+def uci_go(*, depth: int, nodes: int | None) -> str:
+    """``depth 0`` is value-head only (``go nodes 1``): one NN eval per position."""
+    if depth == 0:
+        return go_command(nodes=1 if nodes is None else nodes)
+    return go_command(depth=depth, nodes=nodes)
+
+
 def default_output(input_path: Path, *, depth: int, nodes: int | None) -> Path:
     extra = f"_depth{depth}"
     if nodes is not None:
@@ -80,20 +86,48 @@ def default_output(input_path: Path, *, depth: int, nodes: int | None) -> Path:
     return input_path.with_name(input_path.stem + extra + ".json")
 
 
+SKIP_JSON_NAMES = {"features.meta.json", "meta.json"}
+
+
+def discover_targets(path: Path) -> list[Path]:
+    """One JSON, a slice folder, or the parent of all slice folders."""
+    path = _resolve(path)
+    if path.is_file():
+        return [path]
+    if not path.is_dir():
+        return []
+    named = path / f"{path.name}.json"
+    if named.is_file():
+        return [named]
+    found: list[Path] = []
+    for json_path in sorted(path.rglob("fen_value_visits_*.json")):
+        if json_path.name in SKIP_JSON_NAMES:
+            continue
+        if json_path.parent.name != json_path.stem:
+            continue
+        found.append(json_path)
+    return found
+
+
 def _as_row(obj: object) -> dict | None:
     if not isinstance(obj, dict) or "fen" not in obj:
         return None
     visits = obj.get("visits", 1)
-    value = obj.get("value", 0.0)
     try:
         visits_i = int(visits)
     except (TypeError, ValueError):
         visits_i = 1
-    try:
-        value_f = float(value)
-    except (TypeError, ValueError):
-        value_f = 0.0
-    return {"fen": str(obj["fen"]), "value": value_f, "visits": visits_i}
+    row: dict = {"fen": str(obj["fen"]), "visits": visits_i}
+    if "wdl" in obj:
+        row["wdl"] = obj["wdl"]
+    if "value" in obj:
+        try:
+            row["value"] = float(obj["value"])
+        except (TypeError, ValueError):
+            row["value"] = 0.0
+    elif "wdl" not in row:
+        row["value"] = 0.0
+    return row
 
 
 def _first(pattern: re.Pattern[str], after: str, before: str) -> re.Match[str] | None:
@@ -167,57 +201,109 @@ def load_rows(path: Path) -> tuple[list[dict], str]:
     return load_json_rows(path)
 
 
-def _terminal_reward(board: chess.Board) -> float | None:
-    if board.is_checkmate():
-        return -1.0 if board.turn == chess.WHITE else 1.0
-    if (
-        board.is_stalemate()
-        or board.is_insufficient_material()
-        or board.can_claim_threefold_repetition()
-        or board.can_claim_fifty_moves()
-    ):
-        return 0.0
-    return None
-
-
-def evaluate_value(teacher: Lc0Teacher, fen: str) -> float:
+def evaluate_wdl(teacher: Lc0Teacher, fen: str) -> tuple[float, float, float]:
     board = chess.Board(fen)
-    terminal = _terminal_reward(board)
-    if terminal is not None:
-        return float(terminal)
-    win, draw, loss = teacher.evaluate_wdl(board)
-    return float(wdl_to_expected_reward_white(board, win, draw, loss))
+    return teacher.evaluate_stm_wdl(board)
 
 
 def write_payload(rows: list[dict], json_path: Path) -> None:
     json_path.parent.mkdir(parents=True, exist_ok=True)
-    json_path.write_text(json.dumps(rows, indent=2) + "\n", encoding="utf-8")
+    json_path.write_text(dumps_labeled_json(rows), encoding="utf-8")
     parquet_path = json_path.with_suffix(".parquet")
     pd.DataFrame(rows).to_parquet(parquet_path, index=False)
 
 
-def slim_row(row: dict, value: float) -> dict:
+def slim_row(row: dict, wdl: tuple[float, float, float]) -> dict:
+    return labeled_payload(str(row["fen"]), wdl, int(row.get("visits", 1)))
+
+
+def relabel_file(
+    input_path: Path,
+    output: Path,
+    *,
+    teacher: Lc0Teacher,
+    limit: int | None,
+    checkpoint_every: int,
+    progress: bool,
+    resume: bool,
+) -> dict:
+    rows_in, how = load_rows(input_path)
+    if how == "recovered":
+        print(
+            f"warning: {input_path.name} is not valid JSON; recovered {len(rows_in)} records from fen/value/visits keys",
+            file=sys.stderr,
+        )
+    elif how == "jsonl":
+        print(f"loaded {len(rows_in)} JSONL records from {input_path.name}", flush=True)
+    if limit is not None:
+        rows_in = rows_in[:limit]
+    if not rows_in:
+        raise ValueError(f"No rows to label in {input_path}")
+
+    out_rows: list[dict] = []
+    start = 0
+    parquet_out = output.with_suffix(".parquet")
+    if resume and parquet_out.exists():
+        prev = pd.read_parquet(parquet_out)
+        out_rows = prev.to_dict(orient="records")
+        start = len(out_rows)
+        if start > len(rows_in):
+            raise ValueError(
+                f"checkpoint {parquet_out} has {start} rows > input {len(rows_in)}; refusing resume"
+            )
+        print(f"resume at {start:,}/{len(rows_in):,} from {parquet_out}", flush=True)
+
+    skipped = 0
+
+    def _flush() -> None:
+        write_payload(out_rows, output)
+
+    with _progress_bar(
+        total=len(rows_in),
+        desc=f"{input_path.stem} {teacher.go}",
+        disable=not progress,
+        initial=start,
+    ) as bar:
+        for idx in range(start, len(rows_in)):
+            row = rows_in[idx]
+            try:
+                wdl = evaluate_wdl(teacher, str(row["fen"]))
+            except (ValueError, chess.InvalidFenError) as exc:
+                skipped += 1
+                print(f"warn row {idx}: {exc}", file=sys.stderr)
+                wdl = wdl_from_row(row)
+            out_rows.append(slim_row(row, wdl))
+            bar.update(1)
+            if checkpoint_every and (idx + 1) % checkpoint_every == 0:
+                _flush()
+    _flush()
     return {
-        "fen": str(row["fen"]),
-        "value": round(float(value), VALUE_DIGITS),
-        "visits": int(row.get("visits", 1)),
+        "input": str(input_path),
+        "output": str(output),
+        "parquet": str(parquet_out),
+        "count": len(out_rows),
+        "skipped": skipped,
+        "go": teacher.go,
+        "value_min": min(r["value"] for r in out_rows),
+        "value_max": max(r["value"] for r in out_rows),
+        "wdl": "STM [W, D, L]",
     }
 
 
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(
-        description="Recompute every value in a fen-value-visits JSON via Lc0 go depth N."
+        description="Overwrite STM wdl in existing fen-value-visits JSON via Lc0 go depth N."
     )
     parser.add_argument(
         "input",
         type=Path,
-        help="Target JSON/parquet with {fen, value, visits} rows",
+        help="Slice JSON/parquet, slice folder, or fen_value_visits/ parent",
     )
     parser.add_argument(
         "--depth",
         type=int,
-        required=True,
-        help="Lc0 UCI go depth (required). Depth 2 sees the sample mate-in-2.",
+        default=1,
+        help="Lc0 UCI go depth (default: 1). 0 = one NN eval (go nodes 1). Depth 2 sees short mates.",
     )
     parser.add_argument(
         "--output",
@@ -265,108 +351,62 @@ def main(argv: list[str] | None = None) -> int:
     if args.in_place and args.output is not None:
         print("Use either --in-place or --output, not both.", file=sys.stderr)
         return 1
-    if args.depth < 1:
-        print("--depth must be >= 1", file=sys.stderr)
+    if args.depth < 0:
+        print("--depth must be >= 0 (0 = go nodes 1, one eval per position)", file=sys.stderr)
         return 1
     if args.nodes is not None and args.nodes < 1:
         print("--nodes must be >= 1", file=sys.stderr)
         return 1
 
-    try:
-        rows_in, how = load_rows(input_path)
-    except ValueError as exc:
-        print(str(exc), file=sys.stderr)
+    targets = discover_targets(input_path)
+    if not targets:
+        print(f"no fen-value-visits JSON in {input_path}", file=sys.stderr)
         return 1
-    if how == "recovered":
-        print(
-            f"warning: {input_path.name} is not valid JSON; recovered {len(rows_in)} records from fen/value/visits keys",
-            file=sys.stderr,
-        )
-    elif how == "jsonl":
-        print(f"loaded {len(rows_in)} JSONL records from {input_path.name}", flush=True)
-
-    if args.limit is not None:
-        rows_in = rows_in[: args.limit]
-    if not rows_in:
-        print("No rows to label.", file=sys.stderr)
+    if args.output is not None and len(targets) > 1:
+        print("--output is only valid for a single JSON file.", file=sys.stderr)
         return 1
 
-    if args.in_place:
-        output = input_path.with_suffix(".json")
-    elif args.output is not None:
-        output = _resolve(args.output)
-        if output.suffix.lower() == ".parquet":
-            output = output.with_suffix(".json")
-    else:
-        output = default_output(input_path, depth=args.depth, nodes=args.nodes)
-
-    go = go_command(depth=args.depth, nodes=args.nodes)
+    in_place = bool(args.in_place) or (input_path.is_dir() and args.output is None)
+    go = uci_go(depth=args.depth, nodes=args.nodes)
     weights = LC0_NETWORK_PRESETS[args.network] if args.network else LC0_NETWORK_DEFAULT
     weights = weights.resolve() if weights.exists() else weights
-
-    out_rows: list[dict] = []
-    start = 0
-    parquet_out = output.with_suffix(".parquet")
-    if parquet_out.exists() and not args.in_place:
-        prev = pd.read_parquet(parquet_out)
-        out_rows = prev.to_dict(orient="records")
-        start = len(out_rows)
-        if start > len(rows_in):
-            print(
-                f"checkpoint {parquet_out} has {start} rows > input {len(rows_in)}; refusing resume",
-                file=sys.stderr,
-            )
-            return 1
-        print(f"resume at {start:,}/{len(rows_in):,} from {parquet_out}", flush=True)
-
     checkpoint_every = max(0, int(args.checkpoint_every))
-    skipped = 0
 
-    def _flush() -> None:
-        write_payload(out_rows, output)
-
+    print(f"{len(targets)} file(s), {go}", flush=True)
     with Lc0Teacher(
         weights=str(weights),
         backend=args.backend,
         go=go,
         smart_pruning_factor=0.0,
     ) as teacher:
-        with _progress_bar(
-            total=len(rows_in),
-            desc=f"lc0 {go}",
-            disable=not args.progress_every,
-            initial=start,
-        ) as bar:
-            for idx in range(start, len(rows_in)):
-                row = rows_in[idx]
-                try:
-                    value = evaluate_value(teacher, str(row["fen"]))
-                except (ValueError, chess.InvalidFenError) as exc:
-                    skipped += 1
-                    print(f"warn row {idx}: {exc}", file=sys.stderr)
-                    value = float(row.get("value", 0.0))
-                out_rows.append(slim_row(row, value))
-                bar.update(1)
-                if checkpoint_every and (idx + 1) % checkpoint_every == 0:
-                    _flush()
-
-    _flush()
-    print(
-        json.dumps(
-            {
-                "input": str(input_path),
-                "output": str(output),
-                "parquet": str(parquet_out),
-                "count": len(out_rows),
-                "skipped": skipped,
-                "go": go,
-                "network": weights.name,
-                "value_min": min(r["value"] for r in out_rows),
-                "value_max": max(r["value"] for r in out_rows),
-            },
-            indent=2,
-        )
-    )
+        summaries: list[dict] = []
+        for target in targets:
+            if in_place:
+                output = target.with_suffix(".json")
+            elif args.output is not None:
+                output = _resolve(args.output)
+                if output.suffix.lower() == ".parquet":
+                    output = output.with_suffix(".json")
+            else:
+                output = default_output(target, depth=args.depth, nodes=args.nodes)
+            try:
+                summary = relabel_file(
+                    target,
+                    output,
+                    teacher=teacher,
+                    limit=args.limit,
+                    checkpoint_every=checkpoint_every,
+                    progress=bool(args.progress_every),
+                    resume=not in_place,
+                )
+            except ValueError as exc:
+                print(str(exc), file=sys.stderr)
+                return 1
+            summary["network"] = weights.name
+            summaries.append(summary)
+            print(json.dumps(summary, indent=2), flush=True)
+    if len(summaries) > 1:
+        print(json.dumps({"files": len(summaries), "go": go}, indent=2), flush=True)
     return 0
 
 

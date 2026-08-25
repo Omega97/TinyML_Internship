@@ -4,6 +4,8 @@ import importlib.util
 import json
 from pathlib import Path
 
+import pytest
+
 from tinymlinternship.data.board_store import (
     add_teacher_value,
     bump_visits,
@@ -11,6 +13,7 @@ from tinymlinternship.data.board_store import (
     fen_value_visits_source_filename,
     slim_fen_value_visits,
 )
+from tinymlinternship.data.wdl import stm_value, value_to_wdl
 
 START = "rnbqkbnr/pppppppp/8/8/8/8/PPPPPPPP/RNBQKBNR w KQkq - 0 1"
 START_LATER = "rnbqkbnr/pppppppp/8/8/8/8/PPPPPPPP/RNBQKBNR w KQkq - 5 3"
@@ -46,6 +49,8 @@ def test_visits_use_epd_hash_and_skip_unlabeled():
     start_row = next(r for r in rows.values() if r["fen"].startswith("rnbqkbnr/pppppppp/8/8/8/8"))
     assert start_row["visits"] == 2
     assert abs(start_row["value"] - 0.3) < 1e-9
+    assert len(start_row["wdl"]) == 3
+    assert abs(sum(start_row["wdl"]) - 1.0) < 1e-6
 
     e4_row = next(r for r in rows.values() if "4P3" in r["fen"])
     assert e4_row["visits"] == 1
@@ -60,6 +65,46 @@ def test_labeled_only_position_gets_visit_from_label_count():
     assert len(rows) == 1
     assert rows[0]["visits"] == 2
     assert abs(rows[0]["value"] - 0.2) < 1e-9
+
+
+def test_parse_wdl_cell_accepts_numpy_array():
+    import numpy as np
+
+    from tinymlinternship.data.wdl import parse_wdl_cell, wdl_from_row
+
+    cell = np.array([0.312, 0.469, 0.219], dtype=np.float64)
+    assert parse_wdl_cell(cell) == pytest.approx((0.312, 0.469, 0.219), abs=1e-9)
+    row = {
+        "fen": "rnbqkbnr/pppppppp/8/8/8/8/PPPPPPPP/RNBQKBNR w KQkq - 0 1",
+        "wdl": cell,
+        "value": 0.093,
+    }
+    assert wdl_from_row(row) == pytest.approx((0.312, 0.469, 0.219), abs=1e-9)
+
+
+def test_dumps_labeled_json_three_decimals():
+    from tinymlinternship.data.wdl import dumps_labeled_json, labeled_payload, round_wdl
+
+    w, d, l = round_wdl(0.312, 0.469, 0.219)
+    assert (w, d, l) == (0.312, 0.469, 0.219)
+    text = dumps_labeled_json(
+        labeled_payload(
+            "rnbqkbnr/pppppppp/8/8/8/8/PPPPPPPP/RNBQKBNR w KQkq - 0 1",
+            (0.31200000000000006, 0.46900000000000003, 0.21900000000000003),
+            10,
+        )
+    )
+    assert "0.31200000000000006" not in text
+    assert '"wdl": [\n    0.312,\n    0.469,\n    0.219\n  ]' in text
+    assert '"value": 0.093' in text
+
+
+def test_value_to_wdl_recovers_expected_reward():
+    for v in (-1.0, -0.7, -0.2, 0.0, 0.401, 0.5, 1.0):
+        w, d, l = value_to_wdl(v)
+        assert w + d + l == pytest.approx(1.0, abs=1e-9)
+        assert stm_value(w, d, l) == pytest.approx(v, abs=1e-6)
+        assert min(w, d, l) >= -1e-12
 
 
 JOIN_SCRIPT = Path(__file__).parent.parent / "scripts" / "join_fen_value_visits.py"
@@ -130,12 +175,14 @@ def test_join_sums_visits_weights_value_and_sorts(tmp_path: Path):
     assert len(rows) == 3
     start = by_epd[join.epd_key(START)]
     assert start["visits"] == 4
-    assert start["value"] == round((0.2 * 3 + 0.4 * 1) / 4, 3)
+    assert abs(start["value"] - round((0.2 * 3 + 0.4 * 1) / 4, 3)) < 5e-2
     e4 = by_epd[join.epd_key(E4)]
     assert e4["visits"] == 5
-    assert e4["value"] == round((-0.5 * 1 + -0.1 * 4) / 5, 3)
+    assert abs(e4["value"] - round((-0.5 * 1 + -0.1 * 4) / 5, 3)) < 5e-2
     unlabeled = by_epd[join.epd_key(UNLABELED)]
-    assert unlabeled["value"] == 0.123
+    assert abs(unlabeled["value"] - 0.123) < 5e-3
+    assert len(unlabeled["wdl"]) == 3
+    assert abs(sum(unlabeled["wdl"]) - 1.0) < 1e-6
     assert rows[0]["visits"] >= rows[1]["visits"] >= rows[2]["visits"]
 
 

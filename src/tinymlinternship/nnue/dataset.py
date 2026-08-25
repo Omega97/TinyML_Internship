@@ -1,7 +1,9 @@
-"""``{fen, value, visits}`` tables → sparse dual-POV batches for NNUE.
+"""``{fen, wdl, visits}`` tables → sparse dual-POV batches for NNUE.
 
 844 features are encoded **once** per source table into a ``*.nnue/`` cache
 next to the file, then loaded as in-memory tensors on later runs.
+Target is STM ``wdl`` of shape ``(N, 3)``. Slices that only store White-POV
+``value`` are converted with the max-entropy WDL map.
 """
 
 from __future__ import annotations
@@ -17,32 +19,33 @@ import pandas as pd
 import torch
 from torch.utils.data import Dataset, Sampler
 
+from tinymlinternship.data.wdl import wdl_from_row
 from tinymlinternship.features import FEATURE_DIM, encode_dual
 
 MAX_ACTIVE_FEATURES = 128
-CACHE_VERSION = 1
+CACHE_VERSION = 2
 CACHE_ARRAYS = (
     "white_idx",
     "white_n",
     "black_idx",
     "black_n",
     "stm",
-    "value",
+    "wdl",
     "visits",
     "epd_hash",
 )
-# Per-slice training DB (no visits): sparse 844 + White-POV value.
+# Per-slice training DB (no visits): sparse 844 + STM WDL.
 SLICE_DB_ARRAYS = (
     "white_idx",
     "white_n",
     "black_idx",
     "black_n",
     "stm",
-    "value",
+    "wdl",
 )
 SLICE_FEATURES_NPZ = "features.npz"
 SLICE_FEATURES_META = "features.meta.json"
-SLICE_DB_VERSION = 1
+SLICE_DB_VERSION = 2
 
 
 def epd_key(fen: str) -> str:
@@ -79,16 +82,18 @@ def load_fen_value_visits(path: Path) -> pd.DataFrame:
         df = pd.read_json(path)
     else:
         df = pd.read_parquet(path)
-    missing = {"fen", "value"} - set(df.columns)
-    if missing:
-        raise ValueError(f"{path} missing columns {sorted(missing)}")
-    cols = ["fen", "value"]
-    if "visits" in df.columns:
-        cols.append("visits")
-    else:
-        df = df.copy()
+    if "fen" not in df.columns:
+        raise ValueError(f"{path} missing column fen")
+    if "wdl" not in df.columns and "value" not in df.columns:
+        raise ValueError(f"{path} missing wdl and value")
+    df = df.copy()
+    if "visits" not in df.columns:
         df["visits"] = 1
-        cols.append("visits")
+    cols = ["fen", "visits"]
+    if "wdl" in df.columns:
+        cols.append("wdl")
+    if "value" in df.columns:
+        cols.append("value")
     return df[cols].copy()
 
 
@@ -143,6 +148,8 @@ def cache_is_valid(cache_dir: Path, source: Path, *, max_active: int) -> bool:
     n_rows = int(meta.get("n_rows", -1))
     if n_rows < 0:
         return False
+    if "value" in meta.get("columns", []) and "wdl" not in meta.get("columns", []):
+        return False
     for name in CACHE_ARRAYS:
         if not (cache_dir / f"{name}.npy").is_file():
             return False
@@ -156,7 +163,9 @@ def encode_frames(
     progress: bool = False,
 ) -> dict[str, np.ndarray]:
     """Encode unique EPDs to padded sparse arrays (no cache I/O)."""
-    work = df[["fen", "value", "visits"]].copy()
+    work = df.copy()
+    if "visits" not in work.columns:
+        work["visits"] = 1
     work["epd"] = work["fen"].map(epd_key)
     work = work.drop_duplicates(subset=["epd"], keep="first").reset_index(drop=True)
     n = len(work)
@@ -165,7 +174,7 @@ def encode_frames(
     black_idx = np.zeros((n, max_active), dtype=np.int16)
     black_n = np.zeros(n, dtype=np.uint8)
     stm = np.zeros(n, dtype=np.uint8)
-    values = work["value"].to_numpy(dtype=np.float32)
+    wdl = np.zeros((n, 3), dtype=np.float32)
     visits = work["visits"].to_numpy(dtype=np.float32)
     hashes = np.zeros(n, dtype=np.uint64)
 
@@ -175,10 +184,11 @@ def encode_frames(
 
         iterator = tqdm(iterator, desc="encode 844", unit="pos", total=n)
 
-    fens = work["fen"].tolist()
+    records = work.to_dict(orient="records")
     epds = work["epd"].tolist()
     for i in iterator:
-        board = chess.Board(str(fens[i]))
+        rec = records[i]
+        board = chess.Board(str(rec["fen"]))
         white, black = encode_dual(board)
         w_idx, w_n = _pad_indices(white, max_active)
         b_idx, b_n = _pad_indices(black, max_active)
@@ -187,6 +197,7 @@ def encode_frames(
         black_idx[i] = b_idx
         black_n[i] = b_n
         stm[i] = 1 if board.turn == chess.WHITE else 0
+        wdl[i] = np.asarray(wdl_from_row(rec), dtype=np.float32)
         hashes[i] = epd_hash64(epds[i])
     return {
         "white_idx": white_idx,
@@ -194,7 +205,7 @@ def encode_frames(
         "black_idx": black_idx,
         "black_n": black_n,
         "stm": stm,
-        "value": values,
+        "wdl": wdl,
         "visits": visits,
         "epd_hash": hashes,
     }
@@ -214,7 +225,8 @@ def save_feature_cache(
         "version": CACHE_VERSION,
         "max_active": int(max_active),
         "feature_dim": FEATURE_DIM,
-        "n_rows": int(arrays["value"].shape[0]),
+        "n_rows": int(arrays["wdl"].shape[0]),
+        "columns": list(CACHE_ARRAYS),
         **_source_stat(source),
     }
     cache_meta_path(cache_dir).write_text(json.dumps(meta, indent=2), encoding="utf-8")
@@ -308,11 +320,11 @@ def save_slice_feature_db(
     np.savez(npz, **payload)
     meta = {
         "version": SLICE_DB_VERSION,
-        "format": "sparse dual-POV 844 + White-POV value",
+        "format": "sparse dual-POV 844 + STM WDL",
         "columns": list(SLICE_DB_ARRAYS),
         "max_active": int(max_active),
         "feature_dim": FEATURE_DIM,
-        "n_rows": int(payload["value"].shape[0]),
+        "n_rows": int(payload["wdl"].shape[0]),
         **_source_stat(source),
     }
     (folder / SLICE_FEATURES_META).write_text(json.dumps(meta, indent=2), encoding="utf-8")
@@ -323,7 +335,13 @@ def load_slice_feature_db(folder: Path) -> dict[str, np.ndarray]:
     with np.load(slice_features_path(folder)) as npz:
         missing = set(SLICE_DB_ARRAYS) - set(npz.files)
         if missing:
-            raise ValueError(f"{folder} features.npz missing {sorted(missing)}")
+            raise ValueError(
+                f"{folder} features.npz missing {sorted(missing)}; "
+                "re-encode with scripts/encode_slice_features.py --rebuild"
+            )
+        wdl = npz["wdl"]
+        if wdl.ndim != 2 or wdl.shape[1] != 3:
+            raise ValueError(f"{folder} features.npz wdl must be (N, 3), got {wdl.shape}")
         return {name: np.array(npz[name]) for name in SLICE_DB_ARRAYS}
 
 
@@ -377,7 +395,7 @@ def _subset_arrays(
     exclude_hashes: set[int] | None = None,
     max_rows: int = 0,
 ) -> dict[str, np.ndarray]:
-    n = int(arrays["value"].shape[0])
+    n = int(arrays["wdl"].shape[0])
     keep = np.ones(n, dtype=np.bool_)
     if exclude_hashes:
         if "epd_hash" not in arrays:
@@ -441,7 +459,7 @@ class FenValueVisitsDataset(Dataset):
             if isinstance(table, Path):
                 df = load_fen_value_visits(table)
             else:
-                df = table[["fen", "value", "visits"]].copy()
+                df = table.copy()
             if exclude_epds:
                 df = df.copy()
                 df["epd"] = df["fen"].map(epd_key)
@@ -452,6 +470,18 @@ class FenValueVisitsDataset(Dataset):
         self._attach_arrays(arrays)
 
     def _attach_arrays(self, arrays: dict[str, np.ndarray]) -> None:
+        if "wdl" not in arrays:
+            raise ValueError(
+                "features.npz is missing 'wdl' (N, 3); re-encode with "
+                "scripts/encode_slice_features.py --rebuild"
+            )
+        wdl = np.ascontiguousarray(arrays["wdl"], dtype=np.float32)
+        if wdl.ndim != 2 or wdl.shape[1] != 3:
+            raise ValueError(f"wdl must have shape (N, 3), got {wdl.shape}")
+        wdl = np.clip(wdl, 0.0, None)
+        denom = wdl.sum(axis=1, keepdims=True)
+        denom = np.maximum(denom, 1e-8)
+        wdl = wdl / denom
         self._np = arrays
         width = int(arrays["white_idx"].shape[1])
         self.white_idx = torch.from_numpy(np.ascontiguousarray(arrays["white_idx"]))
@@ -459,11 +489,11 @@ class FenValueVisitsDataset(Dataset):
         self.white_mask = torch.from_numpy(_mask_from_counts(arrays["white_n"], width))
         self.black_mask = torch.from_numpy(_mask_from_counts(arrays["black_n"], width))
         self.stm_white = torch.from_numpy(arrays["stm"].astype(np.bool_))
-        self.values = torch.from_numpy(np.ascontiguousarray(arrays["value"]))
+        self.wdl = torch.from_numpy(wdl)
         if "visits" in arrays:
             self.visits = torch.from_numpy(np.ascontiguousarray(arrays["visits"]))
         else:
-            self.visits = torch.ones_like(self.values)
+            self.visits = torch.ones(self.wdl.shape[0], dtype=torch.float32)
 
     @classmethod
     def from_slice_root(
@@ -529,7 +559,7 @@ class FenValueVisitsDataset(Dataset):
         return out
 
     def __len__(self) -> int:
-        return int(self.values.numel())
+        return int(self.wdl.shape[0])
 
     def __getitem__(self, index: int) -> dict[str, torch.Tensor]:
         return {
@@ -538,7 +568,7 @@ class FenValueVisitsDataset(Dataset):
             "black_idx": self.black_idx[index],
             "black_mask": self.black_mask[index],
             "stm_white": self.stm_white[index],
-            "target": self.values[index],
+            "target": self.wdl[index],
             "weight": self.visits[index],
         }
 

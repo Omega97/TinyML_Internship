@@ -4,8 +4,8 @@
 Reads every ``fen_value_visits_*`` JSON/parquet under
 ``data/processed/board_eval/fen_value_visits/<slice>/`` (parquet preferred when
 both exist). Same EPD (board + STM + castling + EP; clocks ignored) is merged:
-visits are **summed**, value is the **visit-weighted** mean of slice values
-rounded to 3 decimal digits.
+visits are **summed**, STM ``wdl`` is the **visit-weighted** mean (renormalized),
+``value`` is White-POV ``±(W-L)`` rounded to 3 decimal digits.
 
 Writes, sorted by visits descending (then fen ascending):
 
@@ -35,6 +35,7 @@ from tinymlinternship.data.board_store import (
     FEN_VALUE_VISITS_DIR_NAME,
     FEN_VALUE_VISITS_JOINED_NAME,
 )
+from tinymlinternship.data.wdl import dumps_labeled_json, labeled_payload, wdl_from_row
 
 DEFAULT_SOURCES_DIR = PROCESSED_DATA_DIR / BOARD_EVAL_DIR_NAME / FEN_VALUE_VISITS_DIR_NAME
 DEFAULT_OUTPUT = PROCESSED_DATA_DIR / BOARD_EVAL_DIR_NAME / FEN_VALUE_VISITS_JOINED_NAME
@@ -77,40 +78,53 @@ def load_slice(path: Path) -> pd.DataFrame:
         df = pd.read_json(path)
     else:
         df = pd.read_parquet(path)
-    missing = {"fen", "value", "visits"} - set(df.columns)
-    if missing:
-        raise ValueError(f"{path} missing columns {sorted(missing)}")
-    out = pd.DataFrame(
-        {
-            "fen": df["fen"].astype(str),
-            "value": pd.to_numeric(df["value"], errors="coerce"),
-            "visits": pd.to_numeric(df["visits"], errors="coerce"),
-        }
-    )
-    out = out.dropna(subset=["fen", "value", "visits"])
-    out["visits"] = out["visits"].astype("int64")
-    return out.loc[out["visits"] > 0].copy()
+    if "fen" not in df.columns or "visits" not in df.columns:
+        raise ValueError(f"{path} missing fen/visits")
+    if "wdl" not in df.columns and "value" not in df.columns:
+        raise ValueError(f"{path} missing wdl and value")
+    rows: list[dict] = []
+    for rec in df.to_dict(orient="records"):
+        visits = pd.to_numeric(rec.get("visits"), errors="coerce")
+        if pd.isna(visits) or int(visits) <= 0:
+            continue
+        rec["fen"] = str(rec["fen"])
+        rec["visits"] = int(visits)
+        wdl = wdl_from_row(rec)
+        payload = labeled_payload(rec["fen"], wdl, rec["visits"])
+        rows.append(
+            {
+                "fen": payload["fen"],
+                "w": float(payload["wdl"][0]),
+                "d": float(payload["wdl"][1]),
+                "l": float(payload["wdl"][2]),
+                "value": float(payload["value"]),
+                "visits": int(payload["visits"]),
+            }
+        )
+    return pd.DataFrame(rows)
 
 
 def merge_slices(frames: list[pd.DataFrame]) -> pd.DataFrame:
     if not frames:
-        return pd.DataFrame(columns=["fen", "value", "visits"])
+        return pd.DataFrame(columns=["fen", "wdl", "value", "visits"])
     df = pd.concat(frames, ignore_index=True)
     df["epd"] = df["fen"].map(epd_key)
-    df["wv"] = df["value"] * df["visits"].astype("float64")
-    # Keep the FEN from the slice row with the most visits (stable on ties).
+    vis = df["visits"].astype("float64")
+    df["ww"] = df["w"] * vis
+    df["wd"] = df["d"] * vis
+    df["wl"] = df["l"] * vis
     order = df.sort_values(["visits", "fen"], ascending=[False, True])
     fen_keep = order.drop_duplicates("epd", keep="first").set_index("epd")["fen"]
     grouped = df.groupby("epd", sort=False, as_index=True)
     visits = grouped["visits"].sum()
-    value = (grouped["wv"].sum() / visits).round(3)
-    out = pd.DataFrame(
-        {
-            "fen": fen_keep.reindex(visits.index),
-            "value": value.astype("float64"),
-            "visits": visits.astype("int64"),
-        }
-    )
+    w = grouped["ww"].sum() / visits
+    d = grouped["wd"].sum() / visits
+    l = grouped["wl"].sum() / visits
+    payloads = [
+        labeled_payload(str(fen_keep.loc[epd]), (float(w.loc[epd]), float(d.loc[epd]), float(l.loc[epd])), int(visits.loc[epd]))
+        for epd in visits.index
+    ]
+    out = pd.DataFrame(payloads)
     return out.sort_values(["visits", "fen"], ascending=[False, True]).reset_index(drop=True)
 
 
@@ -123,12 +137,13 @@ def write_join(df: pd.DataFrame, parquet_path: Path, *, also_json: bool = True) 
         payload = [
             {
                 "fen": str(row["fen"]),
+                "wdl": [float(x) for x in row["wdl"]],
                 "value": round(float(row["value"]), 3),
                 "visits": int(row["visits"]),
             }
             for row in df.to_dict(orient="records")
         ]
-        json_path.write_text(json.dumps(payload, indent=2) + "\n", encoding="utf-8")
+        json_path.write_text(dumps_labeled_json(payload), encoding="utf-8")
     return json_path
 
 
@@ -189,10 +204,11 @@ def main(argv: list[str] | None = None) -> int:
     visits_sum = int(joined["visits"].sum())
     meta = {
         "created_utc": datetime.now(timezone.utc).isoformat(),
-        "columns": ["fen", "value", "visits"],
+        "columns": ["fen", "wdl", "value", "visits"],
         "key": "EPD (fen fields 1–4); halfmove/fullmove ignored",
         "visits": "sum of visits over slices for the same EPD",
-        "value": "visit-weighted mean of slice teacher values, rounded to 3 decimal digits",
+        "wdl": "STM [W, D, L]; visit-weighted mean, renormalized",
+        "value": "White-POV ±(W-L) from the merged STM wdl, rounded to 3 decimal digits",
         "order": "visits descending, then fen ascending",
         "n_positions": int(len(joined)),
         "visits_sum": visits_sum,

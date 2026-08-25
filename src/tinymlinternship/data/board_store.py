@@ -9,6 +9,8 @@ from typing import Any, Mapping
 
 import chess
 
+from tinymlinternship.data.wdl import labeled_payload, stm_wdl_from_white_value
+
 BOARD_EVAL_DIR_NAME = "board_eval"
 DATASET_JSON_NAME = "dataset.json"
 # Per-source slim tables live in this subfolder; the join is the parquet in BOARD_EVAL_DIR_NAME.
@@ -246,7 +248,7 @@ def slim_fen_value_visits(
     *,
     labeled_only: bool = True,
 ) -> list[dict[str, Any]]:
-    """Rows with columns ``fen``, ``value`` (teacher), ``visits`` (observation count)."""
+    """Rows with ``fen``, STM ``wdl``, White-POV ``value``, ``visits``."""
     rows: list[dict[str, Any]] = []
     for rec in store.values():
         n_lab = int(rec.get("_value_n", 0))
@@ -255,11 +257,12 @@ def slim_fen_value_visits(
         visits = int(rec.get("visits", 0))
         if visits <= 0:
             visits = max(n_lab, 1)
-        rows.append(
-            {
-                "fen": str(rec["fen"]),
-                "value": float(rec["_value_sum"]) / n_lab,
-                "visits": visits,
-            }
+        value = float(rec["_value_sum"]) / n_lab
+        payload = labeled_payload(
+            str(rec["fen"]),
+            stm_wdl_from_white_value(str(rec["fen"]), value),
+            visits,
         )
+        payload["value"] = round(value, 3)
+        rows.append(payload)
     return rows
