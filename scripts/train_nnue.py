@@ -2,10 +2,12 @@
 """Train dual-POV DualHidden NNUE from per-slice ``features.npz`` DBs.
 
 Default split:
-  test  = fen_value_visits_lichess_db_standard_rated_2026-07_100000-101000
+  test  = fen_value_visits_lichess_db_standard_rated_2026-07_100000-105000_d80_draw5
   train = every other folder under data/processed/board_eval/fen_value_visits/
 
-No chess encoding at train time. Loss is unweighted MSE (visits omitted).
+No chess encoding at train time. Loss is unweighted soft cross-entropy on
+STM WDL (visits omitted). Re-encode slices after the WDL schema change
+(``--rebuild-cache`` or ``encode_slice_features.py --rebuild``).
 
     py -3.12 -u scripts/train_nnue.py --epochs 5 --smoke
     py -3.12 -u scripts/train_nnue.py --epochs 5 --fast
@@ -24,6 +26,7 @@ from typing import Any
 sys.path.insert(0, str(Path(__file__).parent.parent / "src"))
 
 import torch
+import torch.nn.functional as F
 from torch.utils.data import DataLoader
 
 from tinymlinternship.config.settings import NNUE_CHECKPOINTS_DIR, PROCESSED_DATA_DIR, PROJECT_ROOT
@@ -37,7 +40,7 @@ from tinymlinternship.nnue.dataset import (
 from tinymlinternship.nnue.model import DualHiddenNNUE
 
 DEFAULT_SLICES = PROCESSED_DATA_DIR / BOARD_EVAL_DIR_NAME / FEN_VALUE_VISITS_DIR_NAME
-DEFAULT_TEST_SLICE = "fen_value_visits_lichess_db_standard_rated_2026-07_100000-101000"
+DEFAULT_TEST_SLICE = "fen_value_visits_lichess_db_standard_rated_2026-07_100000-105000_d80_draw5"
 PLOTS_DIR = PROJECT_ROOT / "plots"
 
 
@@ -45,13 +48,15 @@ def _resolve(path: Path) -> Path:
     return path if path.is_absolute() else (PROJECT_ROOT / path).resolve()
 
 
-def mse_loss(
-    pred: torch.Tensor, target: torch.Tensor, weight: torch.Tensor
+def ce_loss(
+    logits: torch.Tensor, target: torch.Tensor, weight: torch.Tensor
 ) -> torch.Tensor:
-    sq = (pred - target).pow(2)
+    """Soft cross-entropy: ``-sum_k t_k log softmax(z)_k``, mean over the batch."""
+    log_p = F.log_softmax(logits, dim=-1)
+    nll = -(target * log_p).sum(dim=-1)
     w = weight.clamp(min=0.0)
     denom = w.sum().clamp(min=1e-8)
-    return (sq * w).sum() / denom
+    return (nll * w).sum() / denom
 
 
 @torch.no_grad()
@@ -61,12 +66,12 @@ def evaluate(
     device: torch.device,
 ) -> dict[str, float]:
     model.eval()
-    mse_sum = 0.0
+    ce_sum = 0.0
     mae_sum = 0.0
     w_sum = 0.0
     n = 0
     for batch in loader:
-        pred = model.forward_sparse(
+        logits = model.forward_sparse(
             batch["white_idx"].to(device),
             batch["white_mask"].to(device),
             batch["black_idx"].to(device),
@@ -76,13 +81,17 @@ def evaluate(
         target = batch["target"].to(device)
         weight = batch["weight"].to(device)
         w = weight.clamp(min=0.0)
-        err = pred - target
-        mse_sum += float((err.pow(2) * w).sum().item())
-        mae_sum += float((err.abs() * w).sum().item())
+        log_p = F.log_softmax(logits, dim=-1)
+        nll = -(target * log_p).sum(dim=-1)
+        probs = F.softmax(logits, dim=-1)
+        pred_v = probs[:, 0] - probs[:, 2]
+        tgt_v = target[:, 0] - target[:, 2]
+        ce_sum += float((nll * w).sum().item())
+        mae_sum += float(((pred_v - tgt_v).abs() * w).sum().item())
         w_sum += float(w.sum().item())
-        n += int(target.numel())
+        n += int(target.shape[0])
     return {
-        "mse": mse_sum / max(w_sum, 1e-8),
+        "ce": ce_sum / max(w_sum, 1e-8),
         "mae": mae_sum / max(w_sum, 1e-8),
         "n": n,
     }
@@ -99,14 +108,14 @@ def train_epoch(
     n_batches = 0
     for batch in loader:
         optimizer.zero_grad(set_to_none=True)
-        pred = model.forward_sparse(
+        logits = model.forward_sparse(
             batch["white_idx"].to(device),
             batch["white_mask"].to(device),
             batch["black_idx"].to(device),
             batch["black_mask"].to(device),
             batch["stm_white"].to(device),
         )
-        loss = mse_loss(pred, batch["target"].to(device), batch["weight"].to(device))
+        loss = ce_loss(logits, batch["target"].to(device), batch["weight"].to(device))
         loss.backward()
         optimizer.step()
         running += float(loss.item())
@@ -114,18 +123,18 @@ def train_epoch(
     return running / max(n_batches, 1)
 
 
-def plot_mse(history: list[dict[str, Any]], path: Path) -> None:
+def plot_ce(history: list[dict[str, Any]], path: Path) -> None:
     import matplotlib.pyplot as plt
 
     epochs = [row["epoch"] for row in history]
-    train_mse = [row["train_mse"] for row in history]
-    test_mse = [row["test_mse"] for row in history]
+    train_ce = [row["train_ce"] for row in history]
+    test_ce = [row["test_ce"] for row in history]
     fig, ax = plt.subplots(figsize=(7.2, 4.4))
-    ax.plot(epochs, train_mse, marker="o", label="train MSE")
-    ax.plot(epochs, test_mse, marker="s", label="test MSE")
+    ax.plot(epochs, train_ce, marker="o", label="train CE")
+    ax.plot(epochs, test_ce, marker="s", label="test CE")
     ax.set_xlabel("epoch")
-    ax.set_ylabel("MSE")
-    ax.set_title("Dual-POV NNUE (L1 64×2, L2 128)")
+    ax.set_ylabel("cross-entropy")
+    ax.set_title("Dual-POV NNUE WDL (L1 64×2, L2 128)")
     ax.set_xticks(epochs)
     ax.grid(True, alpha=0.3)
     ax.legend()
@@ -136,7 +145,9 @@ def plot_mse(history: list[dict[str, Any]], path: Path) -> None:
 
 
 def main(argv: list[str] | None = None) -> int:
-    parser = argparse.ArgumentParser(description="Train dual-hidden NNUE from slice feature DBs")
+    parser = argparse.ArgumentParser(
+        description="Train a single DualHidden NNUE (L1 64×2, L2 128, 3-way STM WDL, soft CE)"
+    )
     parser.add_argument("--slices-dir", type=Path, default=DEFAULT_SLICES)
     parser.add_argument(
         "--test-slice",
@@ -197,6 +208,11 @@ def main(argv: list[str] | None = None) -> int:
         return 1
     if not test_folder.is_dir():
         print(f"test slice not found: {test_folder}", file=sys.stderr)
+        names = [p.name for p in slices_dir.iterdir() if p.is_dir()] if slices_dir.is_dir() else []
+        if names:
+            print("available slices:", file=sys.stderr)
+            for name in names:
+                print(f"  {name}", file=sys.stderr)
         return 1
 
     batch_size = args.batch_size
@@ -300,13 +316,15 @@ def main(argv: list[str] | None = None) -> int:
         "fast": bool(args.fast),
         "device": str(device),
         "parameters": model.count_parameters(),
-        "loss": "unweighted MSE, target = White-POV value",
+        "architecture": "single DualHiddenNNUE (no expert buckets)",
+        "loss": "unweighted soft cross-entropy, target = STM WDL",
+        "output": "3 logits + softmax (W, D, L) from side to move",
         "compiled": bool(args.do_compile),
     }
     (run_dir / "config.json").write_text(json.dumps(config, indent=2), encoding="utf-8")
     print(
-        f"L1 {args.hidden_dim}×2 + L2 {args.hidden2_dim} | "
-        f"{model.count_parameters():,} params | "
+        f"single net | L1 {args.hidden_dim}×2 + L2 {args.hidden2_dim} + WDL softmax | "
+        f"{model.count_parameters():,} params | loss=soft CE | "
         f"train steps {n_batches}×{batch_size} | test {len(test_ds):,} | {device}"
     )
     print(f"Output: {run_dir}")
@@ -317,41 +335,42 @@ def main(argv: list[str] | None = None) -> int:
 
     for epoch in range(1, args.epochs + 1):
         t0 = time.perf_counter()
-        train_mse = train_epoch(model, train_loader, optimizer, device)
+        train_ce = train_epoch(model, train_loader, optimizer, device)
         metrics = evaluate(model, test_loader, device)
         elapsed = time.perf_counter() - t0
         row = {
             "epoch": epoch,
-            "train_mse": train_mse,
-            "test_mse": metrics["mse"],
+            "train_ce": train_ce,
+            "test_ce": metrics["ce"],
             "test_mae": metrics["mae"],
             "seconds": elapsed,
         }
         history.append(row)
         print(
-            f"epoch {epoch:02d} | train_mse={train_mse:.6f} | "
-            f"test_mse={metrics['mse']:.6f} | test_mae={metrics['mae']:.6f} | "
+            f"epoch {epoch:02d} | train_ce={train_ce:.6f} | "
+            f"test_ce={metrics['ce']:.6f} | test_mae={metrics['mae']:.6f} | "
             f"{elapsed:.1f}s"
         )
         payload = {
             "model_state_dict": model.state_dict(),
-            "architecture": "dual_hidden",
+            "architecture": "dual_hidden_wdl",
             "hidden_dim": args.hidden_dim,
             "hidden2_dim": args.hidden2_dim,
-            "test_mse": metrics["mse"],
+            "n_outputs": 3,
+            "test_ce": metrics["ce"],
             "epoch": epoch,
         }
-        if metrics["mse"] < best_test:
-            best_test = metrics["mse"]
+        if metrics["ce"] < best_test:
+            best_test = metrics["ce"]
             torch.save(payload, best_path)
         torch.save(payload, run_dir / "last.pt")
 
     (run_dir / "history.json").write_text(json.dumps(history, indent=2), encoding="utf-8")
-    plot_path = _resolve(args.plot) if args.plot else (PLOTS_DIR / f"{run_name}_mse.png")
-    plot_mse(history, plot_path)
-    (run_dir / "mse.png").write_bytes(plot_path.read_bytes())
-    print(f"Best test_mse={best_test:.6f} → {best_path}")
-    print(f"MSE plot → {plot_path}")
+    plot_path = _resolve(args.plot) if args.plot else (PLOTS_DIR / f"{run_name}_ce.png")
+    plot_ce(history, plot_path)
+    (run_dir / "ce.png").write_bytes(plot_path.read_bytes())
+    print(f"Best test_ce={best_test:.6f} → {best_path}")
+    print(f"CE plot → {plot_path}")
     return 0
 
 
