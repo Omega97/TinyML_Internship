@@ -5,11 +5,12 @@ from tinymlinternship.nnue.dataset import (
     ensure_slice_feature_db,
     epd_key,
 )
-from tinymlinternship.nnue.model import DualHiddenNNUE, LinearWDLNNUE, crelu
+from tinymlinternship.nnue.model import DualHiddenNNUE, LinearWDLNNUE, MediumWDLNNUE, crelu
 
 __all__ = [
     "DualHiddenNNUE",
     "LinearWDLNNUE",
+    "MediumWDLNNUE",
     "FenValueVisitsDataset",
     "collate_sparse",
     "crelu",

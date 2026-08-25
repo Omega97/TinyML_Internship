@@ -169,3 +169,81 @@ class LinearWDLNNUE(nn.Module):
 
     def count_parameters(self) -> int:
         return sum(p.numel() for p in self.parameters() if p.requires_grad)
+
+
+class MediumWDLNNUE(nn.Module):
+    """One hidden layer: concat ``[STM ‖ opp]`` ``2×844 → H → 3`` logits, CReLU, softmax STM WDL."""
+
+    architecture = "medium_wdl"
+    n_outputs = 3
+
+    def __init__(
+        self,
+        feature_dim: int = FEATURE_DIM,
+        hidden_dim: int = 20,
+        crelu_clip: float = 127.0,
+    ) -> None:
+        super().__init__()
+        self.feature_dim = feature_dim
+        self.hidden_dim = hidden_dim
+        self.crelu_clip = crelu_clip
+        self.l1 = nn.Linear(feature_dim * 2, hidden_dim, bias=True)
+        self.head = nn.Linear(hidden_dim, 3, bias=True)
+        self.softmax = nn.Softmax(dim=-1)
+        nn.init.kaiming_uniform_(self.l1.weight, a=5**0.5)
+        nn.init.zeros_(self.l1.bias)
+        nn.init.kaiming_uniform_(self.head.weight, a=5**0.5)
+        nn.init.zeros_(self.head.bias)
+
+    def _stm_opp(
+        self,
+        white: torch.Tensor,
+        black: torch.Tensor,
+        stm_white: torch.Tensor,
+    ) -> tuple[torch.Tensor, torch.Tensor]:
+        mask = stm_white.unsqueeze(1)
+        stm = torch.where(mask, white, black)
+        opp = torch.where(mask, black, white)
+        return stm, opp
+
+    def forward(
+        self,
+        white_features: torch.Tensor,
+        black_features: torch.Tensor,
+        stm_white: torch.Tensor,
+    ) -> torch.Tensor:
+        stm, opp = self._stm_opp(white_features, black_features, stm_white)
+        hidden = crelu(self.l1(torch.cat([stm, opp], dim=1)), self.crelu_clip)
+        return self.head(hidden)
+
+    def _sparse_dot(self, indices: torch.Tensor, mask: torch.Tensor, weight_t: torch.Tensor) -> torch.Tensor:
+        safe = indices.long().clamp(min=0, max=self.feature_dim - 1)
+        gathered = F.embedding(safe, weight_t)
+        gathered = gathered * mask.unsqueeze(-1).to(dtype=gathered.dtype)
+        return gathered.sum(dim=1)
+
+    def forward_sparse(
+        self,
+        white_idx: torch.Tensor,
+        white_mask: torch.Tensor,
+        black_idx: torch.Tensor,
+        black_mask: torch.Tensor,
+        stm_white: torch.Tensor,
+    ) -> torch.Tensor:
+        stm_idx, opp_idx = self._stm_opp(white_idx, black_idx, stm_white)
+        stm_mask, opp_mask = self._stm_opp(white_mask, black_mask, stm_white)
+        w = self.l1.weight
+        stm_h = self._sparse_dot(stm_idx, stm_mask, w[:, : self.feature_dim].t())
+        opp_h = self._sparse_dot(opp_idx, opp_mask, w[:, self.feature_dim :].t())
+        hidden = crelu(stm_h + opp_h + self.l1.bias, self.crelu_clip)
+        return self.head(hidden)
+
+    def probabilities(self, logits: torch.Tensor) -> torch.Tensor:
+        return self.softmax(logits)
+
+    def stm_value(self, logits: torch.Tensor) -> torch.Tensor:
+        probs = self.probabilities(logits)
+        return probs[..., 0] - probs[..., 2]
+
+    def count_parameters(self) -> int:
+        return sum(p.numel() for p in self.parameters() if p.requires_grad)

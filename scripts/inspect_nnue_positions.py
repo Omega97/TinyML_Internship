@@ -1,8 +1,8 @@
 #!/usr/bin/env python3
-"""Rank test-slice positions by WDL cross-entropy for a named DualHidden checkpoint.
+"""Rank test-slice positions by WDL cross-entropy for a DualHidden or linear checkpoint.
 
-Prints the 10 lowest-CE (best) and 10 highest-CE (worst) FENs with teacher
-STM ``wdl`` and model ``hat wdl``.
+Prints the lowest-CE (best) and highest-CE (worst) FENs with teacher STM
+``wdl`` and model ``hat wdl``. Optional ``--sample`` ranks a random subset.
 
 The slice JSON is aligned with ``features.npz`` (same unique-EPD order as encode).
 
@@ -10,6 +10,7 @@ Examples::
 
     py -3.12 -u scripts/inspect_nnue_positions.py dual_W64_H128
     py -3.12 -u scripts/inspect_nnue_positions.py dual_W64_H128 --ckpt best --n 10
+    py -3.12 -u scripts/inspect_nnue_positions.py linear_wdl_smoke --ckpt best --n 20 --sample 1000 --slice fen_value_visits_lichess_db_standard_rated_2026-07_0-5000_d90
 """
 
 from __future__ import annotations
@@ -36,7 +37,7 @@ from tinymlinternship.nnue.dataset import (
     load_slice_feature_db,
     slice_source_json,
 )
-from tinymlinternship.nnue.model import DualHiddenNNUE
+from tinymlinternship.nnue.model import DualHiddenNNUE, LinearWDLNNUE, MediumWDLNNUE
 
 DEFAULT_SLICES = PROCESSED_DATA_DIR / BOARD_EVAL_DIR_NAME / FEN_VALUE_VISITS_DIR_NAME
 DEFAULT_TEST_SLICE = "fen_value_visits_lichess_db_standard_rated_2026-07_100000-105000_d80_draw5"
@@ -85,12 +86,18 @@ def aligned_fens(folder: Path) -> list[str]:
     return df["fen"].astype(str).tolist()
 
 
-def load_model(path: Path) -> DualHiddenNNUE:
+def load_model(path: Path) -> torch.nn.Module:
     payload = torch.load(path, map_location="cpu", weights_only=False)
-    model = DualHiddenNNUE(
-        hidden_dim=int(payload.get("hidden_dim", 64)),
-        hidden2_dim=int(payload.get("hidden2_dim", 128)),
-    )
+    architecture = str(payload.get("architecture", "dual_hidden_wdl"))
+    if architecture == LinearWDLNNUE.architecture:
+        model: torch.nn.Module = LinearWDLNNUE()
+    elif architecture == MediumWDLNNUE.architecture:
+        model = MediumWDLNNUE(hidden_dim=int(payload.get("hidden_dim", 20)))
+    else:
+        model = DualHiddenNNUE(
+            hidden_dim=int(payload.get("hidden_dim", 64)),
+            hidden2_dim=int(payload.get("hidden2_dim", 128)),
+        )
     state = payload["model_state_dict"]
     state = {key.replace("_orig_mod.", ""): tensor for key, tensor in state.items()}
     model.load_state_dict(state)
@@ -98,7 +105,7 @@ def load_model(path: Path) -> DualHiddenNNUE:
     return model
 
 
-def predict(model: DualHiddenNNUE, folder: Path) -> np.ndarray:
+def predict(model: torch.nn.Module, folder: Path) -> np.ndarray:
     dataset = FenValueVisitsDataset(folder, progress=False)
     loader = DataLoader(dataset, batch_size=2048, shuffle=False, collate_fn=collate_sparse)
     chunks: list[torch.Tensor] = []
@@ -152,6 +159,25 @@ def rank_rows(
     return pack(best_idx), pack(worst_idx)
 
 
+def sample_subset(
+    fens: list[str],
+    teacher: np.ndarray,
+    pred: np.ndarray,
+    *,
+    n: int,
+    seed: int,
+) -> tuple[list[str], np.ndarray, np.ndarray]:
+    """Draw ``n`` positions without replacement (full slice if ``n >= N``)."""
+    n_all = len(fens)
+    take = min(int(n), n_all)
+    if take <= 0:
+        raise ValueError("--sample must be > 0")
+    rng = np.random.default_rng(int(seed))
+    idx = rng.choice(n_all, size=take, replace=False)
+    picked = [fens[int(i)] for i in idx]
+    return picked, teacher[idx], pred[idx]
+
+
 def _print_block(title: str, rows: list[dict]) -> None:
     print(title)
     print(
@@ -169,7 +195,7 @@ def _print_block(title: str, rows: list[dict]) -> None:
 
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(
-        description="Top-N best and worst DualHidden predictions on a slice"
+        description="Top-N best and worst WDL predictions on a slice"
     )
     parser.add_argument(
         "model",
@@ -177,6 +203,13 @@ def main(argv: list[str] | None = None) -> int:
     )
     parser.add_argument("--ckpt", choices=("last", "best"), default="last")
     parser.add_argument("--n", type=int, default=10, help="How many FENs per list")
+    parser.add_argument(
+        "--sample",
+        type=int,
+        default=0,
+        help="Rank a random subset of this many positions (0 = full slice)",
+    )
+    parser.add_argument("--seed", type=int, default=0, help="RNG seed for --sample")
     parser.add_argument(
         "--slice",
         default=DEFAULT_TEST_SLICE,
@@ -211,6 +244,15 @@ def main(argv: list[str] | None = None) -> int:
         print(f"length mismatch: {len(fens)} FENs vs {len(pred)} preds", file=sys.stderr)
         return 1
 
+    n_all = len(fens)
+    if args.sample > 0:
+        fens, teacher, pred = sample_subset(
+            fens, teacher, pred, n=args.sample, seed=args.seed
+        )
+        print(f"sample {len(fens):,} of {n_all:,} (seed={args.seed})")
+    else:
+        print(f"rows   {n_all:,} (full slice)")
+
     best, worst = rank_rows(fens, teacher, pred, n=args.n)
     print()
     _print_block(f"Top {len(best)} best  (lowest CE)", best)
@@ -221,7 +263,18 @@ def main(argv: list[str] | None = None) -> int:
         out = _resolve(args.json)
         out.parent.mkdir(parents=True, exist_ok=True)
         out.write_text(
-            json.dumps({"checkpoint": str(ckpt_path), "slice": args.slice, "best": best, "worst": worst}, indent=2)
+            json.dumps(
+                {
+                    "checkpoint": str(ckpt_path),
+                    "slice": args.slice,
+                    "sample": int(args.sample),
+                    "seed": int(args.seed),
+                    "n_ranked": len(fens),
+                    "best": best,
+                    "worst": worst,
+                },
+                indent=2,
+            )
             + "\n",
             encoding="utf-8",
         )

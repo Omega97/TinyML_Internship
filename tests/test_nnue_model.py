@@ -10,7 +10,7 @@ import numpy as np
 
 from tinymlinternship.features import FEATURE_DIM, encode_dual
 from tinymlinternship.nnue.dataset import FenValueVisitsDataset, _pad_indices
-from tinymlinternship.nnue.model import DualHiddenNNUE, LinearWDLNNUE
+from tinymlinternship.nnue.model import DualHiddenNNUE, LinearWDLNNUE, MediumWDLNNUE
 
 
 def _dense_from_indices(indices: list[int]) -> torch.Tensor:
@@ -61,6 +61,36 @@ def test_linear_wdl_sparse_matches_dense_and_softmax():
     assert torch.allclose(dense, sparse, atol=1e-5)
     probs = model.probabilities(dense)
     assert torch.allclose(probs.sum(dim=-1), torch.ones(1), atol=1e-6)
+
+
+def test_medium_wdl_sparse_matches_dense_and_softmax():
+    torch.manual_seed(0)
+    model = MediumWDLNNUE(hidden_dim=20)
+    assert model.count_parameters() == 844 * 2 * 20 + 20 + 20 * 3 + 3
+    white_idx, black_idx = encode_dual(chess.Board())
+    w_pad, w_n = _pad_indices(white_idx, 128)
+    b_pad, b_n = _pad_indices(black_idx, 128)
+    w_mask = np.arange(128) < w_n
+    b_mask = np.arange(128) < b_n
+    stm = torch.tensor([True])
+    dense = model(
+        _dense_from_indices(white_idx).unsqueeze(0),
+        _dense_from_indices(black_idx).unsqueeze(0),
+        stm,
+    )
+    sparse = model.forward_sparse(
+        torch.from_numpy(w_pad).unsqueeze(0),
+        torch.from_numpy(w_mask).unsqueeze(0),
+        torch.from_numpy(b_pad).unsqueeze(0),
+        torch.from_numpy(b_mask).unsqueeze(0),
+        stm,
+    )
+    assert dense.shape == (1, 3)
+    assert torch.allclose(dense, sparse, atol=1e-5)
+    probs = model.probabilities(dense)
+    assert torch.allclose(probs.sum(dim=-1), torch.ones(1), atol=1e-6)
+    v = model.stm_value(dense)
+    assert -1.0 <= v.item() <= 1.0
 
 
 def test_soft_ce_loss_on_wdl_batch():
@@ -330,4 +360,26 @@ def test_rank_rows_best_and_worst():
     best, worst = mod.rank_rows(fens, teacher, pred, n=2)
     assert [row["fen"] for row in best] == ["a", "b"]
     assert [row["fen"] for row in worst] == ["d", "c"]
+
+
+def test_inspect_sample_subset_is_deterministic():
+    import importlib.util
+    from pathlib import Path
+
+    import numpy as np
+
+    path = Path(__file__).parent.parent / "scripts" / "inspect_nnue_positions.py"
+    spec = importlib.util.spec_from_file_location("inspect_nnue_positions", path)
+    assert spec is not None and spec.loader is not None
+    mod = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(mod)
+    fens = [f"f{i}" for i in range(20)]
+    teacher = np.eye(3, dtype=np.float64)[np.arange(20) % 3]
+    pred = teacher.copy()
+    a = mod.sample_subset(fens, teacher, pred, n=5, seed=0)
+    b = mod.sample_subset(fens, teacher, pred, n=5, seed=0)
+    c = mod.sample_subset(fens, teacher, pred, n=5, seed=1)
+    assert a[0] == b[0]
+    assert a[0] != c[0]
+    assert len(a[0]) == 5
 
