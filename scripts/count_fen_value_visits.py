@@ -30,7 +30,9 @@ sys.path.insert(0, str(_SCRIPTS))
 from tinymlinternship.config.settings import PROCESSED_DATA_DIR, PROJECT_ROOT
 from tinymlinternship.data.board_store import BOARD_EVAL_DIR_NAME, FEN_VALUE_VISITS_DIR_NAME
 
-from join_fen_value_visits import DEFAULT_SOURCES_DIR, discover_slices, epd_key, load_slice
+import pandas as pd
+
+from join_fen_value_visits import DEFAULT_SOURCES_DIR, discover_slices, epd_key
 
 DEFAULT_DIR = PROCESSED_DATA_DIR / BOARD_EVAL_DIR_NAME / FEN_VALUE_VISITS_DIR_NAME
 
@@ -46,6 +48,22 @@ def _rel(path: Path) -> str:
         return str(path)
 
 
+def load_count_table(path: Path) -> pd.DataFrame:
+    """Fen + visits only (no WDL conversion). Parquet or JSON."""
+    if path.suffix.lower() == ".json":
+        df = pd.read_json(path)
+    else:
+        df = pd.read_parquet(path)
+    if "fen" not in df.columns:
+        raise ValueError(f"{path} missing column fen")
+    out = pd.DataFrame({"fen": df["fen"].astype(str)})
+    if "visits" in df.columns:
+        out["visits"] = pd.to_numeric(df["visits"], errors="coerce").fillna(1).astype("int64")
+    else:
+        out["visits"] = 1
+    return out.loc[out["visits"] > 0].copy()
+
+
 def count_slices(paths: list[Path]) -> dict:
     """Load each slice once; accumulate row/visit totals and a global EPD set."""
     seen: set[str] = set()
@@ -53,7 +71,7 @@ def count_slices(paths: list[Path]) -> dict:
     total_rows = 0
     visits_sum = 0
     for path in paths:
-        df = load_slice(path)
+        df = load_count_table(path)
         keys = df["fen"].map(epd_key)
         n_rows = int(len(df))
         n_unique = int(keys.nunique())
