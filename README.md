@@ -135,3 +135,13 @@ The two accumulator vectors (`h_own` and `h_opp`) are **reordered** before being
 The Concatenated Rectified Linear Unit (CReLU) is an activation function for deep learning that doubles the output channel dimension by applying both positive and negative ReLU transformations: $f(x) = [\text{ReLU}(x), \text{ReLU}(-x)]$. It captures opposite-phase features in early convolutional layers. 
 
 ---
+
+## Training
+
+Goal §2 is in progress: STM WDL student, soft cross-entropy, per-slice `features.npz`. Commands and split: [demo/demo-training.md](demo/demo-training.md).
+
+Linear baseline (no hidden layers, `844×2 → 3` softmax) on the live dump, test = `…_0-5000_d90`:
+
+<div align="center">
+    <img src="plots/linear_wdl_ce.png" width="600" alt="Linear WDL train/test cross-entropy">
+</div>
