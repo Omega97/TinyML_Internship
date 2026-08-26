@@ -154,6 +154,26 @@ def log_epoch(epoch: int, train_ce: float, test_ce: float, seconds: float) -> No
     )
 
 
+def make_linear_lr_scheduler(
+    optimizer: torch.optim.Optimizer,
+    *,
+    lr: float,
+    lr_end: float | None,
+    epochs: int,
+) -> object | None:
+    """Linear decay from ``lr`` to ``lr_end`` over ``epochs``. ``lr_end is None`` → constant."""
+    if lr_end is None or epochs < 1 or lr <= 0.0 or lr_end <= 0.0:
+        return None
+    if abs(lr_end - lr) / lr < 1e-12:
+        return None
+    return torch.optim.lr_scheduler.LinearLR(
+        optimizer,
+        start_factor=1.0,
+        end_factor=float(lr_end) / float(lr),
+        total_iters=int(epochs),
+    )
+
+
 def eval_untrained(
     model: torch.nn.Module,
     train_loader: DataLoader,
@@ -327,7 +347,18 @@ def main(argv: list[str] | None = None) -> int:
         action="store_true",
         help="Faster run: batch-size 256 and 40 mixed batches/epoch unless those flags are set",
     )
-    parser.add_argument("--lr", type=float, default=1e-3)
+    parser.add_argument(
+        "--lr",
+        type=float,
+        default=1e-2,
+        help="Initial Adam learning rate (default: 0.01)",
+    )
+    parser.add_argument(
+        "--lr-end",
+        type=float,
+        default=None,
+        help="Final learning rate after linear decay over --epochs (default: same as --lr, constant)",
+    )
     parser.add_argument("--max-train", type=int, default=0, help="0 = all train rows")
     parser.add_argument(
         "--smoke",
@@ -504,7 +535,16 @@ def main(argv: list[str] | None = None) -> int:
         print("Compiling model with torch.compile ...")
         model = torch.compile(model, mode="reduce-overhead")
 
+    if args.lr <= 0.0:
+        print("--lr must be > 0", file=sys.stderr)
+        return 1
+    if args.lr_end is not None and args.lr_end <= 0.0:
+        print("--lr-end must be > 0", file=sys.stderr)
+        return 1
     optimizer = torch.optim.Adam(model.parameters(), lr=args.lr)
+    scheduler = make_linear_lr_scheduler(
+        optimizer, lr=args.lr, lr_end=args.lr_end, epochs=args.epochs
+    )
 
     stamp = time.strftime("%Y%m%d_%H%M%S", time.gmtime())
     run_name = args.run_name or (
@@ -533,6 +573,8 @@ def main(argv: list[str] | None = None) -> int:
         "batches_per_epoch": n_batches,
         "sample": "each batch: batch_size draws, uniform over slices then rows",
         "lr": args.lr,
+        "lr_end": args.lr if args.lr_end is None else args.lr_end,
+        "lr_schedule": "linear" if scheduler is not None else "constant",
         "max_train": max_train,
         "smoke": bool(args.smoke),
         "fast": bool(args.fast),
@@ -578,6 +620,8 @@ def main(argv: list[str] | None = None) -> int:
         }
         history.append(row)
         log_epoch(epoch, train_ce, metrics["ce"], elapsed)
+        if scheduler is not None:
+            scheduler.step()
         payload = {
             "model_state_dict": model.state_dict(),
             "architecture": "dual_hidden_wdl",

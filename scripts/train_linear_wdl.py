@@ -60,7 +60,18 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--batch-size", type=int, default=2048)
     parser.add_argument("--batches-per-epoch", type=int, default=0)
     parser.add_argument("--fast", action="store_true")
-    parser.add_argument("--lr", type=float, default=1e-3)
+    parser.add_argument(
+        "--lr",
+        type=float,
+        default=1e-2,
+        help="Initial Adam learning rate (default: 0.01)",
+    )
+    parser.add_argument(
+        "--lr-end",
+        type=float,
+        default=None,
+        help="Final learning rate after linear decay over --epochs (default: same as --lr, constant)",
+    )
     parser.add_argument("--max-train", type=int, default=0)
     parser.add_argument("--smoke", action="store_true")
     parser.add_argument(
@@ -203,7 +214,16 @@ def main(argv: list[str] | None = None) -> int:
     if args.do_compile and hasattr(torch, "compile"):
         print("Compiling model with torch.compile ...")
         model = torch.compile(model, mode="reduce-overhead")
+    if args.lr <= 0.0:
+        print("--lr must be > 0", file=sys.stderr)
+        return 1
+    if args.lr_end is not None and args.lr_end <= 0.0:
+        print("--lr-end must be > 0", file=sys.stderr)
+        return 1
     optimizer = torch.optim.Adam(model.parameters(), lr=args.lr)
+    scheduler = tn.make_linear_lr_scheduler(
+        optimizer, lr=args.lr, lr_end=args.lr_end, epochs=args.epochs
+    )
 
     stamp = time.strftime("%Y%m%d_%H%M%S", time.gmtime())
     run_name = args.run_name or (
@@ -230,6 +250,8 @@ def main(argv: list[str] | None = None) -> int:
         "batch_size": batch_size,
         "batches_per_epoch": n_batches,
         "lr": args.lr,
+        "lr_end": args.lr if args.lr_end is None else args.lr_end,
+        "lr_schedule": "linear" if scheduler is not None else "constant",
         "max_train": max_train,
         "smoke": bool(args.smoke),
         "fast": bool(args.fast),
@@ -273,6 +295,8 @@ def main(argv: list[str] | None = None) -> int:
         }
         history.append(row)
         tn.log_epoch(epoch, train_ce, metrics["ce"], elapsed)
+        if scheduler is not None:
+            scheduler.step()
         payload = {
             "model_state_dict": model.state_dict(),
             "architecture": "linear_wdl",

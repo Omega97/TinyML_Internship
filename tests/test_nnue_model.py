@@ -475,6 +475,29 @@ def test_packed_train_val_subset_uses_mixed_slice_keys():
     assert list(again.indices) == list(sub.indices)
 
 
+def test_linear_lr_scheduler_reaches_lr_end():
+    import importlib.util
+    from pathlib import Path
+
+    import torch
+
+    path = Path(__file__).parent.parent / "scripts" / "train_nnue.py"
+    spec = importlib.util.spec_from_file_location("train_nnue", path)
+    assert spec is not None and spec.loader is not None
+    train = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(train)
+    param = torch.nn.Parameter(torch.zeros(1))
+    opt = torch.optim.Adam([param], lr=0.01)
+    sched = train.make_linear_lr_scheduler(opt, lr=0.01, lr_end=0.001, epochs=10)
+    assert sched is not None
+    assert opt.param_groups[0]["lr"] == pytest.approx(0.01)
+    for _ in range(10):
+        sched.step()
+    assert opt.param_groups[0]["lr"] == pytest.approx(0.001, rel=1e-5)
+    assert train.make_linear_lr_scheduler(opt, lr=0.01, lr_end=0.01, epochs=10) is None
+    assert train.make_linear_lr_scheduler(opt, lr=0.01, lr_end=None, epochs=10) is None
+
+
 def test_log_epoch_train_and_test_ce_only(capsys):
     import importlib.util
     from pathlib import Path
