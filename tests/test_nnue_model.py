@@ -362,6 +362,22 @@ def test_rank_rows_best_and_worst():
     assert [row["fen"] for row in worst] == ["d", "c"]
 
 
+def test_resolve_plot_path_uses_run_name():
+    import importlib.util
+    from pathlib import Path
+
+    path = Path(__file__).parent.parent / "scripts" / "train_nnue.py"
+    spec = importlib.util.spec_from_file_location("train_nnue", path)
+    assert spec is not None and spec.loader is not None
+    train = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(train)
+    plots = Path("plots")
+    assert train.resolve_plot_path(None, "medium_h50_fast", plots) == plots / "medium_h50_fast_ce.png"
+    shared = Path("plots/medium_wdl_ce.png")
+    out = train.resolve_plot_path(shared, "medium_h50_fast", plots)
+    assert out == train._resolve(shared).with_name("medium_h50_fast_ce.png")
+
+
 def test_maybe_subset_dataset_is_fixed_and_smaller():
     import importlib.util
     from pathlib import Path
@@ -391,6 +407,72 @@ def test_maybe_subset_dataset_is_fixed_and_smaller():
     assert list(a.indices) != list(c.indices)
     assert train.maybe_subset_dataset(ds, 0) is ds
     assert train.maybe_subset_dataset(ds, 1000) is ds
+
+
+def test_packed_train_val_subset_uses_mixed_slice_keys():
+    import importlib.util
+    from pathlib import Path
+
+    from torch.utils.data import Subset
+
+    from tinymlinternship.nnue.dataset import MixedSliceDataset
+
+    path = Path(__file__).parent.parent / "scripts" / "train_nnue.py"
+    spec = importlib.util.spec_from_file_location("train_nnue", path)
+    assert spec is not None and spec.loader is not None
+    train = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(train)
+
+    class _Tiny:
+        def __init__(self, tag: str, n: int) -> None:
+            self.tag = tag
+            self.n = n
+
+        def __len__(self) -> int:
+            return self.n
+
+        def __getitem__(self, i: int) -> dict[str, object]:
+            return {"tag": self.tag, "row": int(i)}
+
+    mixed = MixedSliceDataset([_Tiny("a", 3), _Tiny("b", 5)])
+    assert train.maybe_subset_train_pool(mixed, 0) is None
+    sub = train.maybe_subset_train_pool(mixed, 4, seed=42)
+    assert isinstance(sub, Subset)
+    assert len(sub) == 4
+    packed = train.packed_subset_indices([3, 5], 4, 42)
+    assert packed == list(sub.indices)
+    seen = set()
+    for key in packed:
+        sid = key >> 32
+        row = key & 0xFFFFFFFF
+        assert sid in (0, 1)
+        assert 0 <= row < (3 if sid == 0 else 5)
+        seen.add((sid, row))
+        item = mixed[key]
+        assert item["tag"] == ("a" if sid == 0 else "b")
+        assert item["row"] == row
+    assert len(seen) == 4
+    again = train.maybe_subset_train_pool(mixed, 4, seed=42)
+    assert list(again.indices) == list(sub.indices)
+
+
+def test_log_epoch_optional_train_val_ce(capsys):
+    import importlib.util
+    from pathlib import Path
+
+    path = Path(__file__).parent.parent / "scripts" / "train_nnue.py"
+    spec = importlib.util.spec_from_file_location("train_nnue", path)
+    assert spec is not None and spec.loader is not None
+    train = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(train)
+    train.log_epoch(1, 1.0, 0.9, 0.5, 1.2)
+    out = capsys.readouterr().out
+    assert "train_ce=1.000000" in out
+    assert "train_val_ce" not in out
+    train.log_epoch(2, 0.8, 0.7, 0.4, 1.0, train_val_ce=0.75)
+    out = capsys.readouterr().out
+    assert "train_val_ce=0.750000" in out
+    assert "test_ce=0.700000" in out
 
 
 def test_inspect_sample_subset_is_deterministic():

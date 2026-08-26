@@ -17,6 +17,7 @@ STM WDL (visits omitted). Re-encode slices after the WDL schema change
 from __future__ import annotations
 
 import argparse
+import bisect
 import json
 import sys
 import time
@@ -46,6 +47,17 @@ PLOTS_DIR = PROJECT_ROOT / "plots"
 
 def _resolve(path: Path) -> Path:
     return path if path.is_absolute() else (PROJECT_ROOT / path).resolve()
+
+
+def resolve_plot_path(plot: Path | None, run_name: str, plots_dir: Path) -> Path:
+    """Always ``{run_name}_ce.png``. ``--plot`` only picks the directory."""
+    filename = f"{run_name}_ce.png"
+    if plot is None:
+        return plots_dir / filename
+    path = _resolve(plot)
+    if path.suffix.lower() in {".png", ".jpg", ".jpeg", ".pdf", ".svg"}:
+        return path.with_name(filename)
+    return path / filename
 
 
 def ce_loss(
@@ -124,13 +136,18 @@ def train_epoch(
 
 
 def log_epoch(
-    epoch: int, train_ce: float, test_ce: float, test_mae: float, seconds: float
+    epoch: int,
+    train_ce: float,
+    test_ce: float,
+    test_mae: float,
+    seconds: float,
+    train_val_ce: float | None = None,
 ) -> None:
-    print(
-        f"epoch {epoch:02d} | train_ce={train_ce:.6f} | "
-        f"test_ce={test_ce:.6f} | test_mae={test_mae:.6f} | "
-        f"{seconds:.1f}s"
-    )
+    msg = f"epoch {epoch:02d} | train_ce={train_ce:.6f}"
+    if train_val_ce is not None:
+        msg += f" | train_val_ce={train_val_ce:.6f}"
+    msg += f" | test_ce={test_ce:.6f} | test_mae={test_mae:.6f} | {seconds:.1f}s"
+    print(msg)
 
 
 def eval_untrained(
@@ -138,21 +155,57 @@ def eval_untrained(
     train_loader: DataLoader,
     test_loader: DataLoader,
     device: torch.device,
+    train_val_loader: DataLoader | None = None,
 ) -> dict[str, Any]:
     """Epoch 00: CE/MAE on random weights (no optimizer step)."""
     t0 = time.perf_counter()
-    train_m = evaluate(model, train_loader, device)
+    if train_val_loader is not None:
+        train_m = evaluate(model, train_val_loader, device)
+        train_val_ce: float | None = train_m["ce"]
+    else:
+        train_m = evaluate(model, train_loader, device)
+        train_val_ce = None
     test_m = evaluate(model, test_loader, device)
     elapsed = time.perf_counter() - t0
     row = {
         "epoch": 0,
         "train_ce": train_m["ce"],
+        "train_val_ce": train_val_ce,
         "test_ce": test_m["ce"],
         "test_mae": test_m["mae"],
         "seconds": elapsed,
     }
-    log_epoch(0, row["train_ce"], row["test_ce"], row["test_mae"], elapsed)
+    log_epoch(
+        0,
+        row["train_ce"],
+        row["test_ce"],
+        row["test_mae"],
+        elapsed,
+        train_val_ce=train_val_ce,
+    )
     return row
+
+
+def packed_subset_indices(sizes: list[int], take: int, seed: int) -> list[int]:
+    """Linear 0..N-1 → MixedSliceDataset packed ``slice << 32 | row``."""
+    n = int(sum(sizes))
+    take = min(int(take), n)
+    if take <= 0:
+        return []
+    g = torch.Generator()
+    g.manual_seed(int(seed))
+    linear = torch.randperm(n, generator=g)[:take].tolist()
+    offsets: list[int] = []
+    acc = 0
+    for size in sizes:
+        offsets.append(acc)
+        acc += int(size)
+    packed: list[int] = []
+    for i in linear:
+        sid = bisect.bisect_right(offsets, i) - 1
+        row = i - offsets[sid]
+        packed.append((sid << 32) | row)
+    return packed
 
 
 def maybe_subset_dataset(dataset, size: int, seed: int = 0):
@@ -167,21 +220,64 @@ def maybe_subset_dataset(dataset, size: int, seed: int = 0):
     return Subset(dataset, idx)
 
 
+def maybe_subset_train_pool(dataset, size: int, seed: int = 42):
+    """Train-val subset. MixedSliceDataset needs packed indices, not 0..N-1.
+
+    ``size <= 0`` → ``None`` (skip frozen train-val eval).
+    """
+    take = int(size)
+    if take <= 0:
+        return None
+    if isinstance(dataset, MixedSliceDataset):
+        n = len(dataset)
+        idx = packed_subset_indices(dataset.sizes, min(take, n), seed)
+        return Subset(dataset, idx)
+    return maybe_subset_dataset(dataset, take, seed)
+
+
+def clone_state(model: torch.nn.Module) -> dict[str, torch.Tensor]:
+    return {key: tensor.detach().cpu().clone() for key, tensor in model.state_dict().items()}
+
+
+def warn_if_run_dir_busy(run_dir: Path) -> None:
+    if (run_dir / "best.pt").is_file() or (run_dir / "last.pt").is_file():
+        print(
+            f"warning: {run_dir} already has checkpoints; "
+            "parallel jobs with the same --run-name will overwrite best.pt / last.pt / plots",
+            file=sys.stderr,
+        )
+
+
 def report_full_test(
     model: torch.nn.Module,
     best_path: Path,
     full_loader: DataLoader,
     device: torch.device,
+    state_dict: dict[str, torch.Tensor] | None = None,
 ) -> dict[str, float]:
-    """Reload ``best.pt`` and evaluate on the full test set (paper numbers)."""
-    payload = torch.load(best_path, map_location=device, weights_only=False)
-    state = payload["model_state_dict"]
-    state = {key.replace("_orig_mod.", ""): tensor for key, tensor in state.items()}
+    """Score the full test set with this run's best weights (in-memory, else ``best.pt``)."""
     raw = getattr(model, "_orig_mod", model)
-    raw.load_state_dict(state)
+    if state_dict is not None:
+        state = {key.replace("_orig_mod.", ""): tensor for key, tensor in state_dict.items()}
+        label = "in-memory best"
+    else:
+        payload = torch.load(best_path, map_location=device, weights_only=False)
+        state = payload["model_state_dict"]
+        state = {key.replace("_orig_mod.", ""): tensor for key, tensor in state.items()}
+        label = "best.pt"
+    try:
+        raw.load_state_dict(state)
+    except RuntimeError as exc:
+        print(
+            "full test skipped: checkpoint width does not match this model "
+            "(another job likely reused --run-name and overwrote best.pt).",
+            file=sys.stderr,
+        )
+        print(exc, file=sys.stderr)
+        return {}
     metrics = evaluate(model, full_loader, device)
     print(
-        f"full test (best.pt) | test_ce={metrics['ce']:.6f} | "
+        f"full test ({label}) | test_ce={metrics['ce']:.6f} | "
         f"test_mae={metrics['mae']:.6f} | n={metrics['n']:,}"
     )
     return metrics
@@ -198,8 +294,20 @@ def plot_ce(
     epochs = [row["epoch"] for row in history]
     train_ce = [row["train_ce"] for row in history]
     test_ce = [row["test_ce"] for row in history]
+    train_val = [
+        row["train_val_ce"]
+        for row in history
+        if row.get("train_val_ce") is not None
+    ]
     fig, ax = plt.subplots(figsize=(7.2, 4.4))
-    ax.plot(epochs, train_ce, marker="o", label="train CE")
+    ax.plot(epochs, train_ce, marker="o", label="train CE (online)")
+    if len(train_val) == len(epochs):
+        ax.plot(
+            epochs,
+            [row["train_val_ce"] for row in history],
+            marker="^",
+            label="train-val CE (frozen)",
+        )
     ax.plot(epochs, test_ce, marker="s", label="test CE")
     ax.set_xlabel("epoch")
     ax.set_ylabel("cross-entropy")
@@ -260,11 +368,28 @@ def main(argv: list[str] | None = None) -> int:
         default=0,
         help="RNG seed for --test-subset-size",
     )
+    parser.add_argument(
+        "--train-val-subset-size",
+        type=int,
+        default=0,
+        help="Frozen train-val rows after each epoch (0 = skip; online train_ce only)",
+    )
+    parser.add_argument(
+        "--train-val-subset-seed",
+        type=int,
+        default=42,
+        help="RNG seed for --train-val-subset-size",
+    )
     parser.add_argument("--workers", type=int, default=0)
     parser.add_argument("--device", type=str, default=None)
     parser.add_argument("--output-dir", type=Path, default=NNUE_CHECKPOINTS_DIR)
     parser.add_argument("--run-name", type=str, default=None)
-    parser.add_argument("--plot", type=Path, default=None)
+    parser.add_argument(
+        "--plot",
+        type=Path,
+        default=None,
+        help="Plot directory or a file in that directory; saved as {run_name}_ce.png",
+    )
     parser.add_argument(
         "--rebuild-cache",
         action="store_true",
@@ -373,6 +498,23 @@ def main(argv: list[str] | None = None) -> int:
         collate_fn=collate_sparse,
         pin_memory=pin,
     )
+    train_val_ds = maybe_subset_train_pool(
+        train_ds, args.train_val_subset_size, args.train_val_subset_seed
+    )
+    train_val_loader = None
+    if train_val_ds is not None:
+        train_val_loader = DataLoader(
+            train_val_ds,
+            batch_size=batch_size,
+            shuffle=False,
+            num_workers=args.workers,
+            collate_fn=collate_sparse,
+            pin_memory=pin,
+        )
+        print(
+            f"  train-val subset {len(train_val_ds):,} of {pool:,} "
+            f"(seed={args.train_val_subset_seed}, frozen eval)"
+        )
 
     model = DualHiddenNNUE(
         hidden_dim=args.hidden_dim,
@@ -390,6 +532,7 @@ def main(argv: list[str] | None = None) -> int:
         f"{'_smoke' if args.smoke else ''}{'_fast' if args.fast else ''}_{stamp}"
     )
     run_dir = _resolve(args.output_dir) / run_name
+    warn_if_run_dir_busy(run_dir)
     run_dir.mkdir(parents=True, exist_ok=True)
 
     config = {
@@ -401,6 +544,8 @@ def main(argv: list[str] | None = None) -> int:
         "rows_test_full": n_test_full,
         "test_subset_size": int(args.test_subset_size),
         "test_subset_seed": int(args.test_subset_seed),
+        "train_val_subset_size": int(args.train_val_subset_size),
+        "train_val_subset_seed": int(args.train_val_subset_seed),
         "hidden_dim": args.hidden_dim,
         "hidden2_dim": args.hidden2_dim,
         "epochs": args.epochs,
@@ -430,22 +575,38 @@ def main(argv: list[str] | None = None) -> int:
     history: list[dict[str, Any]] = []
     best_test = float("inf")
     best_path = run_dir / "best.pt"
-    history.append(eval_untrained(model, train_loader, test_loader, device))
+    best_state: dict[str, torch.Tensor] | None = None
+    history.append(
+        eval_untrained(
+            model, train_loader, test_loader, device, train_val_loader=train_val_loader
+        )
+    )
 
     for epoch in range(1, args.epochs + 1):
         t0 = time.perf_counter()
         train_ce = train_epoch(model, train_loader, optimizer, device)
         metrics = evaluate(model, test_loader, device)
+        train_val_ce = None
+        if train_val_loader is not None:
+            train_val_ce = evaluate(model, train_val_loader, device)["ce"]
         elapsed = time.perf_counter() - t0
         row = {
             "epoch": epoch,
             "train_ce": train_ce,
+            "train_val_ce": train_val_ce,
             "test_ce": metrics["ce"],
             "test_mae": metrics["mae"],
             "seconds": elapsed,
         }
         history.append(row)
-        log_epoch(epoch, train_ce, metrics["ce"], metrics["mae"], elapsed)
+        log_epoch(
+            epoch,
+            train_ce,
+            metrics["ce"],
+            metrics["mae"],
+            elapsed,
+            train_val_ce=train_val_ce,
+        )
         payload = {
             "model_state_dict": model.state_dict(),
             "architecture": "dual_hidden_wdl",
@@ -457,11 +618,12 @@ def main(argv: list[str] | None = None) -> int:
         }
         if metrics["ce"] < best_test:
             best_test = metrics["ce"]
+            best_state = clone_state(model)
             torch.save(payload, best_path)
         torch.save(payload, run_dir / "last.pt")
 
     (run_dir / "history.json").write_text(json.dumps(history, indent=2), encoding="utf-8")
-    plot_path = _resolve(args.plot) if args.plot else (PLOTS_DIR / f"{run_name}_ce.png")
+    plot_path = resolve_plot_path(args.plot, run_name, PLOTS_DIR)
     plot_ce(history, plot_path)
     (run_dir / "ce.png").write_bytes(plot_path.read_bytes())
     print(f"Best test_ce={best_test:.6f} → {best_path}")
@@ -475,7 +637,7 @@ def main(argv: list[str] | None = None) -> int:
             collate_fn=collate_sparse,
             pin_memory=pin,
         )
-        report_full_test(model, best_path, full_loader, device)
+        report_full_test(model, best_path, full_loader, device, state_dict=best_state)
     return 0
 
 

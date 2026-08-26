@@ -71,11 +71,23 @@ def main(argv: list[str] | None = None) -> int:
         "If set, best.pt is scored on the full test set once at the end.",
     )
     parser.add_argument("--test-subset-seed", type=int, default=0)
+    parser.add_argument(
+        "--train-val-subset-size",
+        type=int,
+        default=0,
+        help="Frozen train-val rows after each epoch (0 = skip; online train_ce only)",
+    )
+    parser.add_argument("--train-val-subset-seed", type=int, default=42)
     parser.add_argument("--workers", type=int, default=0)
     parser.add_argument("--device", type=str, default=None)
     parser.add_argument("--output-dir", type=Path, default=NNUE_CHECKPOINTS_DIR)
     parser.add_argument("--run-name", type=str, default=None)
-    parser.add_argument("--plot", type=Path, default=None)
+    parser.add_argument(
+        "--plot",
+        type=Path,
+        default=None,
+        help="Plot directory or a file in that directory; saved as {run_name}_ce.png",
+    )
     parser.add_argument("--rebuild-cache", action="store_true")
     parser.add_argument("--encode-only", action="store_true")
     parser.add_argument("--compile", action="store_true", dest="do_compile")
@@ -168,6 +180,23 @@ def main(argv: list[str] | None = None) -> int:
         collate_fn=collate_sparse,
         pin_memory=pin,
     )
+    train_val_ds = tn.maybe_subset_train_pool(
+        train_ds, args.train_val_subset_size, args.train_val_subset_seed
+    )
+    train_val_loader = None
+    if train_val_ds is not None:
+        train_val_loader = DataLoader(
+            train_val_ds,
+            batch_size=batch_size,
+            shuffle=False,
+            num_workers=args.workers,
+            collate_fn=collate_sparse,
+            pin_memory=pin,
+        )
+        print(
+            f"  train-val subset {len(train_val_ds):,} of {pool:,} "
+            f"(seed={args.train_val_subset_seed}, frozen eval)"
+        )
 
     model = LinearWDLNNUE().to(device)
     if args.do_compile and hasattr(torch, "compile"):
@@ -180,6 +209,7 @@ def main(argv: list[str] | None = None) -> int:
         f"linear_wdl{'_smoke' if args.smoke else ''}{'_fast' if args.fast else ''}_{stamp}"
     )
     run_dir = tn._resolve(args.output_dir) / run_name
+    tn.warn_if_run_dir_busy(run_dir)
     run_dir.mkdir(parents=True, exist_ok=True)
 
     config = {
@@ -191,6 +221,8 @@ def main(argv: list[str] | None = None) -> int:
         "rows_test_full": n_test_full,
         "test_subset_size": int(args.test_subset_size),
         "test_subset_seed": int(args.test_subset_seed),
+        "train_val_subset_size": int(args.train_val_subset_size),
+        "train_val_subset_seed": int(args.train_val_subset_seed),
         "architecture": "linear_wdl",
         "hidden": "none",
         "epochs": args.epochs,
@@ -217,22 +249,38 @@ def main(argv: list[str] | None = None) -> int:
     history: list[dict] = []
     best_test = float("inf")
     best_path = run_dir / "best.pt"
-    history.append(tn.eval_untrained(model, train_loader, test_loader, device))
+    best_state: dict | None = None
+    history.append(
+        tn.eval_untrained(
+            model, train_loader, test_loader, device, train_val_loader=train_val_loader
+        )
+    )
 
     for epoch in range(1, args.epochs + 1):
         t0 = time.perf_counter()
         train_ce = tn.train_epoch(model, train_loader, optimizer, device)
         metrics = tn.evaluate(model, test_loader, device)
+        train_val_ce = None
+        if train_val_loader is not None:
+            train_val_ce = tn.evaluate(model, train_val_loader, device)["ce"]
         elapsed = time.perf_counter() - t0
         row = {
             "epoch": epoch,
             "train_ce": train_ce,
+            "train_val_ce": train_val_ce,
             "test_ce": metrics["ce"],
             "test_mae": metrics["mae"],
             "seconds": elapsed,
         }
         history.append(row)
-        tn.log_epoch(epoch, train_ce, metrics["ce"], metrics["mae"], elapsed)
+        tn.log_epoch(
+            epoch,
+            train_ce,
+            metrics["ce"],
+            metrics["mae"],
+            elapsed,
+            train_val_ce=train_val_ce,
+        )
         payload = {
             "model_state_dict": model.state_dict(),
             "architecture": "linear_wdl",
@@ -242,11 +290,12 @@ def main(argv: list[str] | None = None) -> int:
         }
         if metrics["ce"] < best_test:
             best_test = metrics["ce"]
+            best_state = tn.clone_state(model)
             torch.save(payload, best_path)
         torch.save(payload, run_dir / "last.pt")
 
     (run_dir / "history.json").write_text(json.dumps(history, indent=2), encoding="utf-8")
-    plot_path = tn._resolve(args.plot) if args.plot else (PLOTS_DIR / f"{run_name}_ce.png")
+    plot_path = tn.resolve_plot_path(args.plot, run_name, PLOTS_DIR)
     tn.plot_ce(history, plot_path, title="Linear dual-POV WDL (844×2 → 3 softmax)")
     (run_dir / "ce.png").write_bytes(plot_path.read_bytes())
     print(f"Best test_ce={best_test:.6f} → {best_path}")
@@ -260,7 +309,7 @@ def main(argv: list[str] | None = None) -> int:
             collate_fn=collate_sparse,
             pin_memory=pin,
         )
-        tn.report_full_test(model, best_path, full_loader, device)
+        tn.report_full_test(model, best_path, full_loader, device, state_dict=best_state)
     return 0
 
 
