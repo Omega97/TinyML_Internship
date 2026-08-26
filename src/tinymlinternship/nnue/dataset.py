@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import re
 from pathlib import Path
 from typing import Any
 
@@ -46,6 +47,55 @@ SLICE_DB_ARRAYS = (
 SLICE_FEATURES_NPZ = "features.npz"
 SLICE_FEATURES_META = "features.meta.json"
 SLICE_DB_VERSION = 2
+
+# fen_value_visits_<dump>_<start>-<end>[_d90][_m10][_draw5]
+_DUMP_RANGE_RE = re.compile(
+    r"^(?P<prefix>fen_value_visits_.+)_(?P<start>\d+)-(?P<end>\d+)"
+    r"(?P<extra>(?:_d\d+)?(?:_m\d+)?(?:_draw\d+)?)?$"
+)
+
+
+def parse_dump_game_range(name: str) -> tuple[str, int, int] | None:
+    """``(dump prefix, start, end)`` for a Lichess-dump slice stem, else ``None``."""
+    match = _DUMP_RANGE_RE.fullmatch(str(name))
+    if match is None:
+        return None
+    return match.group("prefix"), int(match.group("start")), int(match.group("end"))
+
+
+def overlapping_dump_slices(holdout: str, names: list[str]) -> set[str]:
+    """Holdout folder plus any sibling dump slices whose ``[start, end)`` overlaps.
+
+    ``…_100000-105000_d80_draw5`` and ``…_100000-105000_d99`` are the same games
+    with different ply filters; skipping only the exact test name leaks EPDs.
+    """
+    skip = {str(holdout)}
+    parsed = parse_dump_game_range(holdout)
+    if parsed is None:
+        return skip
+    src, start, end = parsed
+    for name in names:
+        other = parse_dump_game_range(name)
+        if other is None:
+            continue
+        src2, a, b = other
+        if src2 == src and start < b and a < end:
+            skip.add(name)
+    return skip
+
+
+def apply_holdout_skip(
+    folders: list[Path], skip_names: set[str] | None
+) -> tuple[list[Path], set[str]]:
+    """Drop holdout + overlapping dump-range siblings. Returns (kept, skipped)."""
+    if not skip_names:
+        return folders, set()
+    names = [folder.name for folder in folders]
+    skipped: set[str] = set()
+    for name in skip_names:
+        skipped |= overlapping_dump_slices(name, names)
+    kept = [folder for folder in folders if folder.name not in skipped]
+    return kept, skipped
 
 
 def epd_key(fen: str) -> str:
@@ -508,8 +558,7 @@ class FenValueVisitsDataset(Dataset):
     ) -> FenValueVisitsDataset:
         """Load every ``features.npz`` under ``root`` (folders stay on disk, concat in RAM)."""
         folders = discover_slice_folders(root)
-        if skip_names:
-            folders = [folder for folder in folders if folder.name not in skip_names]
+        folders, _skipped = apply_holdout_skip(folders, skip_names)
         if not folders:
             raise FileNotFoundError(f"no slice JSON folders in {root}")
         blocks: list[dict[str, np.ndarray]] = []
@@ -542,8 +591,7 @@ class FenValueVisitsDataset(Dataset):
     ) -> list[FenValueVisitsDataset]:
         """One in-memory dataset per slice folder (no concat)."""
         folders = discover_slice_folders(root)
-        if skip_names:
-            folders = [folder for folder in folders if folder.name not in skip_names]
+        folders, _skipped = apply_holdout_skip(folders, skip_names)
         if not folders:
             raise FileNotFoundError(f"no slice JSON folders in {root}")
         out: list[FenValueVisitsDataset] = []

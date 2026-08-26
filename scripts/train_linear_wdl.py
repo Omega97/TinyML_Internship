@@ -122,9 +122,10 @@ def main(argv: list[str] | None = None) -> int:
 
     print(f"Train: all slices in {slices_dir} except {test_name}")
     print(f"Test:  {test_folder}")
+    skip_names = tn.holdout_skip_names(slices_dir, test_name)
     slice_dss = FenValueVisitsDataset.load_slice_datasets(
         slices_dir,
-        skip_names={test_name},
+        skip_names=skip_names,
         rebuild=args.rebuild_cache,
         progress=True,
     )
@@ -258,29 +259,20 @@ def main(argv: list[str] | None = None) -> int:
 
     for epoch in range(1, args.epochs + 1):
         t0 = time.perf_counter()
-        train_ce = tn.train_epoch(model, train_loader, optimizer, device)
+        online_ce = tn.train_epoch(model, train_loader, optimizer, device)
         metrics = tn.evaluate(model, test_loader, device)
-        train_val_ce = None
+        train_ce = online_ce
         if train_val_loader is not None:
-            train_val_ce = tn.evaluate(model, train_val_loader, device)["ce"]
+            train_ce = tn.evaluate(model, train_val_loader, device)["ce"]
         elapsed = time.perf_counter() - t0
         row = {
             "epoch": epoch,
             "train_ce": train_ce,
-            "train_val_ce": train_val_ce,
             "test_ce": metrics["ce"],
-            "test_mae": metrics["mae"],
             "seconds": elapsed,
         }
         history.append(row)
-        tn.log_epoch(
-            epoch,
-            train_ce,
-            metrics["ce"],
-            metrics["mae"],
-            elapsed,
-            train_val_ce=train_val_ce,
-        )
+        tn.log_epoch(epoch, train_ce, metrics["ce"], elapsed)
         payload = {
             "model_state_dict": model.state_dict(),
             "architecture": "linear_wdl",

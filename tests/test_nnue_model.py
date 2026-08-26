@@ -284,6 +284,7 @@ def test_from_slice_root_skips_test_folder(tmp_path):
 
     _write_slice("fen_value_visits_train_a", 0.1)
     _write_slice("fen_value_visits_lichess_db_standard_rated_2026-07_100000-101000", 0.9)
+    _write_slice("fen_value_visits_lichess_db_standard_rated_2026-07_100000-101000_d99", 0.8)
     ds = FenValueVisitsDataset.from_slice_root(
         tmp_path,
         skip_names={"fen_value_visits_lichess_db_standard_rated_2026-07_100000-101000"},
@@ -292,6 +293,24 @@ def test_from_slice_root_skips_test_folder(tmp_path):
     assert len(ds) == 1
     assert ds[0]["target"].shape == (3,)
     assert float(ds[0]["target"][0] - ds[0]["target"][2]) == pytest.approx(0.1, abs=5e-3)
+
+
+def test_overlapping_dump_slices_same_game_range():
+    from tinymlinternship.nnue.dataset import overlapping_dump_slices, parse_dump_game_range
+
+    hold = "fen_value_visits_lichess_db_standard_rated_2026-07_100000-105000_d80_draw5"
+    sib = "fen_value_visits_lichess_db_standard_rated_2026-07_100000-105000_d99"
+    other = "fen_value_visits_lichess_db_standard_rated_2026-07_0-5000_d90"
+    puzzles = "fen_value_visits_lichess_puzzles_depth2"
+    parsed = parse_dump_game_range(hold)
+    assert parsed is not None
+    assert parsed[1:] == (100000, 105000)
+    skip = overlapping_dump_slices(hold, [hold, sib, other, puzzles])
+    assert hold in skip
+    assert sib in skip
+    assert other not in skip
+    assert puzzles not in skip
+    assert overlapping_dump_slices(puzzles, [hold, puzzles]) == {puzzles}
 
 
 def test_across_slice_batch_samples_every_folder(tmp_path):
@@ -456,7 +475,7 @@ def test_packed_train_val_subset_uses_mixed_slice_keys():
     assert list(again.indices) == list(sub.indices)
 
 
-def test_log_epoch_optional_train_val_ce(capsys):
+def test_log_epoch_train_and_test_ce_only(capsys):
     import importlib.util
     from pathlib import Path
 
@@ -465,14 +484,13 @@ def test_log_epoch_optional_train_val_ce(capsys):
     assert spec is not None and spec.loader is not None
     train = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(train)
-    train.log_epoch(1, 1.0, 0.9, 0.5, 1.2)
+    train.log_epoch(1, 1.0, 0.9, 1.2)
     out = capsys.readouterr().out
     assert "train_ce=1.000000" in out
+    assert "test_ce=0.900000" in out
     assert "train_val_ce" not in out
-    train.log_epoch(2, 0.8, 0.7, 0.4, 1.0, train_val_ce=0.75)
-    out = capsys.readouterr().out
-    assert "train_val_ce=0.750000" in out
-    assert "test_ce=0.700000" in out
+    assert "test_mae" not in out
+    assert "mse" not in out.lower()
 
 
 def test_inspect_sample_subset_is_deterministic():

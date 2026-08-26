@@ -37,16 +37,29 @@ from tinymlinternship.nnue.dataset import (
     FenValueVisitsDataset,
     MixedSliceDataset,
     collate_sparse,
+    overlapping_dump_slices,
 )
 from tinymlinternship.nnue.model import DualHiddenNNUE
 
 DEFAULT_SLICES = PROCESSED_DATA_DIR / BOARD_EVAL_DIR_NAME / FEN_VALUE_VISITS_DIR_NAME
-DEFAULT_TEST_SLICE = "fen_value_visits_lichess_db_standard_rated_2026-07_100000-105000_d80_draw5"
+DEFAULT_TEST_SLICE = "fen_value_visits_lichess_db_standard_rated_2026-07_0-5000_d90"
 PLOTS_DIR = PROJECT_ROOT / "plots"
 
 
 def _resolve(path: Path) -> Path:
     return path if path.is_absolute() else (PROJECT_ROOT / path).resolve()
+
+
+def holdout_skip_names(slices_dir: Path, test_name: str) -> set[str]:
+    """Exact test folder plus dump slices whose game-index range overlaps."""
+    names = [path.name for path in slices_dir.iterdir() if path.is_dir()]
+    skip = overlapping_dump_slices(test_name, names)
+    extra = sorted(skip - {test_name})
+    if extra:
+        print(f"  also hold out {len(extra)} overlapping dump-range slice(s):")
+        for name in extra:
+            print(f"    {name}")
+    return skip
 
 
 def resolve_plot_path(plot: Path | None, run_name: str, plots_dir: Path) -> Path:
@@ -135,19 +148,10 @@ def train_epoch(
     return running / max(n_batches, 1)
 
 
-def log_epoch(
-    epoch: int,
-    train_ce: float,
-    test_ce: float,
-    test_mae: float,
-    seconds: float,
-    train_val_ce: float | None = None,
-) -> None:
-    msg = f"epoch {epoch:02d} | train_ce={train_ce:.6f}"
-    if train_val_ce is not None:
-        msg += f" | train_val_ce={train_val_ce:.6f}"
-    msg += f" | test_ce={test_ce:.6f} | test_mae={test_mae:.6f} | {seconds:.1f}s"
-    print(msg)
+def log_epoch(epoch: int, train_ce: float, test_ce: float, seconds: float) -> None:
+    print(
+        f"epoch {epoch:02d} | train_ce={train_ce:.6f} | test_ce={test_ce:.6f} | {seconds:.1f}s"
+    )
 
 
 def eval_untrained(
@@ -157,32 +161,22 @@ def eval_untrained(
     device: torch.device,
     train_val_loader: DataLoader | None = None,
 ) -> dict[str, Any]:
-    """Epoch 00: CE/MAE on random weights (no optimizer step)."""
+    """Epoch 00: CE on random weights (no optimizer step)."""
     t0 = time.perf_counter()
-    if train_val_loader is not None:
-        train_m = evaluate(model, train_val_loader, device)
-        train_val_ce: float | None = train_m["ce"]
-    else:
-        train_m = evaluate(model, train_loader, device)
-        train_val_ce = None
+    train_m = evaluate(
+        model,
+        train_val_loader if train_val_loader is not None else train_loader,
+        device,
+    )
     test_m = evaluate(model, test_loader, device)
     elapsed = time.perf_counter() - t0
     row = {
         "epoch": 0,
         "train_ce": train_m["ce"],
-        "train_val_ce": train_val_ce,
         "test_ce": test_m["ce"],
-        "test_mae": test_m["mae"],
         "seconds": elapsed,
     }
-    log_epoch(
-        0,
-        row["train_ce"],
-        row["test_ce"],
-        row["test_mae"],
-        elapsed,
-        train_val_ce=train_val_ce,
-    )
+    log_epoch(0, row["train_ce"], row["test_ce"], elapsed)
     return row
 
 
@@ -276,10 +270,7 @@ def report_full_test(
         print(exc, file=sys.stderr)
         return {}
     metrics = evaluate(model, full_loader, device)
-    print(
-        f"full test ({label}) | test_ce={metrics['ce']:.6f} | "
-        f"test_mae={metrics['mae']:.6f} | n={metrics['n']:,}"
-    )
+    print(f"full test ({label}) | test_ce={metrics['ce']:.6f} | n={metrics['n']:,}")
     return metrics
 
 
@@ -294,20 +285,8 @@ def plot_ce(
     epochs = [row["epoch"] for row in history]
     train_ce = [row["train_ce"] for row in history]
     test_ce = [row["test_ce"] for row in history]
-    train_val = [
-        row["train_val_ce"]
-        for row in history
-        if row.get("train_val_ce") is not None
-    ]
     fig, ax = plt.subplots(figsize=(7.2, 4.4))
-    ax.plot(epochs, train_ce, marker="o", label="train CE (online)")
-    if len(train_val) == len(epochs):
-        ax.plot(
-            epochs,
-            [row["train_val_ce"] for row in history],
-            marker="^",
-            label="train-val CE (frozen)",
-        )
+    ax.plot(epochs, train_ce, marker="o", label="train CE")
     ax.plot(epochs, test_ce, marker="s", label="test CE")
     ax.set_xlabel("epoch")
     ax.set_ylabel("cross-entropy")
@@ -440,9 +419,10 @@ def main(argv: list[str] | None = None) -> int:
 
     print(f"Train: all slices in {slices_dir} except {test_name}")
     print(f"Test:  {test_folder}")
+    skip_names = holdout_skip_names(slices_dir, test_name)
     slice_dss = FenValueVisitsDataset.load_slice_datasets(
         slices_dir,
-        skip_names={test_name},
+        skip_names=skip_names,
         rebuild=args.rebuild_cache,
         progress=True,
     )
@@ -584,29 +564,20 @@ def main(argv: list[str] | None = None) -> int:
 
     for epoch in range(1, args.epochs + 1):
         t0 = time.perf_counter()
-        train_ce = train_epoch(model, train_loader, optimizer, device)
+        online_ce = train_epoch(model, train_loader, optimizer, device)
         metrics = evaluate(model, test_loader, device)
-        train_val_ce = None
+        train_ce = online_ce
         if train_val_loader is not None:
-            train_val_ce = evaluate(model, train_val_loader, device)["ce"]
+            train_ce = evaluate(model, train_val_loader, device)["ce"]
         elapsed = time.perf_counter() - t0
         row = {
             "epoch": epoch,
             "train_ce": train_ce,
-            "train_val_ce": train_val_ce,
             "test_ce": metrics["ce"],
-            "test_mae": metrics["mae"],
             "seconds": elapsed,
         }
         history.append(row)
-        log_epoch(
-            epoch,
-            train_ce,
-            metrics["ce"],
-            metrics["mae"],
-            elapsed,
-            train_val_ce=train_val_ce,
-        )
+        log_epoch(epoch, train_ce, metrics["ce"], elapsed)
         payload = {
             "model_state_dict": model.state_dict(),
             "architecture": "dual_hidden_wdl",
