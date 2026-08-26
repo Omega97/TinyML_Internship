@@ -218,10 +218,12 @@ def main(argv: list[str] | None = None) -> int:
     )
     parser.add_argument("--slices-dir", type=Path, default=DEFAULT_SLICES)
     parser.add_argument(
+        "--test",
         "--test-slice",
+        dest="test_slice",
         type=str,
         default=DEFAULT_TEST_SLICE,
-        help="Folder name under --slices-dir used only as the test set",
+        help="Test-slice folder name under --slices-dir",
     )
     parser.add_argument("--hidden-dim", type=int, default=64, help="L1 width per POV")
     parser.add_argument("--hidden2-dim", type=int, default=128, help="L2 width")

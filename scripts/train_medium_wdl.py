@@ -48,7 +48,14 @@ def main(argv: list[str] | None = None) -> int:
         description="Train medium dual-POV WDL (844×2 → H CReLU → 3 softmax, soft CE)"
     )
     parser.add_argument("--slices-dir", type=Path, default=DEFAULT_SLICES)
-    parser.add_argument("--test-slice", type=str, default=DEFAULT_TEST_SLICE)
+    parser.add_argument(
+        "--test",
+        "--test-slice",
+        dest="test_slice",
+        type=str,
+        default=DEFAULT_TEST_SLICE,
+        help="Test-slice folder name under --slices-dir",
+    )
     parser.add_argument("--hidden-dim", type=int, default=20, help="Hidden width after STM concat")
     parser.add_argument("--epochs", type=int, default=10)
     parser.add_argument("--batch-size", type=int, default=2048)
