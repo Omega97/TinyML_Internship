@@ -63,14 +63,13 @@ def holdout_skip_names(slices_dir: Path, test_name: str) -> set[str]:
 
 
 def resolve_plot_path(plot: Path | None, run_name: str, plots_dir: Path) -> Path:
-    """Always ``{run_name}_ce.png``. ``--plot`` only picks the directory."""
-    filename = f"{run_name}_ce.png"
+    """``--plot path.png`` is used as-is. Omit it → ``plots/{run_name}_ce.png``."""
     if plot is None:
-        return plots_dir / filename
+        return plots_dir / f"{run_name}_ce.png"
     path = _resolve(plot)
     if path.suffix.lower() in {".png", ".jpg", ".jpeg", ".pdf", ".svg"}:
-        return path.with_name(filename)
-    return path / filename
+        return path
+    return path / f"{run_name}_ce.png"
 
 
 def ce_loss(
@@ -398,7 +397,7 @@ def main(argv: list[str] | None = None) -> int:
         "--plot",
         type=Path,
         default=None,
-        help="Plot directory or a file in that directory; saved as {run_name}_ce.png",
+        help="CE plot path (e.g. plots/foo.png). Default: plots/{run_name}_ce.png",
     )
     parser.add_argument(
         "--rebuild-cache",

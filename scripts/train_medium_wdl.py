@@ -98,7 +98,7 @@ def main(argv: list[str] | None = None) -> int:
         "--plot",
         type=Path,
         default=None,
-        help="Plot directory or a file in that directory; saved as {run_name}_ce.png",
+        help="CE plot path (e.g. plots/foo.png). Default: plots/{run_name}_ce.png",
     )
     parser.add_argument("--rebuild-cache", action="store_true")
     parser.add_argument("--encode-only", action="store_true")

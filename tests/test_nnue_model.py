@@ -393,8 +393,7 @@ def test_resolve_plot_path_uses_run_name():
     plots = Path("plots")
     assert train.resolve_plot_path(None, "medium_h50_fast", plots) == plots / "medium_h50_fast_ce.png"
     shared = Path("plots/medium_wdl_ce.png")
-    out = train.resolve_plot_path(shared, "medium_h50_fast", plots)
-    assert out == train._resolve(shared).with_name("medium_h50_fast_ce.png")
+    assert train.resolve_plot_path(shared, "medium_h50_fast", plots) == train._resolve(shared)
 
 
 def test_maybe_subset_dataset_is_fixed_and_smaller():
