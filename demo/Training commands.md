@@ -25,9 +25,10 @@ py -3.12 -u scripts/encode_slice_features.py data/processed/board_eval/fen_value
 ```
 
 
-## Improve depth
+## Improve depth 🐳
 ```powershell
 py -3.12 -u scripts/relabel_fen_value_visits_lc0.py data/processed/board_eval/fen_value_visits/fen_value_visits_lichess_puzzles --depth 2 --in-place
+
 
 py -3.12 -u scripts/relabel_fen_value_visits_lc0.py data/processed/board_eval/fen_value_visits/fen_value_visits_lichess_db_standard_rated_2026-07_15000-20000_d90 --depth 2 --in-place
 
@@ -37,21 +38,27 @@ py -3.12 -u scripts/relabel_fen_value_visits_lc0.py data/processed/board_eval/fe
 ```
 
 
-## 🧱 Build dataset Generate data (sparse input, WDL proba in output) & npz
+## Build Dataset - Generate Data 🧱 (sparse input, WDL proba in output) & npz
 ```powershell
-py -3.12 -u scripts/lichess_dump_to_fen_value_visits.py 400000 405000 --dropout 0.9
-
-py -3.12 -u scripts/lichess_dump_to_fen_value_visits.py 405000 410000 --dropout 0.9
-
-py -3.12 -u scripts/lichess_dump_to_fen_value_visits.py 410000 415000 --dropout 0.9
-
 py -3.12 -u scripts/lichess_dump_to_fen_value_visits.py 415000 420000 --dropout 0.9
+
+py -3.12 -u scripts/lichess_dump_to_fen_value_visits.py 420000 425000 --dropout 0.9
+
+py -3.12 -u scripts/lichess_dump_to_fen_value_visits.py 425000 430000 --dropout 0.9
+
+py -3.12 -u scripts/lichess_dump_to_fen_value_visits.py 430000 435000 --dropout 0.9
+
+py -3.12 -u scripts/lichess_dump_to_fen_value_visits.py 435000 440000 --dropout 0.9
+
+py -3.12 -u scripts/lichess_dump_to_fen_value_visits.py 440000 445000 --dropout 0.9
+
+py -3.12 -u scripts/lichess_dump_to_fen_value_visits.py 445000 450000 --dropout 0.9
 ```
 
 
 ## Database of extreme positions (P(draw) <= 5%)
 ```powershell
-py -3.12 -u scripts/lichess_dump_to_fen_value_visits.py 0 10 --max-draw 0.05 --dropout 0.9
+py -3.12 -u scripts/lichess_dump_to_fen_value_visits.py 100000 105000 --max-draw 0.05 --dropout 0.9
 ```
  
  
@@ -93,7 +100,7 @@ py -3.12 -u scripts/train_medium_wdl.py --epochs 100 --lr 0.01 --hidden-dim 64 -
 py -3.12 -u scripts/train_medium_wdl.py --epochs 100 --lr 0.01 --hidden-dim 128 --run-name medium_h128_fast --plot plots/medium_wdl_ce.png --test fen_value_visits_lichess_db_standard_rated_2026-07_0-5000_d90 --test-subset-size 10000 --train-val-subset-size 5000 --fast
 ```
 
-## Faster Training Dual Model
+## Faster Training Dual Model 🧠
 
 ```powershell
 py -3.12 -u scripts/train_nnue.py --epochs 100 --lr 0.01 --hidden-dim 16 --hidden2-dim 32 --run-name dual_h16_H32_fast --plot plots/dual_nnue_ce_64_64.png --test fen_value_visits_lichess_db_standard_rated_2026-07_0-5000_d90 --test-subset-size 10000 --train-val-subset-size 5000 --fast
@@ -140,3 +147,14 @@ py -3.12 -u scripts/train_nnue.py --epochs 200 --lr 0.01 --lr-end 0.001 --hidden
 ```
 
 Best test_ce=0.696645 
+
+---
+
+## Baseline Compare to FFNN
+
+```powershell
+py -3.12 -u scripts/train_ffnn.py --epochs 50 --lr 0.001 --hidden1 256 --hidden2 256 --run-name ffnn_baseline --test fen_value_visits_lichess_db_standard_rated_2026-07_0-5000_d90 --fast
+```
+
+---
+
