@@ -27,9 +27,6 @@ py -3.12 -u scripts/encode_slice_features.py data/processed/board_eval/fen_value
 
 ## Improve depth 🐳
 ```powershell
-py -3.12 -u scripts/relabel_fen_value_visits_lc0.py data/processed/board_eval/fen_value_visits/fen_value_visits_lichess_puzzles --depth 2 --in-place
-
-
 py -3.12 -u scripts/relabel_fen_value_visits_lc0.py data/processed/board_eval/fen_value_visits/fen_value_visits_lichess_db_standard_rated_2026-07_15000-20000_d90 --depth 2 --in-place
 
 py -3.12 -u scripts/relabel_fen_value_visits_lc0.py data/processed/board_eval/fen_value_visits/fen_value_visits_lichess_db_standard_rated_2026-07_20000-25000_d90 --depth 2 --in-place
@@ -40,19 +37,31 @@ py -3.12 -u scripts/relabel_fen_value_visits_lc0.py data/processed/board_eval/fe
 
 ## Build Dataset - Generate Data 🧱 (sparse input, WDL proba in output) & npz
 ```powershell
-py -3.12 -u scripts/lichess_dump_to_fen_value_visits.py 415000 420000 --dropout 0.9
 
-py -3.12 -u scripts/lichess_dump_to_fen_value_visits.py 420000 425000 --dropout 0.9
+py -3.12 -u scripts/lichess_dump_to_fen_value_visits.py 850000 860000 --dropout 0.95
+py -3.12 -u scripts/lichess_dump_to_fen_value_visits.py 860000 870000 --dropout 0.95
+py -3.12 -u scripts/lichess_dump_to_fen_value_visits.py 870000 880000 --dropout 0.95
+py -3.12 -u scripts/lichess_dump_to_fen_value_visits.py 880000 890000 --dropout 0.95
+echo done
 
-py -3.12 -u scripts/lichess_dump_to_fen_value_visits.py 425000 430000 --dropout 0.9
+py -3.12 -u scripts/lichess_dump_to_fen_value_visits.py 890000 900000 --dropout 0.95
+py -3.12 -u scripts/lichess_dump_to_fen_value_visits.py 900000 910000 --dropout 0.95
+py -3.12 -u scripts/lichess_dump_to_fen_value_visits.py 910000 920000 --dropout 0.95
+py -3.12 -u scripts/lichess_dump_to_fen_value_visits.py 920000 930000 --dropout 0.95
+echo done
 
-py -3.12 -u scripts/lichess_dump_to_fen_value_visits.py 430000 435000 --dropout 0.9
+py -3.12 -u scripts/lichess_dump_to_fen_value_visits.py 930000 940000 --dropout 0.95
+py -3.12 -u scripts/lichess_dump_to_fen_value_visits.py 940000 950000 --dropout 0.95
+py -3.12 -u scripts/lichess_dump_to_fen_value_visits.py 950000 960000 --dropout 0.95
+py -3.12 -u scripts/lichess_dump_to_fen_value_visits.py 960000 970000 --dropout 0.95
+echo done
 
-py -3.12 -u scripts/lichess_dump_to_fen_value_visits.py 435000 440000 --dropout 0.9
+py -3.12 -u scripts/lichess_dump_to_fen_value_visits.py 970000 980000 --dropout 0.95
+py -3.12 -u scripts/lichess_dump_to_fen_value_visits.py 980000 990000 --dropout 0.95
+py -3.12 -u scripts/lichess_dump_to_fen_value_visits.py 990000 1000000 --dropout 0.95
+py -3.12 -u scripts/lichess_dump_to_fen_value_visits.py 1000000 1100000 --dropout 0.95
+echo done
 
-py -3.12 -u scripts/lichess_dump_to_fen_value_visits.py 440000 445000 --dropout 0.9
-
-py -3.12 -u scripts/lichess_dump_to_fen_value_visits.py 445000 450000 --dropout 0.9
 ```
 
 
