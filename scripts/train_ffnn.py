@@ -4,7 +4,7 @@
 Converts the sparse indices to dense vectors on the fly, concatenates both POVs,
 then passes through two hidden layers (ReLU) to 3 logits + softmax.
 
-Default split matches train_nnue.py (test slice 0-5000_d90).
+Default split matches train_nnue.py (last ``--test-fraction`` of each slice → test).
 
     py -3.12 -u scripts/train_ffnn.py --epochs 10 --smoke
     py -3.12 -u scripts/train_ffnn.py --epochs 50 --lr 0.001 --hidden1 256 --hidden2 256 --run-name ffnn_baseline
@@ -31,17 +31,13 @@ from tinymlinternship.config.settings import NNUE_CHECKPOINTS_DIR, PROCESSED_DAT
 from tinymlinternship.data.board_store import BOARD_EVAL_DIR_NAME, FEN_VALUE_VISITS_DIR_NAME
 from tinymlinternship.nnue.dataset import (
     AcrossSliceBatchSampler,
-    FenValueVisitsDataset,
-    MixedSliceDataset,
     collate_sparse,
-    overlapping_dump_slices,
 )
 
 # Import common utilities from train_nnue
 import train_nnue as tn
 
 DEFAULT_SLICES = PROCESSED_DATA_DIR / BOARD_EVAL_DIR_NAME / FEN_VALUE_VISITS_DIR_NAME
-DEFAULT_TEST_SLICE = "fen_value_visits_lichess_db_standard_rated_2026-07_0-5000_d90"
 PLOTS_DIR = PROJECT_ROOT / "plots"
 
 
@@ -111,33 +107,12 @@ def log_epoch_local(
     print(msg)
 
 
-# --- Funzione di supporto per holdout ---
-
-def holdout_skip_names(slices_dir: Path, test_name: str) -> set[str]:
-    """Exact test folder plus dump slices whose game-index range overlaps."""
-    names = [p.name for p in slices_dir.iterdir() if p.is_dir()]
-    skip = overlapping_dump_slices(test_name, names)
-    extra = sorted(skip - {test_name})
-    if extra:
-        print(f"  also hold out {len(extra)} overlapping dump-range slice(s):")
-        for name in extra:
-            print(f"    {name}")
-    return skip
-
-
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(
         description="Train standard dense FFNN (2 hidden layers) on WDL labels."
     )
     parser.add_argument("--slices-dir", type=Path, default=DEFAULT_SLICES)
-    parser.add_argument(
-        "--test",
-        "--test-slice",
-        dest="test_slice",
-        type=str,
-        default=DEFAULT_TEST_SLICE,
-        help="Test-slice folder name under --slices-dir",
-    )
+    tn.add_test_fraction_arg(parser)
     parser.add_argument("--hidden1", type=int, default=256, help="First hidden layer size")
     parser.add_argument("--hidden2", type=int, default=256, help="Second hidden layer size")
     parser.add_argument("--epochs", type=int, default=10)
@@ -172,18 +147,11 @@ def main(argv: list[str] | None = None) -> int:
     args = parser.parse_args(argv)
 
     slices_dir = tn._resolve(args.slices_dir)
-    test_name = args.test_slice
-    test_folder = slices_dir / test_name
     if not slices_dir.is_dir():
         print(f"slices dir not found: {slices_dir}", file=sys.stderr)
         return 1
-    if not test_folder.is_dir():
-        print(f"test slice not found: {test_folder}", file=sys.stderr)
-        names = [p.name for p in slices_dir.iterdir() if p.is_dir()] if slices_dir.is_dir() else []
-        if names:
-            print("available slices:", file=sys.stderr)
-            for name in names:
-                print(f"  {name}", file=sys.stderr)
+    if not 0.0 < float(args.test_fraction) < 1.0:
+        print("--test-fraction must be in (0, 1), e.g. 0.10", file=sys.stderr)
         return 1
 
     batch_size = args.batch_size
@@ -201,21 +169,20 @@ def main(argv: list[str] | None = None) -> int:
     device_name = args.device or ("cuda" if torch.cuda.is_available() else "cpu")
     device = torch.device(device_name)
 
-    print(f"Train: all slices in {slices_dir} except {test_name}")
-    print(f"Test:  {test_folder}")
-    skip_names = holdout_skip_names(slices_dir, test_name)
-    slice_dss = FenValueVisitsDataset.load_slice_datasets(
-        slices_dir,
-        skip_names=skip_names,
-        rebuild=args.rebuild_cache,
-        progress=True,
+    print(
+        f"Split: last {args.test_fraction:.0%} of each slice → test; rest → train"
     )
-    train_ds = MixedSliceDataset(slice_dss)
-    test_ds_full = FenValueVisitsDataset(
-        test_folder,
-        rebuild_cache=args.rebuild_cache,
-        progress=True,
-    )
+    print(f"Slices: {slices_dir}")
+    try:
+        train_ds, test_ds_full = tn.prepare_fraction_split(
+            slices_dir,
+            args.test_fraction,
+            rebuild=args.rebuild_cache,
+            progress=True,
+        )
+    except (FileNotFoundError, ValueError) as exc:
+        print(exc, file=sys.stderr)
+        return 1
     n_test_full = len(test_ds_full)
     test_ds = tn.maybe_subset_dataset(test_ds_full, args.test_subset_size, args.test_subset_seed)
     n_test_eval = len(test_ds)
@@ -227,7 +194,7 @@ def main(argv: list[str] | None = None) -> int:
     else:
         n_batches = max(1, pool // batch_size)
     print(
-        f"  train pool {pool:,} in {len(slice_dss)} slices | "
+        f"  train pool {pool:,} in {len(train_ds.slices)} slices | "
         f"test {n_test_eval:,}/{n_test_full:,} | "
         f"batch {batch_size} mixed across slices × {n_batches} steps/epoch"
     )
@@ -296,9 +263,10 @@ def main(argv: list[str] | None = None) -> int:
 
     config = {
         "slices_dir": str(slices_dir),
-        "test_slice": test_name,
+        "test_fraction": float(args.test_fraction),
+        "split": "last fraction of each slice → test",
         "rows_train_pool": pool,
-        "n_train_slices": len(slice_dss),
+        "n_train_slices": len(train_ds.slices),
         "rows_test": n_test_eval,
         "rows_test_full": n_test_full,
         "test_subset_size": int(args.test_subset_size),

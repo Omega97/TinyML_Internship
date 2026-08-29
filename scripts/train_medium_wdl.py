@@ -4,8 +4,8 @@
 Concat ``[STM ‖ opp]`` sparse 844+844 → H CReLU → 3 logits + softmax.
 Default H=20. Loss is soft cross-entropy vs Lc0 STM WDL.
 
-Default test slice: ``fen_value_visits_lichess_db_standard_rated_2026-07_0-5000_d90``.
-Train = every other folder under ``data/processed/board_eval/fen_value_visits/``.
+Default split: a random ``--test-fraction`` (0.10) of each slice is test
+(seed ``--split-seed``). Train batches and both CE metrics are row-weighted.
 
     py -3.12 -u scripts/train_medium_wdl.py --epochs 10 --smoke
     py -3.12 -u scripts/train_medium_wdl.py --epochs 50 --lr 0.01 --run-name medium_h20
@@ -29,9 +29,7 @@ from torch.utils.data import DataLoader
 from tinymlinternship.config.settings import NNUE_CHECKPOINTS_DIR, PROCESSED_DATA_DIR, PROJECT_ROOT
 from tinymlinternship.data.board_store import BOARD_EVAL_DIR_NAME, FEN_VALUE_VISITS_DIR_NAME
 from tinymlinternship.nnue.dataset import (
-    AcrossSliceBatchSampler,
-    FenValueVisitsDataset,
-    MixedSliceDataset,
+    UniformRowBatchSampler,
     collate_sparse,
 )
 from tinymlinternship.nnue.model import MediumWDLNNUE
@@ -39,7 +37,6 @@ from tinymlinternship.nnue.model import MediumWDLNNUE
 import train_nnue as tn
 
 DEFAULT_SLICES = PROCESSED_DATA_DIR / BOARD_EVAL_DIR_NAME / FEN_VALUE_VISITS_DIR_NAME
-DEFAULT_TEST_SLICE = "fen_value_visits_lichess_db_standard_rated_2026-07_0-5000_d90"
 PLOTS_DIR = PROJECT_ROOT / "plots"
 
 
@@ -48,14 +45,8 @@ def main(argv: list[str] | None = None) -> int:
         description="Train medium dual-POV WDL (844×2 → H CReLU → 3 softmax, soft CE)"
     )
     parser.add_argument("--slices-dir", type=Path, default=DEFAULT_SLICES)
-    parser.add_argument(
-        "--test",
-        "--test-slice",
-        dest="test_slice",
-        type=str,
-        default=DEFAULT_TEST_SLICE,
-        help="Test-slice folder name under --slices-dir",
-    )
+    tn.add_test_fraction_arg(parser)
+    tn.add_split_seed_arg(parser)
     parser.add_argument("--hidden-dim", type=int, default=20, help="Hidden width after STM concat")
     parser.add_argument("--epochs", type=int, default=10)
     parser.add_argument("--batch-size", type=int, default=2048)
@@ -87,9 +78,14 @@ def main(argv: list[str] | None = None) -> int:
         "--train-val-subset-size",
         type=int,
         default=0,
-        help="Frozen train-val rows after each epoch (0 = skip; online train_ce only)",
+        help="Frozen train CE rows (0 = same as --test-subset-size, else 3200)",
     )
-    parser.add_argument("--train-val-subset-seed", type=int, default=42)
+    parser.add_argument(
+        "--train-val-subset-seed",
+        type=int,
+        default=None,
+        help="RNG seed for frozen train CE (default: same as --test-subset-seed)",
+    )
     parser.add_argument("--workers", type=int, default=0)
     parser.add_argument("--device", type=str, default=None)
     parser.add_argument("--output-dir", type=Path, default=NNUE_CHECKPOINTS_DIR)
@@ -110,16 +106,11 @@ def main(argv: list[str] | None = None) -> int:
         return 1
 
     slices_dir = tn._resolve(args.slices_dir)
-    test_name = args.test_slice
-    test_folder = slices_dir / test_name
     if not slices_dir.is_dir():
         print(f"slices dir not found: {slices_dir}", file=sys.stderr)
         return 1
-    if not test_folder.is_dir():
-        print(f"test slice not found: {test_folder}", file=sys.stderr)
-        names = [p.name for p in slices_dir.iterdir() if p.is_dir()] if slices_dir.is_dir() else []
-        for name in names:
-            print(f"  {name}", file=sys.stderr)
+    if not 0.0 < float(args.test_fraction) < 1.0:
+        print("--test-fraction must be in (0, 1), e.g. 0.10", file=sys.stderr)
         return 1
 
     batch_size = args.batch_size
@@ -136,21 +127,22 @@ def main(argv: list[str] | None = None) -> int:
     device_name = args.device or ("cuda" if torch.cuda.is_available() else "cpu")
     device = torch.device(device_name)
 
-    print(f"Train: all slices in {slices_dir} except {test_name}")
-    print(f"Test:  {test_folder}")
-    skip_names = tn.holdout_skip_names(slices_dir, test_name)
-    slice_dss = FenValueVisitsDataset.load_slice_datasets(
-        slices_dir,
-        skip_names=skip_names,
-        rebuild=args.rebuild_cache,
-        progress=True,
+    print(
+        f"Split: random {args.test_fraction:.0%} of each slice → test "
+        f"(seed={args.split_seed}); rest → train"
     )
-    train_ds = MixedSliceDataset(slice_dss)
-    test_ds_full = FenValueVisitsDataset(
-        test_folder,
-        rebuild_cache=args.rebuild_cache,
-        progress=True,
-    )
+    print(f"Slices: {slices_dir}")
+    try:
+        train_ds, test_ds_full = tn.prepare_random_split(
+            slices_dir,
+            args.test_fraction,
+            seed=args.split_seed,
+            rebuild=args.rebuild_cache,
+            progress=True,
+        )
+    except (FileNotFoundError, ValueError) as exc:
+        print(exc, file=sys.stderr)
+        return 1
     n_test_full = len(test_ds_full)
     test_ds = tn.maybe_subset_dataset(
         test_ds_full, args.test_subset_size, args.test_subset_seed
@@ -164,9 +156,9 @@ def main(argv: list[str] | None = None) -> int:
     else:
         n_batches = max(1, pool // batch_size)
     print(
-        f"  train pool {pool:,} in {len(slice_dss)} slices | "
+        f"  train pool {pool:,} in {len(train_ds.slices)} slices | "
         f"test {n_test_eval:,}/{n_test_full:,} | "
-        f"batch {batch_size} mixed across slices × {n_batches} steps/epoch"
+        f"batch {batch_size} row-weighted × {n_batches} steps/epoch"
     )
     if n_test_eval < n_test_full:
         print(
@@ -180,8 +172,8 @@ def main(argv: list[str] | None = None) -> int:
     pin = device.type == "cuda"
     train_loader = DataLoader(
         train_ds,
-        batch_sampler=AcrossSliceBatchSampler(
-            train_ds.sizes,
+        batch_sampler=UniformRowBatchSampler(
+            pool,
             batch_size=batch_size,
             batches=n_batches,
         ),
@@ -197,23 +189,24 @@ def main(argv: list[str] | None = None) -> int:
         collate_fn=collate_sparse,
         pin_memory=pin,
     )
-    train_val_ds = tn.maybe_subset_train_pool(
-        train_ds, args.train_val_subset_size, args.train_val_subset_seed
+    train_eval_n = tn.frozen_train_eval_n(args)
+    train_eval_seed = tn.resolve_train_eval_seed(args)
+    train_val_ds = tn.maybe_subset_dataset(
+        train_ds, train_eval_n, train_eval_seed
     )
-    train_val_loader = None
-    if train_val_ds is not None:
-        train_val_loader = DataLoader(
-            train_val_ds,
-            batch_size=batch_size,
-            shuffle=False,
-            num_workers=args.workers,
-            collate_fn=collate_sparse,
-            pin_memory=pin,
-        )
-        print(
-            f"  train-val subset {len(train_val_ds):,} of {pool:,} "
-            f"(seed={args.train_val_subset_seed}, frozen eval)"
-        )
+    train_val_loader = DataLoader(
+        train_val_ds,
+        batch_size=batch_size,
+        shuffle=False,
+        num_workers=args.workers,
+        collate_fn=collate_sparse,
+        pin_memory=pin,
+    )
+    print(
+        f"  frozen train_ce on {len(train_val_ds):,}/{pool:,} rows "
+        f"(seed={train_eval_seed}, same row-weighted measure as test; "
+        f"n={train_eval_n:,} is noisy, full compare is printed at the end)"
+    )
 
     model = MediumWDLNNUE(hidden_dim=args.hidden_dim).to(device)
     if args.do_compile and hasattr(torch, "compile"):
@@ -241,15 +234,18 @@ def main(argv: list[str] | None = None) -> int:
 
     config = {
         "slices_dir": str(slices_dir),
-        "test_slice": test_name,
+        "test_fraction": float(args.test_fraction),
+        "split": "random fraction of each slice → test",
+        "split_seed": int(args.split_seed),
+        "train_ce": "frozen row-weighted",
         "rows_train_pool": pool,
-        "n_train_slices": len(slice_dss),
+        "n_train_slices": len(train_ds.slices),
         "rows_test": n_test_eval,
         "rows_test_full": n_test_full,
         "test_subset_size": int(args.test_subset_size),
         "test_subset_seed": int(args.test_subset_seed),
-        "train_val_subset_size": int(args.train_val_subset_size),
-        "train_val_subset_seed": int(args.train_val_subset_seed),
+        "train_val_subset_size": int(len(train_val_ds)),
+        "train_val_subset_seed": int(train_eval_seed),
         "architecture": "medium_wdl",
         "hidden_dim": args.hidden_dim,
         "epochs": args.epochs,
@@ -288,11 +284,9 @@ def main(argv: list[str] | None = None) -> int:
 
     for epoch in range(1, args.epochs + 1):
         t0 = time.perf_counter()
-        online_ce = tn.train_epoch(model, train_loader, optimizer, device)
+        tn.train_epoch(model, train_loader, optimizer, device)
         metrics = tn.evaluate(model, test_loader, device)
-        train_ce = online_ce
-        if train_val_loader is not None:
-            train_ce = tn.evaluate(model, train_val_loader, device)["ce"]
+        train_ce = tn.evaluate(model, train_val_loader, device)["ce"]
         elapsed = time.perf_counter() - t0
         row = {
             "epoch": epoch,
@@ -328,6 +322,19 @@ def main(argv: list[str] | None = None) -> int:
     (run_dir / "ce.png").write_bytes(plot_path.read_bytes())
     print(f"Best test_ce={best_test:.6f} → {best_path}")
     print(f"CE plot → {plot_path}")
+    if best_path.is_file() or best_state is not None:
+        tn.report_matched_train_test_ce(
+            model,
+            train_ds,
+            test_ds_full,
+            pool=pool,
+            n_test_full=n_test_full,
+            batch_size=batch_size,
+            device=device,
+            workers=args.workers,
+            pin=pin,
+            best_state=best_state,
+        )
     if n_test_eval < n_test_full and best_path.is_file():
         full_loader = DataLoader(
             test_ds_full,
