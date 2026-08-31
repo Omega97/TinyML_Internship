@@ -38,30 +38,11 @@ py -3.12 -u scripts/relabel_fen_value_visits_lc0.py data/processed/board_eval/fe
 ## Build Dataset - Generate Data 🧱 (sparse input, WDL proba in output) & npz
 ```powershell
 
-py -3.12 -u scripts/lichess_dump_to_fen_value_visits.py 850000 860000 --dropout 0.95
-py -3.12 -u scripts/lichess_dump_to_fen_value_visits.py 860000 870000 --dropout 0.95
-py -3.12 -u scripts/lichess_dump_to_fen_value_visits.py 870000 880000 --dropout 0.95
-py -3.12 -u scripts/lichess_dump_to_fen_value_visits.py 880000 890000 --dropout 0.95
+py -3.12 -u scripts/lichess_dump_to_fen_value_visits.py 1010000 1020000 --dropout 0.95
+py -3.12 -u scripts/lichess_dump_to_fen_value_visits.py 1020000 1030000 --dropout 0.95
+py -3.12 -u scripts/lichess_dump_to_fen_value_visits.py 1030000 1040000 --dropout 0.95
+py -3.12 -u scripts/lichess_dump_to_fen_value_visits.py 1040000 1050000 --dropout 0.95
 echo done
-
-py -3.12 -u scripts/lichess_dump_to_fen_value_visits.py 890000 900000 --dropout 0.95
-py -3.12 -u scripts/lichess_dump_to_fen_value_visits.py 900000 910000 --dropout 0.95
-py -3.12 -u scripts/lichess_dump_to_fen_value_visits.py 910000 920000 --dropout 0.95
-py -3.12 -u scripts/lichess_dump_to_fen_value_visits.py 920000 930000 --dropout 0.95
-echo done
-
-py -3.12 -u scripts/lichess_dump_to_fen_value_visits.py 930000 940000 --dropout 0.95
-py -3.12 -u scripts/lichess_dump_to_fen_value_visits.py 940000 950000 --dropout 0.95
-py -3.12 -u scripts/lichess_dump_to_fen_value_visits.py 950000 960000 --dropout 0.95
-py -3.12 -u scripts/lichess_dump_to_fen_value_visits.py 960000 970000 --dropout 0.95
-echo done
-
-py -3.12 -u scripts/lichess_dump_to_fen_value_visits.py 970000 980000 --dropout 0.95
-py -3.12 -u scripts/lichess_dump_to_fen_value_visits.py 980000 990000 --dropout 0.95
-py -3.12 -u scripts/lichess_dump_to_fen_value_visits.py 990000 1000000 --dropout 0.95
-py -3.12 -u scripts/lichess_dump_to_fen_value_visits.py 1000000 1100000 --dropout 0.95
-echo done
-
 ```
 
 
@@ -73,16 +54,22 @@ py -3.12 -u scripts/lichess_dump_to_fen_value_visits.py 100000 105000 --max-draw
  
 ## Training of the mini model (linear + softmax no hidden layers) tests
 ```powershell
+# smoke test
 py -3.12 -u scripts/train_linear_wdl.py --epochs 10 --smoke --run-name linear_wdl_smoke --plot plots/linear_wdl_smoke_ce.png
 
+# smoke test
 py -3.12 -u scripts/train_linear_wdl.py --epochs 100 --smoke --lr 1e-2 --run-name linear_wdl_smoke --plot plots/linear_wdl_smoke_ce.png
 
+# short training
 py -3.12 -u scripts/train_linear_wdl.py --epochs 10 --lr 0.01 --run-name linear_wdl --plot plots/linear_wdl_ce.png
+
+# full training - linear decay
+py -3.12 -u scripts/train_linear_wdl.py --epochs 50 --lr 0.01 --lr-end 0.001 --batch-size 2048 --batches-per-epoch 32 --test-fraction 0.10 --test-subset-size 3200 --run-name linear_wdl_frac10_fast --plot plots/linear_wdl_frac10_fast_ce.png
 ```
 
 
 ## Actual training 
-```
+```powershell
 py -3.12 -u scripts/train_linear_wdl.py --epochs 100 --lr 0.01 --run-name linear_wdl --plot plots/linear_wdl_ce.png
 ```
 
@@ -95,32 +82,32 @@ py -3.12 -u scripts/inspect_nnue_positions.py linear_wdl_smoke --ckpt best --n 2
 
 ## Faster Training Small Model 
 ```powershell
-py -3.12 -u scripts/train_linear_wdl.py --epochs 100 --lr 0.01 --run-name linear_wdl --plot plots/linear_wdl_ce.png --test fen_value_visits_lichess_db_standard_rated_2026-07_0-5000_d90 --test-subset-size 10000 --train-val-subset-size 5000 --fast
+py -3.12 -u scripts/train_linear_wdl.py --epochs 100 --lr 0.01 --run-name linear_wdl --plot plots/linear_wdl_ce.png --test-fraction 0.10 --test-subset-size 10000 --train-val-subset-size 5000 --fast
 ```
 
 
 ## Faster Training Medium Model 
 
 ```powershell
-py -3.12 -u scripts/train_medium_wdl.py --epochs 100 --lr 0.01 --hidden-dim 32 --run-name medium_h32_fast --plot plots/medium_wdl_ce.png --test fen_value_visits_lichess_db_standard_rated_2026-07_0-5000_d90 --test-subset-size 10000 --train-val-subset-size 5000 --fast
+py -3.12 -u scripts/train_medium_wdl.py --epochs 100 --lr 0.01 --hidden-dim 32 --run-name medium_h32_fast --plot plots/medium_wdl_ce.png --test-fraction 0.10 --test-subset-size 10000 --train-val-subset-size 5000 --fast
 
-py -3.12 -u scripts/train_medium_wdl.py --epochs 100 --lr 0.01 --hidden-dim 64 --run-name medium_h64_fast --plot plots/medium_wdl_ce.png --test fen_value_visits_lichess_db_standard_rated_2026-07_0-5000_d90 --test-subset-size 10000 --train-val-subset-size 5000 --fast
+py -3.12 -u scripts/train_medium_wdl.py --epochs 100 --lr 0.01 --hidden-dim 64 --run-name medium_h64_fast --plot plots/medium_wdl_ce.png --test-fraction 0.10 --test-subset-size 10000 --train-val-subset-size 5000 --fast
 
-py -3.12 -u scripts/train_medium_wdl.py --epochs 100 --lr 0.01 --hidden-dim 128 --run-name medium_h128_fast --plot plots/medium_wdl_ce.png --test fen_value_visits_lichess_db_standard_rated_2026-07_0-5000_d90 --test-subset-size 10000 --train-val-subset-size 5000 --fast
+py -3.12 -u scripts/train_medium_wdl.py --epochs 100 --lr 0.01 --hidden-dim 128 --run-name medium_h128_fast --plot plots/medium_wdl_ce.png --test-fraction 0.10 --test-subset-size 10000 --train-val-subset-size 5000 --fast
 ```
 
 ## Faster Training Dual Model 🧠
 
 ```powershell
-py -3.12 -u scripts/train_nnue.py --epochs 100 --lr 0.01 --hidden-dim 16 --hidden2-dim 32 --run-name dual_h16_H32_fast --plot plots/dual_nnue_ce_64_64.png --test fen_value_visits_lichess_db_standard_rated_2026-07_0-5000_d90 --test-subset-size 10000 --train-val-subset-size 5000 --fast
+py -3.12 -u scripts/train_nnue.py --epochs 100 --lr 0.01 --hidden-dim 16 --hidden2-dim 32 --run-name dual_h16_H32_fast --plot plots/dual_nnue_ce_64_64.png --test-fraction 0.10 --test-subset-size 10000 --train-val-subset-size 5000 --fast
 
-py -3.12 -u scripts/train_nnue.py --epochs 100 --lr 0.01 --hidden-dim 32 --hidden2-dim 64 --run-name dual_h32_H64_fast --plot plots/dual_nnue_ce_64_128.png --test fen_value_visits_lichess_db_standard_rated_2026-07_0-5000_d90 --test-subset-size 10000 --train-val-subset-size 5000 --fast
+py -3.12 -u scripts/train_nnue.py --epochs 100 --lr 0.01 --hidden-dim 32 --hidden2-dim 64 --run-name dual_h32_H64_fast --plot plots/dual_nnue_ce_64_128.png --test-fraction 0.10 --test-subset-size 10000 --train-val-subset-size 5000 --fast
 
-py -3.12 -u scripts/train_nnue.py --epochs 100 --lr 0.01 --hidden-dim 64 --hidden2-dim 128 --run-name dual_h64_H128_fast --plot plots/dual_nnue_ce_64_128.png --test fen_value_visits_lichess_db_standard_rated_2026-07_0-5000_d90 --test-subset-size 10000 --train-val-subset-size 5000 --fast
+py -3.12 -u scripts/train_nnue.py --epochs 100 --lr 0.01 --hidden-dim 64 --hidden2-dim 128 --run-name dual_h64_H128_fast --plot plots/dual_nnue_ce_64_128.png --test-fraction 0.10 --test-subset-size 10000 --train-val-subset-size 5000 --fast
 
-py -3.12 -u scripts/train_nnue.py --epochs 200 --lr 0.01 --hidden-dim 128 --hidden2-dim 256 --run-name dual_h128_H256_fast --plot plots/dual_nnue_ce_128_256.png --test fen_value_visits_lichess_db_standard_rated_2026-07_0-5000_d90 --test-subset-size 5000 --train-val-subset-size 5000 --fast
+py -3.12 -u scripts/train_nnue.py --epochs 200 --lr 0.01 --hidden-dim 128 --hidden2-dim 256 --run-name dual_h128_H256_fast --plot plots/dual_nnue_ce_128_256.png --test-fraction 0.10 --test-subset-size 5000 --train-val-subset-size 5000 --fast
 
-py -3.12 -u scripts/train_nnue.py --epochs 200 --lr 0.01 --hidden-dim 256 --hidden2-dim 512 --run-name dual_h256_H512_fast --plot plots/dual_nnue_ce_256_512.png --test fen_value_visits_lichess_db_standard_rated_2026-07_0-5000_d90 --test-subset-size 5000 --train-val-subset-size 5000 --fast
+py -3.12 -u scripts/train_nnue.py --epochs 200 --lr 0.01 --hidden-dim 256 --hidden2-dim 512 --run-name dual_h256_H512_fast --plot plots/dual_nnue_ce_256_512.png --test-fraction 0.10 --test-subset-size 5000 --train-val-subset-size 5000 --fast
 ```
 
 ---
@@ -128,11 +115,19 @@ py -3.12 -u scripts/train_nnue.py --epochs 200 --lr 0.01 --hidden-dim 256 --hidd
 ## Run ALL
 
 ```powershell
-py -3.12 -u scripts/train_linear_wdl.py --epochs 100 --lr 0.01 --run-name linear_wdl --plot plots/linear_wdl_ce.png --test fen_value_visits_lichess_db_standard_rated_2026-07_0-5000_d90 --test-subset-size 10000 --train-val-subset-size 5000 --fast
+py -3.12 -u scripts/train_linear_wdl.py --epochs 100 --lr 0.01 --run-name linear_wdl --plot plots/linear_wdl_ce.png --test-fraction 0.10 --test-subset-size 10000 --train-val-subset-size 5000 --fast
 
-py -3.12 -u scripts/train_medium_wdl.py --epochs 100 --lr 0.01 --hidden-dim 32 --run-name medium_h32_fast --plot plots/medium_wdl_ce.png --test fen_value_visits_lichess_db_standard_rated_2026-07_0-5000_d90 --test-subset-size 10000 --train-val-subset-size 5000 --fast
+py -3.12 -u scripts/train_medium_wdl.py --epochs 100 --lr 0.01 --hidden-dim 32 --run-name medium_h32_fast --plot plots/medium_wdl_ce.png --test-fraction 0.10 --test-subset-size 10000 --train-val-subset-size 5000 --fast
 
-py -3.12 -u scripts/train_nnue.py --epochs 100 --lr 0.01 --hidden-dim 16 --hidden2-dim 32 --run-name dual_h16_H32_fast --plot plots/dual_nnue_ce_64_64.png --test fen_value_visits_lichess_db_standard_rated_2026-07_0-5000_d90 --test-subset-size 10000 --train-val-subset-size 5000 --fast
+py -3.12 -u scripts/train_nnue.py --epochs 100 --lr 0.01 --hidden-dim 16 --hidden2-dim 32 --run-name dual_h16_H32_fast --plot plots/dual_nnue_ce_64_64.png --test-fraction 0.10 --test-subset-size 10000 --train-val-subset-size 5000 --fast
+```
+
+---
+
+## Baseline Compare to FFNN
+
+```powershell
+py -3.12 -u scripts/train_ffnn.py --epochs 50 --lr 0.001 --hidden1 256 --hidden2 256 --run-name ffnn_baseline --test-fraction 0.10 --fast
 ```
 
 ---
@@ -140,29 +135,21 @@ py -3.12 -u scripts/train_nnue.py --epochs 100 --lr 0.01 --hidden-dim 16 --hidde
 ## With scheduler
 
 ```powershell
-py -3.12 -u scripts/train_nnue.py --epochs 300 --lr 0.01 --lr-end 0.001 --hidden-dim 128 --hidden2-dim 256 --run-name dual_h128_H256_fast --plot plots/dual_nnue_ce_128_256_scheduler_300_epoch.png --test fen_value_visits_lichess_db_standard_rated_2026-07_0-5000_d90 --test-subset-size 5000 --train-val-subset-size 5000 --fast
+py -3.12 -u scripts/train_nnue.py --epochs 300 --lr 0.01 --lr-end 0.001 --hidden-dim 128 --hidden2-dim 256 --run-name dual_h128_H256_fast --plot plots/dual_nnue_ce_128_256_scheduler_300_epoch.png --test-fraction 0.10 --test-subset-size 5000 --train-val-subset-size 5000 --fast
 
-py -3.12 -u scripts/train_nnue.py --epochs 1000 --lr 0.01 --lr-end 0.001 --hidden-dim 128 --hidden2-dim 256 --run-name dual_h128_H256_fast --plot plots/dual_nnue_ce_128_256_scheduler_1000_epoch.png --test fen_value_visits_lichess_db_standard_rated_2026-07_0-5000_d90 --test-subset-size 3200 --train-val-subset-size 3200 --batches-per-epoch 40 --batch-size 256 
+py -3.12 -u scripts/train_nnue.py --epochs 1000 --lr 0.01 --lr-end 0.001 --hidden-dim 128 --hidden2-dim 256 --run-name dual_h128_H256_fast --plot plots/dual_nnue_ce_128_256_scheduler_1000_epoch.png --test-fraction 0.10 --test-subset-size 3200 --train-val-subset-size 3200 --batches-per-epoch 40 --batch-size 256 
 ```
 
-## NNUE Variable batch size 
+---
+
+## NNUE Variable batch size ⭐️
 default batch-size = 256
 default batches-per-epoch = 40
 
 ```powershell
-py -3.12 -u scripts/train_nnue.py --epochs 300 --lr 0.01 --lr-end 0.001 --hidden-dim 128 --hidden2-dim 256 --run-name dual_h128_H256_fast --plot plots/dual_nnue_ce_128_256_scheduler_5.png --test fen_value_visits_lichess_db_standard_rated_2026-07_0-5000_d90 --test-subset-size 3200 --train-val-subset-size 3200 --batches-per-epoch 32 --batch-size 1024 
+py -3.12 -u scripts/train_nnue.py --epochs 300 --lr 0.01 --lr-end 0.001 --hidden-dim 128 --hidden2-dim 256 --run-name dual_h128_H256_fast --plot plots/dual_nnue_ce_128_256_scheduler_5.png --test-fraction 0.10 --test-subset-size 3200 --train-val-subset-size 3200 --batches-per-epoch 32 --batch-size 1024 
 
-py -3.12 -u scripts/train_nnue.py --epochs 200 --lr 0.01 --lr-end 0.001 --hidden-dim 128 --hidden2-dim 256 --run-name dual_h128_H256_fast --plot plots/dual_nnue_ce_128_256_scheduler_6.png --test fen_value_visits_lichess_db_standard_rated_2026-07_0-5000_d90 --test-subset-size 3200 --train-val-subset-size 3200 --batches-per-epoch 32 --batch-size 2048
-```
-
-Best test_ce=0.696645 
-
----
-
-## Baseline Compare to FFNN
-
-```powershell
-py -3.12 -u scripts/train_ffnn.py --epochs 50 --lr 0.001 --hidden1 256 --hidden2 256 --run-name ffnn_baseline --test fen_value_visits_lichess_db_standard_rated_2026-07_0-5000_d90 --fast
+py -3.12 -u scripts/train_nnue.py --epochs 500 --lr 0.01 --lr-end 0.001 --hidden-dim 128 --hidden2-dim 256 --run-name dual_h128_H256_fast --plot plots/dual_nnue_ce_128_256_scheduler_6.png --test-fraction 0.10 --test-subset-size 3200 --train-val-subset-size 3200 --batches-per-epoch 32 --batch-size 2048
 ```
 
 ---

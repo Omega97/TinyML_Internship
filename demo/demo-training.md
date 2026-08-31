@@ -6,10 +6,7 @@ Run from the **repo root**. Training reads per-slice `features.npz` (no chess en
 
 **Split**
 
-| Role | Folder under `data/processed/board_eval/fen_value_visits/` |
-| ---- | ---------------------------------------------------------- |
-| **Test** | `fen_value_visits_lichess_db_standard_rated_2026-07_100000-105000_d80_draw5` |
-| **Train** | every other slice folder |
+A random `--test-fraction` of **each** slice (default **0.10**, `--split-seed`) is test; the rest is train. Batches and both CE metrics are row-weighted.
 
 ---
 
@@ -40,25 +37,25 @@ From the repo root.
 py -3.12 -u scripts/encode_slice_features.py --rebuild
 ```
 
-**1b. Linear WDL smoke** — no hidden layers (`844×2 → 3` softmax), 10 epochs, test = `…_0-5000_d90`:
+**1b. Linear WDL smoke** — no hidden layers (`844×2 → 3` softmax), 10 epochs, random 10% of each slice as test:
 
 ```powershell
 py -3.12 -u scripts/train_linear_wdl.py --epochs 10 --smoke --run-name linear_wdl_smoke --plot plots/linear_wdl_smoke_ce.png
 ```
 
-**1. Smoke test** — DualHidden, 5 epochs, 20k random train rows, full `100000-105000_d80_draw5` test:
+**1. Smoke test** — DualHidden, 5 epochs, 20k random train rows, random 10% of each slice as test:
 
 ```powershell
 py -3.12 -u scripts/train_nnue.py --epochs 5 --smoke --run-name dual_W64_H128_wdl_smoke --plot plots/nnue_smoke_ce.png
 ```
 
-**2. Whole training run** — all train slices, full `100000-105000_d80_draw5` test:
+**2. Whole training run** — all slices, random 10% of each as test:
 
 ```powershell
 py -3.12 -u scripts/train_nnue.py --epochs 10 --run-name dual_W64_H128_wdl --plot plots/nnue_ce.png
 ```
 
-**3. Faster training** — smaller batches and fewer steps per epoch. Each batch is `batch_size` positions drawn at random **across all train slices** (a slice is picked uniformly, then a row inside it):
+**3. Faster training** — smaller batches and fewer steps per epoch. Each batch is `batch_size` positions drawn uniformly over all training rows:
 
 ```powershell
 py -3.12 -u scripts/train_nnue.py --epochs 5 --fast --run-name dual_W64_H128_wdl_fast --plot plots/nnue_fast_ce.png
@@ -101,7 +98,7 @@ py -3.12 -u scripts/encode_slice_features.py --rebuild
 
 ## Smoke (5 epochs, 20k random train rows)
 
-`--smoke` samples 20k train rows. Evaluates on the full `100000-105000_d80_draw5` holdout.
+`--smoke` samples 20k train rows. Evaluates on a random 10% of each slice (full test set, not a subset).
 
 ```powershell
 py -3.12 -u scripts/train_nnue.py --epochs 5 --smoke --run-name dual_W64_H128_wdl_smoke --plot plots/nnue_smoke_ce.png
@@ -113,7 +110,7 @@ Checkpoint: `models/checkpoints/nnue/dual_W64_H128_wdl_smoke/` · plot: `plots/n
 
 ## Whole training run
 
-All train slices, full `100000-105000_d80_draw5` test, 10 epochs.
+All slices, random 10% of each as test, 10 epochs.
 
 ```powershell
 py -3.12 -u scripts/train_nnue.py --epochs 10 --run-name dual_W64_H128_wdl --plot plots/nnue_ce.png
@@ -154,7 +151,8 @@ Checkpoint: `models/checkpoints/nnue/dual_W64_H128_wdl_fast/` · plot: `plots/nn
 | `--fast` | `batch-size 256` and `40` mixed batches/epoch |
 | `--batches-per-epoch N` | Optimizer steps per epoch (`0` = pool size / batch size) |
 | `--max-train N` | Random mixed samples/epoch (`0` = all) |
-| `--test-slice NAME` | Override holdout folder (default: `…_100000-105000_d80_draw5`) |
+| `--test-fraction P` | Random this fraction of each slice is test (default **0.10**) |
+| `--split-seed N` | RNG seed for that split (default **0**) |
 | `--slices-dir PATH` | Parent of per-slice folders |
 | `--run-name NAME` | Checkpoint folder name (default includes a UTC stamp) |
 | `--plot PATH` | CE figure (default `plots/<run-name>_ce.png`) |

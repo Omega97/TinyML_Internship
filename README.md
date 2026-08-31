@@ -27,7 +27,7 @@ Tiny-hardware chess bot (Wio-class: **~1700 Elo**, **~1 s/move**, **192 KB RAM**
 | 4 | Keep **Cfish** αβ; replace only `evaluate` / `nnue_evaluate` |
 | 5 | ACPL and STS supporting; BayesElo match vanilla vs MoE is the ship gate |
 
-### Model
+### Model Architecture
 
 | Piece | Choice |
 |-------|--------|
@@ -56,7 +56,7 @@ white / black sparse 844
    head Linear 128 → 3 + softmax → STM WDL (Win, Draw, and Loss **for the current player**) ∈ [0, 1]
 ```
 
-~70 979 parameters at the default widths. Train from per-slice `features.npz` (test = `…_100000-105000_d80_draw5`). Re-encode slices after the WDL schema change.
+~70 979 parameters at the default widths. Train from per-slice `features.npz` (test = random 10% of each slice). Re-encode slices after the WDL schema change.
 
 ```powershell
 pip install -e ".[train]"
@@ -83,21 +83,21 @@ See [demo/demo-training.md](demo/demo-training.md) for the fast command and arti
 **Engine self-play demos** from the previous pipeline (HCE / pilot NNUE / human PGNs).  
 **White / Black Elo** = Stockfish ACPL heuristic (`Elo ≈ 2855 − 10×ACPL`, floor **400**). Same agent plays both colors; single-game Elo is noisy.
 
-| Description | GIF |
-| ----------- | --- |
-| **Omar game 2** <br>human blitz PGN (`omar-game-2.pgn`)<br>DrifS (1808) vs Omega0 (1819), 0-1<br>White **~400** (ACPL 1275)‡ <br>Black **~2590** (ACPL 27) | <img src="images/games/omar-game-2.gif" width="200"> |
-| **Omar game 3** <br>human bullet PGN (`omar-game-3.pgn`)<br>Omega0 (1669) vs Petroliam89 (1694), 0-1<br>White **~1710** (ACPL 115) <br>Black **~1890** (ACPL 97) | <img src="images/games/omar-game-3.gif" width="200"> |
-| **Omar game 4** <br>human blitz PGN (`omar-game-4.pgn`)<br>Omega0 (1938) vs GonzoII (2006), 1-0<br>White **~2540** (ACPL 31) <br>Black **~2435** (ACPL 42) | <img src="images/games/omar-game-4.gif" width="200"> |
-| **NNUE d4 demo** <br>pilot NNUE<br>αβ depth 4, **no** qsearch<br>max 40 plies<br>White **~2420** (ACPL 43) <br>Black **~2280** (ACPL 58) | <img src="images/games/nnue_d4_demo.gif" width="200"> |
-| **NNUE depth 1** <br>pilot `pilot_W128_844` <br>pure NNUE (844-dim dual POV)<br>alpha-beta depth 1<br>White **~2260** (ACPL 59) <br>Black **~2250** (ACPL 61) | <img src="images/games/nnue_d1_game.gif" width="200"> |
-| **HCE depth 1** <br>hand-crafted eval<br>alpha-beta depth 1<br>**no** quiescence<br>White **~400** (ACPL 1548) <br>Black **~2230** (ACPL 62) | <img src="images/games/hce_d1_game.gif" width="200"> |
-| **NNUE depth 2** <br>same pilot NNUE checkpoint<br>alpha-beta depth 2<br>White **~2135** (ACPL 72)† <br>Black **~2120** (ACPL 74)† | <img src="images/games/nnue_d2_game.gif" width="200"> |
+| Description                                                                                                                                                            | GIF                                                           |
+| ---------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------- |
+| **Omar game 2** <br>human blitz PGN (`omar-game-2.pgn`)<br>DrifS (1808) vs Omega0 (1819), 0-1<br>White **~400** (ACPL 1275)‡ <br>Black **~2590** (ACPL 27)             | <img src="images/games/omar-game-2.gif" width="200">          |
+| **Omar game 3** <br>human bullet PGN (`omar-game-3.pgn`)<br>Omega0 (1669) vs Petroliam89 (1694), 0-1<br>White **~1710** (ACPL 115) <br>Black **~1890** (ACPL 97)       | <img src="images/games/omar-game-3.gif" width="200">          |
+| **Omar game 4** <br>human blitz PGN (`omar-game-4.pgn`)<br>Omega0 (1938) vs GonzoII (2006), 1-0<br>White **~2540** (ACPL 31) <br>Black **~2435** (ACPL 42)             | <img src="images/games/omar-game-4.gif" width="200">          |
+| **NNUE d4 demo** <br>pilot NNUE<br>αβ depth 4, **no** qsearch<br>max 40 plies<br>White **~2420** (ACPL 43) <br>Black **~2280** (ACPL 58)                               | <img src="images/games/nnue_d4_demo.gif" width="200">         |
+| **NNUE depth 1** <br>pilot `pilot_W128_844` <br>pure NNUE (844-dim dual POV)<br>alpha-beta depth 1<br>White **~2260** (ACPL 59) <br>Black **~2250** (ACPL 61)          | <img src="images/games/nnue_d1_game.gif" width="200">         |
+| **HCE depth 1** <br>hand-crafted eval<br>alpha-beta depth 1<br>**no** quiescence<br>White **~400** (ACPL 1548) <br>Black **~2230** (ACPL 62)                           | <img src="images/games/hce_d1_game.gif" width="200">          |
+| **NNUE depth 2** <br>same pilot NNUE checkpoint<br>alpha-beta depth 2<br>White **~2135** (ACPL 72)† <br>Black **~2120** (ACPL 74)†                                     | <img src="images/games/nnue_d2_game.gif" width="200">         |
 | **HCE 1 s/move** <br>same HCE, iterative deepening<br>**movetime 1.0 s**<br>qsearch cap 6 · ½–½ @ 37 plies<br>White **~1230** (ACPL 162) <br>Black **~1960** (ACPL 90) | <img src="images/games/hce_movetime_1s_demo.gif" width="200"> |
-| **NNUE d1 demo** <br>pilot `pilot_W128_844`<br>αβ depth 1, **no** qsearch<br>max 80 plies<br>White **~1720** (ACPL 113) <br>Black **~1630** (ACPL 123) | <img src="images/games/nnue_d1_demo.gif" width="200"> |
-| **HCE depth 2** <br>same HCE<br>alpha-beta depth 2<br>**no** quiescence<br>White **~400** (ACPL 1519) <br>Black **~400** (ACPL 1516) | <img src="images/games/hce_d2_game.gif" width="200"> |
-| **HCE d2 + qsearch** <br>same HCE<br>αβ depth 2, **with** qsearch (cap 6)<br>White **~400** (ACPL 1525) <br>Black **~400** (ACPL 1524) | <img src="images/games/hce_d2_qsearch_demo.gif" width="200"> |
-| **Depth-1 demo reel** <br>concat. HCE d1 + NNUE d1 | <img src="images/games/depth1_game_demo.gif" width="200"> |
-| **Depth-2 demo reel** <br>concat. HCE d2 + NNUE d2 | <img src="images/games/depth2_game_demo.gif" width="200"> |
+| **NNUE d1 demo** <br>pilot `pilot_W128_844`<br>αβ depth 1, **no** qsearch<br>max 80 plies<br>White **~1720** (ACPL 113) <br>Black **~1630** (ACPL 123)                 | <img src="images/games/nnue_d1_demo.gif" width="200">         |
+| **HCE depth 2** <br>same HCE<br>alpha-beta depth 2<br>**no** quiescence<br>White **~400** (ACPL 1519) <br>Black **~400** (ACPL 1516)                                   | <img src="images/games/hce_d2_game.gif" width="200">          |
+| **HCE d2 + qsearch** <br>same HCE<br>αβ depth 2, **with** qsearch (cap 6)<br>White **~400** (ACPL 1525) <br>Black **~400** (ACPL 1524)                                 | <img src="images/games/hce_d2_qsearch_demo.gif" width="200">  |
+| **Depth-1 demo reel** <br>concat. HCE d1 + NNUE d1                                                                                                                     | <img src="images/games/depth1_game_demo.gif" width="200">     |
+| **Depth-2 demo reel** <br>concat. HCE d2 + NNUE d2                                                                                                                     | <img src="images/games/depth2_game_demo.gif" width="200">     |
 
 † NNUE d2: companion self-play PGN in `LEGACY/images/games/`. Multi-game gate for that pilot at d2 collapsed (Elo floor **~400**).
 
@@ -140,8 +140,8 @@ The Concatenated Rectified Linear Unit (CReLU) is an activation function for dee
 
 Goal §2 is in progress: STM WDL student, soft cross-entropy, per-slice `features.npz`. Commands and split: [demo/demo-training.md](demo/demo-training.md).
 
-Linear baseline (no hidden layers, `844×2 → 3` softmax) on the live dump, test = `…_0-5000_d90`:
+Current best performing Dual-POV **NNUE**:
 
 <div align="center">
-    <img src="plots/linear_wdl_ce.png" width="600" alt="Linear WDL train/test cross-entropy">
+    <img src="plots/dual_nnue_ce_128_256_scheduler_6.png" width="600" alt="Linear WDL train/test cross-entropy">
 </div>

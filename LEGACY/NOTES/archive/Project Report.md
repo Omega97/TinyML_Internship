@@ -139,7 +139,7 @@ Meeting all'ufficio del prof. Zennaro
 - **Measuring memory and time to run the NNs correctly!** Extended the Wio value-net performance matrix to **big** (`768→256→64→1`) and **huge** (`768→512→64→1`); full nano→huge sweep now fits on device (huge at ~96% flash).
 - **Benchmark honesty fix:** the flat ~2.01M evals/s across all models was a measurement artifact — `-Os` dead-code elimination removed `forward()` from `loop()`. Fixed with `volatile forwardSink`, interval-based EMA rate, and 1s warm-up discard; throughput now scales with model size (~2× latency per tier: nano 1.4 ms → huge 45 ms).
 - **Sketch refactor:** split `Wio_TinyValueTest` into `config.h`, `Int8ValueNet`, `WioBoard`, `Benchmark`; weights included once in `Int8ValueNet.cpp` (fixes 3× PROGMEM duplication that overflowed huge). Sparse L1 skips `pgm_read_byte` on empty board squares.
-- **24/6 lab session:** optimized forward pass (~15% faster overall; nano 1.8→1.4 ms/call); removed misleading `K` display suffix; updated [NOTES/Performance.md](../Performance.md) with honest latency/evals/s table and hw–sw synergy notes (flash bus stalls dominate, not FPU). See daily notes [2026-06-22.md](../../DAILY-NOTES/2026-06/2026-06-22.md), [2026-06-24.md](../../DAILY-NOTES/2026-06/2026-06-24.md).
+- **24/6 lab session:** optimized forward pass (~15% faster overall; nano 1.8→1.4 ms/call); removed misleading `K` display suffix; updated [NOTES/Performance.md](../Performance.md) with honest latency/evals/s table and hw–sw synergy notes (flash bus stalls dominate, not FPU). See daily notes [2026-06-22.md](2026-06-22.md), [2026-06-24.md](2026-06-24.md).
 
 #### Repo work
 - Models: `BigValueMLP / HugeValueMLP` (nano→huge family)
@@ -150,7 +150,7 @@ Meeting all'ufficio del prof. Zennaro
 
 ## 29 Giugno - 5 Luglio
 
-*Daily notes: [06-29](../../DAILY-NOTES/2026-06/2026-06-29.md), [06-30](../../DAILY-NOTES/2026-06/2026-06-30.md), [07-01](../../DAILY-NOTES/2026-07/2026-07-01.md), [07-02](../../DAILY-NOTES/2026-07/2026-07-02.md), [07-03](../../DAILY-NOTES/2026-07/2026-07-03.md); 07-04 vuota.*
+*Daily notes: [06-29](2026-06-29.md), [06-30](2026-06-30.md), [07-01](2026-07-01.md), [07-02](2026-07-02.md), [07-03](2026-07-03.md); 07-04 vuota.*
 
 - **Catalogo modelli** — consolidata la ricerca HF in [NOTES/Models.md](../Models.md): Dense/Conv, ResNet, Transformer, NNUE, Lc0 edge; i modelli HF (8–100M params) restano fuori budget Wio.
 - **Transformer compatto** — [NOTES/chess transformer.md](../chess%20transformer.md): policy+value **~210K** params (`24×8×8`, 2 blocchi) — ~165× più piccolo di ChessBot.
@@ -172,7 +172,7 @@ Meeting all'ufficio del prof. Zennaro
 
 ## 6-12 Luglio
 
-*Daily notes: [07-06](../../DAILY-NOTES/2026-07/2026-07-06.md), [07-07](../../DAILY-NOTES/2026-07/2026-07-07.md), [07-08](../../DAILY-NOTES/2026-07/2026-07-08.md), [07-10](../../DAILY-NOTES/2026-07/2026-07-10.md).*
+*Daily notes: [07-06](2026-07-06.md), [07-07](2026-07-07.md), [07-08](2026-07-08.md), [07-10](2026-07-10.md).*
 
 Settimana del **primo NNUE pilot**, del **gate ACPL** e dell'encoder tattico **844**.
 
@@ -203,7 +203,7 @@ Settimana del **primo NNUE pilot**, del **gate ACPL** e dell'encoder tattico **8
 
 ## 13-19 Luglio
 
-*Daily notes: [07-16](../../DAILY-NOTES/2026-07/2026-07-16.md), [07-17](../../DAILY-NOTES/2026-07/2026-07-17.md); [07-18](../../DAILY-NOTES/2026-07/2026-07-18.md) solo idea.*
+*Daily notes: [07-16](2026-07-16.md), [07-17](2026-07-17.md); [07-18](2026-07-18.md) solo idea.*
 
 Settimana del **path produzione dati** (Lichess primary + Lc0 supplement, label uniformi Lc0).
 
@@ -222,7 +222,7 @@ Settimana del **path produzione dati** (Lichess primary + Lc0 supplement, label 
 
 ## 20-26 Luglio
 
-*Daily notes: [07-20](../../DAILY-NOTES/2026-07/2026-07-20.md), [07-21](../../DAILY-NOTES/2026-07/2026-07-21.md), [07-22](../../DAILY-NOTES/2026-07/2026-07-22.md).*
+*Daily notes: [07-20](2026-07-20.md), [07-21](2026-07-21.md), [07-22](2026-07-22.md).*
 
 Settimana del **mini production set end-to-end** e del **project reassessment** (cleanup repo + docs).
 
@@ -240,7 +240,7 @@ Settimana del **mini production set end-to-end** e del **project reassessment** 
 
 ## 27 Luglio - 2 Agosto
 
-*Daily notes: [07-31](../../DAILY-NOTES/2026-07/2026-07-31.md), [08-01](../../DAILY-NOTES/2026-08/2026-08-01.md). Nessuna nota 27–30/7 né 2/8.*
+*Daily notes: [07-31](2026-07-31.md), [08-01](2026-08-01.md). Nessuna nota 27–30/7 né 2/8.*
 
 Settimana di **baseline Cfish** (riferimento forte PC); confronto ACPL Cfish vs SARDINE ancora aperto.
 

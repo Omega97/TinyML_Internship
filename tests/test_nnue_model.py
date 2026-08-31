@@ -295,6 +295,103 @@ def test_from_slice_root_skips_test_folder(tmp_path):
     assert float(ds[0]["target"][0] - ds[0]["target"][2]) == pytest.approx(0.1, abs=5e-3)
 
 
+def test_last_fraction_cut_and_per_slice_split(tmp_path):
+    import json
+
+    import chess
+
+    from tinymlinternship.nnue.dataset import (
+        ConcatSliceDataset,
+        FenValueVisitsDataset,
+        last_fraction_cut,
+        split_last_fraction,
+    )
+
+    assert last_fraction_cut(10, 0.10) == 9
+    assert last_fraction_cut(100, 0.10) == 90
+    assert last_fraction_cut(1, 0.10) == 1
+    assert last_fraction_cut(9, 0.10) == 9
+
+    board = chess.Board()
+    fens = [board.fen()]
+    for move in board.legal_moves:
+        nxt = board.copy()
+        nxt.push(move)
+        fens.append(nxt.fen())
+        if len(fens) >= 10:
+            break
+
+    def _write(name: str, values: list[float]) -> None:
+        folder = tmp_path / name
+        folder.mkdir()
+        rows = [
+            {"fen": fen, "value": value, "visits": 1}
+            for fen, value in zip(fens, values)
+        ]
+        (folder / f"{name}.json").write_text(json.dumps(rows), encoding="utf-8")
+
+    _write("slice_a", [0.1] * 10)
+    _write("slice_b", [0.9] * 10)
+    slices = FenValueVisitsDataset.load_slice_datasets(tmp_path, progress=False)
+    train_parts, test_parts = split_last_fraction(slices, 0.10)
+    assert [len(part) for part in train_parts] == [9, 9]
+    assert [len(part) for part in test_parts] == [1, 1]
+    test_ds = ConcatSliceDataset(test_parts)
+    assert len(test_ds) == 2
+    assert test_ds[0]["target"].shape == (3,)
+    assert test_ds[1]["target"].shape == (3,)
+
+
+def test_split_random_fraction_is_iid_and_disjoint(tmp_path):
+    import json
+
+    import chess
+    import numpy as np
+
+    from tinymlinternship.nnue.dataset import (
+        FenValueVisitsDataset,
+        UniformRowBatchSampler,
+        split_last_fraction,
+        split_random_fraction,
+    )
+
+    board = chess.Board()
+    fens = [board.fen()]
+    for move in board.legal_moves:
+        nxt = board.copy()
+        nxt.push(move)
+        fens.append(nxt.fen())
+        if len(fens) >= 10:
+            break
+
+    def _write(name: str, values: list[float]) -> None:
+        folder = tmp_path / name
+        folder.mkdir()
+        rows = [
+            {"fen": fen, "value": value, "visits": 1}
+            for fen, value in zip(fens, values)
+        ]
+        (folder / f"{name}.json").write_text(json.dumps(rows), encoding="utf-8")
+
+    _write("slice_a", [0.05 * i for i in range(10)])
+    _write("slice_b", [0.04 * i - 0.2 for i in range(10)])
+    slices = FenValueVisitsDataset.load_slice_datasets(tmp_path, progress=False)
+    train_parts, test_parts = split_random_fraction(slices, 0.10, seed=0)
+    assert [len(part) for part in train_parts] == [9, 9]
+    assert [len(part) for part in test_parts] == [1, 1]
+    again_train, again_test = split_random_fraction(slices, 0.10, seed=0)
+    np.testing.assert_array_equal(train_parts[0].wdl.numpy(), again_train[0].wdl.numpy())
+    np.testing.assert_array_equal(test_parts[0].wdl.numpy(), again_test[0].wdl.numpy())
+    _last_train, last_test = split_last_fraction(slices, 0.10)
+    assert not (
+        np.allclose(test_parts[0].wdl.numpy(), last_test[0].wdl.numpy())
+        and np.allclose(test_parts[1].wdl.numpy(), last_test[1].wdl.numpy())
+    )
+    batches = list(UniformRowBatchSampler(20, batch_size=4, batches=3, seed=1))
+    assert len(batches) == 3
+    assert all(len(batch) == 4 and all(0 <= i < 20 for i in batch) for batch in batches)
+
+
 def test_overlapping_dump_slices_same_game_range():
     from tinymlinternship.nnue.dataset import overlapping_dump_slices, parse_dump_game_range
 

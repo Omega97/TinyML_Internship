@@ -8,6 +8,7 @@ Target is STM ``wdl`` of shape ``(N, 3)``. Slices that only store White-POV
 
 from __future__ import annotations
 
+import bisect
 import hashlib
 import json
 import re
@@ -96,6 +97,75 @@ def apply_holdout_skip(
         skipped |= overlapping_dump_slices(name, names)
     kept = [folder for folder in folders if folder.name not in skipped]
     return kept, skipped
+
+
+def last_fraction_cut(n: int, fraction: float) -> int:
+    """First test index when the last ``fraction`` of ``n`` rows is held out.
+
+    Train is ``[0, cut)``, test is ``[cut, n)``. ``n_test = int(n * fraction)``
+    (floor). Tiny slices may have ``cut == n`` (no test rows).
+    """
+    n = int(n)
+    if n <= 0:
+        return 0
+    frac = float(fraction)
+    if frac <= 0.0:
+        return n
+    if frac >= 1.0:
+        return 0
+    return n - int(n * frac)
+
+
+def split_last_fraction(
+    slices: list[FenValueVisitsDataset],
+    fraction: float,
+) -> tuple[list[FenValueVisitsDataset], list[FenValueVisitsDataset]]:
+    """Per-slice: last ``fraction`` of rows → test, the rest → train.
+
+    Holding out a whole slice made train/test difficulty differ (e.g. extreme
+    positions). Splitting every slice keeps the same mix on both sides.
+    """
+    if not 0.0 < float(fraction) < 1.0:
+        raise ValueError(f"test fraction must be in (0, 1), got {fraction}")
+    train_parts: list[FenValueVisitsDataset] = []
+    test_parts: list[FenValueVisitsDataset] = []
+    for dataset in slices:
+        n = len(dataset)
+        cut = last_fraction_cut(n, fraction)
+        if cut > 0:
+            train_parts.append(dataset.narrow_rows(0, cut))
+        if cut < n:
+            test_parts.append(dataset.narrow_rows(cut, n))
+    return train_parts, test_parts
+
+
+def split_random_fraction(
+    slices: list[FenValueVisitsDataset],
+    fraction: float,
+    *,
+    seed: int = 0,
+) -> tuple[list[FenValueVisitsDataset], list[FenValueVisitsDataset]]:
+    """Per-slice: random ``fraction`` of rows → test, the rest → train.
+
+    Stratified i.i.d. split: every slice type appears in both sets, and train
+    and test have the same difficulty in expectation.
+    """
+    if not 0.0 < float(fraction) < 1.0:
+        raise ValueError(f"test fraction must be in (0, 1), got {fraction}")
+    rng = np.random.RandomState(int(seed))
+    train_parts: list[FenValueVisitsDataset] = []
+    test_parts: list[FenValueVisitsDataset] = []
+    for dataset in slices:
+        n = len(dataset)
+        n_test = int(n * float(fraction))
+        perm = rng.permutation(n)
+        test_idx = perm[:n_test]
+        train_idx = perm[n_test:]
+        if train_idx.size > 0:
+            train_parts.append(dataset.take_rows(train_idx))
+        if test_idx.size > 0:
+            test_parts.append(dataset.take_rows(test_idx))
+    return train_parts, test_parts
 
 
 def epd_key(fen: str) -> str:
@@ -609,6 +679,38 @@ class FenValueVisitsDataset(Dataset):
     def __len__(self) -> int:
         return int(self.wdl.shape[0])
 
+    def take_rows(self, indices: np.ndarray) -> FenValueVisitsDataset:
+        """New dataset with the given row indices (order preserved)."""
+        idx = np.asarray(indices, dtype=np.int64).reshape(-1)
+        n = len(self)
+        if idx.size == 0:
+            raise ValueError("take_rows needs at least one index")
+        if idx.min() < 0 or idx.max() >= n:
+            raise ValueError(f"row index out of range for n={n}")
+        torch_idx = torch.from_numpy(idx)
+        clone = FenValueVisitsDataset.__new__(FenValueVisitsDataset)
+        clone.max_active = self.max_active
+        clone.feature_dim = self.feature_dim
+        clone.cache_dir = self.cache_dir
+        clone._np = {key: value[idx] for key, value in self._np.items()}
+        clone.white_idx = self.white_idx[torch_idx]
+        clone.black_idx = self.black_idx[torch_idx]
+        clone.white_mask = self.white_mask[torch_idx]
+        clone.black_mask = self.black_mask[torch_idx]
+        clone.stm_white = self.stm_white[torch_idx]
+        clone.wdl = self.wdl[torch_idx]
+        clone.visits = self.visits[torch_idx]
+        return clone
+
+    def narrow_rows(self, start: int, end: int) -> FenValueVisitsDataset:
+        """View of rows ``[start, end)``."""
+        start_i = int(start)
+        end_i = int(end)
+        n = len(self)
+        if start_i < 0 or end_i > n or start_i >= end_i:
+            raise ValueError(f"invalid row range [{start_i}, {end_i}) for n={n}")
+        return self.take_rows(np.arange(start_i, end_i, dtype=np.int64))
+
     def __getitem__(self, index: int) -> dict[str, torch.Tensor]:
         return {
             "white_idx": self.white_idx[index],
@@ -637,6 +739,72 @@ class MixedSliceDataset(Dataset):
         slice_id = int(packed) >> 32
         row = int(packed) & 0xFFFFFFFF
         return self.slices[slice_id][row]
+
+
+class ConcatSliceDataset(Dataset):
+    """Linear ``0 .. N-1`` over concatenated slices (sequential test eval)."""
+
+    def __init__(self, slices: list[FenValueVisitsDataset]) -> None:
+        if not slices:
+            raise ValueError("need at least one slice")
+        self.slices = slices
+        self.sizes = [len(item) for item in slices]
+        offsets = [0]
+        acc = 0
+        for size in self.sizes:
+            acc += int(size)
+            offsets.append(acc)
+        self._offsets = offsets
+
+    def __len__(self) -> int:
+        return int(self._offsets[-1])
+
+    def __getitem__(self, index: int) -> dict[str, torch.Tensor]:
+        i = int(index)
+        n = len(self)
+        if i < 0:
+            i += n
+        if i < 0 or i >= n:
+            raise IndexError(index)
+        slice_id = bisect.bisect_right(self._offsets, i) - 1
+        row = i - self._offsets[slice_id]
+        return self.slices[slice_id][row]
+
+
+class UniformRowBatchSampler(Sampler[list[int]]):
+    """Each batch is ``batch_size`` i.i.d. draws uniform over ``0 .. n-1``.
+
+    Large slices appear in proportion to their size (same measure as test CE).
+    """
+
+    def __init__(
+        self,
+        n: int,
+        *,
+        batch_size: int,
+        batches: int,
+        seed: int = 0,
+    ) -> None:
+        if int(n) < 1:
+            raise ValueError("n must be >= 1")
+        if batch_size < 1:
+            raise ValueError("batch_size must be >= 1")
+        if batches < 1:
+            raise ValueError("batches must be >= 1")
+        self.n = int(n)
+        self.batch_size = int(batch_size)
+        self.batches = int(batches)
+        self.seed = int(seed)
+        self.epoch = 0
+
+    def __len__(self) -> int:
+        return self.batches
+
+    def __iter__(self):
+        rng = np.random.RandomState(self.seed + self.epoch)
+        self.epoch += 1
+        for _ in range(self.batches):
+            yield rng.randint(0, self.n, size=self.batch_size).tolist()
 
 
 class AcrossSliceBatchSampler(Sampler[list[int]]):

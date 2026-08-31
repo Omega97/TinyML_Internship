@@ -42,9 +42,9 @@
 
 - [ ] Train an **NNUE** $f_w(s)=(W,D,L)$ with **sparse input**, two hidden layers, *CReLU*, *softmax* WDL output:
 	- **Input**: the board state, sparse representation.
-	- **L1**: a **shared** FFNN `844 → W` (sparse, approx. 128x2 neurons, int8 weights $w^{(1)}$). Called **twice** per position: once on the **own‑side features**, once on the **opponent‑side features** (board mirrored). The two output vectors (`h_own` and `h_opp`, each of size `W`) form the **dual‑POV accumulator** (the activations are recycled via incremental add/sub on make/unmake). They are **concatenated** to size `2W` **after** L1, just before the expert head. Both sets of activations are used as a single embedding vector $h \equiv a^{(1)}$.
-	- **L2**: second hidden layer (approx. 256 neurons, param $w^{(2)}$).
-	- **Output**: Three logits → **softmax** STM \((W, D, L)\) on \([0,1]\). Loss is **cross-entropy** against the teacher WDL. (param $w^{(3)}$).
+	- **L1**: a **shared** FFNN `844 → W` (sparse, approx. 128x2 neurons, int8 weights $w^{(L1)}$). Called **twice** per position: once on the **own‑side features**, once on the **opponent‑side features** (board mirrored). The two output vectors (`h_own` and `h_opp`, each of size `W`) form the **dual‑POV accumulator** (the activations are recycled via incremental add/sub on make/unmake). They are **concatenated** to size `2W` **after** L1, just before the expert head. Both sets of activations are used as a single embedding vector $h \equiv a^{(1)}$.
+	- **L2**: second hidden layer (approx. 256 neurons, param $w^{(L2)}$).
+	- **Output**: Three logits → **softmax** STM \((W, D, L)\) on \([0,1]\). Loss is **cross-entropy** against the teacher WDL. (param $w^{(out)}$).
 
 ---
 
@@ -52,13 +52,13 @@
 
 - [ ] **Embeddings**: A forward pass of the NNUE on the database will provide the embedding $h$ for each position.
     
-- [ ] **Task vectors**: Compute the *task vector* $\delta = \nabla_{w^{(head)}} \; \mathcal L_{acc}\,(f_w (s), \hat v)$ for each position, where $\hat v$ is the value of the position estimated by the *teacher*, $w=(w^{(1)}, w^{(2)}, w^{(3)})$ are all the parameters of the model, and $w^{(head)} = (w^{(2)}, w^{(3)})$ are the parameters of the expert head. These vectors tell you how the model would like to adapt to learn each position-value pair.
+- [ ] **Sample gradients**: Compute the *sample gradient* $\delta = \nabla_{w^{(head)}} \; \mathcal L_{acc}\,(f_w (s), \hat v)$ for each position, where $\hat v$ is the value of the position estimated by the *teacher*, $w=(w^{(L1)}, w^{(L2)}, w^{(out)})$ are all the parameters of the model, and $w^{(head)} = (w^{(L2)}, w^{(out)})$ are the parameters of the expert head. These vectors tell you how the model would like to adapt to learn each position-value pair.
     
-- [ ] **Clustering**: Apply a clustering algorithm (like *k-Means*) with $B$ clusters on the normalized task vectors $\hat \delta$ to obtain the labels $b_i\in\{1,\ldots,B\}$. Each cluster groups together similar *task vectors*, making it easier for the expert heads to learn them.
+- [ ] **Clustering**: Apply a clustering algorithm (like *k-Means*) with $B$ clusters on the normalized *sample gradients* $\hat \delta$ to obtain the labels $b_i\in\{1,\ldots,B\}$. Each cluster groups together similar *sample gradients*, making it easier for the expert heads to learn them.
     
 - [ ] **Dispatcher**: Train a minimal model $g_\phi​(h)=\text{softmax}(W_\phi\, h​)$ to predict the class $b$ based on the L1 activations $h$ (the bias component is implied). _The dispatcher is not used during training of the experts — it is only for inference routing._
     
-- [ ] **Fine-tuning**: The board positions are clustered based on the model's needs rather than the representation of the states (or the states themselves, for that matter). Freeze the $w^{(1)}$ weights, and run a final fine-tuning step on each bucket of states, starting from the initial model $f_w$. This step will yield a model $f^{(i)}_{w'}$ that should outperform the original model.
+- [ ] **Fine-tuning**: The board positions are clustered based on the model's needs rather than the representation of the states (or the states themselves, for that matter). Freeze the $w^{(L1)}$ weights, and run a final fine-tuning step on each bucket of states, starting from the initial model $f_w$. This step will yield a model $f^{(i)}_{w'}$ that should outperform the original model.
 
 ---
 
