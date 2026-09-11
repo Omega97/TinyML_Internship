@@ -1,0 +1,449 @@
+
+(.venv) C:\Users\monfalcone\PycharmProjects\TinyMLInternship>py -3.12 -u scripts/train_nnue.py --epochs 20 --lr 0.01 --hidden-dim 128 --hidden2-dim 256 --batches-per-epoch 50 --batch-size 1024 --run-name dual_h128_H256_fast_ft10 --plot plots/dual_nnue_ce_128_256_ft10.png --test-subset-size 5000 --train-val-subset-size 5000 --test-fraction 0.10 --fast
+Split: random 10% of each slice → test (seed=0); rest → train
+Slices: C:\Users\monfalcone\PycharmProjects\TinyMLInternship\data\processed\board_eval\fen_value_visits
+  train pool 4,501,987 in 165 slices | test 5,000/500,137 | batch 1024 row-weighted × 50 steps/epoch
+  per-epoch test subset 5,000 of 500,137 (seed=0); full eval of best.pt at the end
+  frozen train_ce on 5,000/4,501,987 rows (seed=0, same row-weighted measure as test; n=5,000 is noisy, full compare is printed at the end)
+warning: C:\Users\monfalcone\PycharmProjects\TinyMLInternship\models\checkpoints\nnue\dual_h128_H256_fast_ft10 already has checkpoints; parallel jobs with the same --run-name will overwrite best.pt / last.pt / plots
+single net | L1 128×2 + L2 256 + WDL softmax | 174,723 params | loss=soft CE | train steps 50×1024 | test 5,000/500,137 | cpu
+Output: C:\Users\monfalcone\PycharmProjects\TinyMLInternship\models\checkpoints\nnue\dual_h128_H256_fast_ft10
+epoch 00 | train_ce=1.097782 | test_ce=1.097781 | 1.0s
+epoch 01 | train_ce=0.861795 | test_ce=0.865881 | 6.9s
+epoch 02 | train_ce=0.804411 | test_ce=0.802605 | 8.6s
+epoch 03 | train_ce=0.779294 | test_ce=0.778452 | 9.3s
+epoch 04 | train_ce=0.775757 | test_ce=0.771567 | 8.9s
+epoch 05 | train_ce=0.766608 | test_ce=0.758941 | 6.6s
+epoch 06 | train_ce=0.757546 | test_ce=0.752439 | 5.7s
+epoch 07 | train_ce=0.762486 | test_ce=0.750415 | 5.8s
+epoch 08 | train_ce=0.754403 | test_ce=0.746331 | 5.6s
+epoch 09 | train_ce=0.749391 | test_ce=0.740983 | 5.7s
+epoch 10 | train_ce=0.752323 | test_ce=0.744292 | 6.1s
+epoch 11 | train_ce=0.747554 | test_ce=0.736510 | 8.8s
+epoch 12 | train_ce=0.744515 | test_ce=0.734362 | 6.6s
+epoch 13 | train_ce=0.743125 | test_ce=0.738116 | 5.6s
+epoch 14 | train_ce=0.743209 | test_ce=0.732435 | 5.5s
+epoch 15 | train_ce=0.739333 | test_ce=0.732557 | 5.8s
+epoch 16 | train_ce=0.739525 | test_ce=0.729418 | 5.6s
+epoch 17 | train_ce=0.742552 | test_ce=0.735577 | 5.8s
+epoch 18 | train_ce=0.732080 | test_ce=0.724349 | 5.6s
+epoch 19 | train_ce=0.731894 | test_ce=0.725163 | 5.6s
+epoch 20 | train_ce=0.732783 | test_ce=0.726173 | 6.2s
+Best test_ce=0.724349 → C:\Users\monfalcone\PycharmProjects\TinyMLInternship\models\checkpoints\nnue\dual_h128_H256_fast_ft10\best.pt
+CE plot → C:\Users\monfalcone\PycharmProjects\TinyMLInternship\plots\dual_nnue_ce_128_256_ft10.png
+matched 50,000-row CE (best weights, seed=0) | train_ce=0.731822 | test_ce=0.728263 | gap=+0.003559
+full test (in-memory best) | test_ce=0.729537 | n=500,137
+
+(.venv) C:\Users\monfalcone\PycharmProjects\TinyMLInternship>py -3.12 -u scripts/train_nnue.py --epochs 20 --lr 0.01 --hidden-dim 128 --hidden2-dim 256 --batches-per-epoch 50 --batch-size 1024 --run-name dual_h128_H256_fast_ft20 --plot plots/dual_nnue_ce_128_256_ft20.png --test-subset-size 5000 --train-val-subset-size 5000 --test-fraction 0.20 --fast
+Split: random 20% of each slice → test (seed=0); rest → train
+Slices: C:\Users\monfalcone\PycharmProjects\TinyMLInternship\data\processed\board_eval\fen_value_visits
+  train pool 4,001,761 in 165 slices | test 5,000/1,000,363 | batch 1024 row-weighted × 50 steps/epoch
+  per-epoch test subset 5,000 of 1,000,363 (seed=0); full eval of best.pt at the end
+  frozen train_ce on 5,000/4,001,761 rows (seed=0, same row-weighted measure as test; n=5,000 is noisy, full compare is printed at the end)
+single net | L1 128×2 + L2 256 + WDL softmax | 174,723 params | loss=soft CE | train steps 50×1024 | test 5,000/1,000,363 | cpu
+Output: C:\Users\monfalcone\PycharmProjects\TinyMLInternship\models\checkpoints\nnue\dual_h128_H256_fast_ft20
+epoch 00 | train_ce=1.096957 | test_ce=1.096595 | 1.1s
+epoch 01 | train_ce=0.853058 | test_ce=0.852046 | 7.1s
+epoch 02 | train_ce=0.804904 | test_ce=0.796223 | 6.3s
+epoch 03 | train_ce=0.786225 | test_ce=0.777272 | 6.3s
+epoch 04 | train_ce=0.778873 | test_ce=0.769445 | 6.0s
+epoch 05 | train_ce=0.777125 | test_ce=0.768087 | 5.9s
+epoch 06 | train_ce=0.766506 | test_ce=0.756411 | 6.6s
+epoch 07 | train_ce=0.757749 | test_ce=0.752180 | 6.4s
+epoch 08 | train_ce=0.755134 | test_ce=0.748368 | 8.6s
+epoch 09 | train_ce=0.754554 | test_ce=0.743667 | 8.7s
+epoch 10 | train_ce=0.749676 | test_ce=0.741473 | 9.0s
+epoch 11 | train_ce=0.747822 | test_ce=0.738533 | 7.3s
+epoch 12 | train_ce=0.748537 | test_ce=0.740842 | 5.5s
+epoch 13 | train_ce=0.742220 | test_ce=0.737051 | 5.7s
+epoch 14 | train_ce=0.741178 | test_ce=0.735620 | 5.6s
+epoch 15 | train_ce=0.741017 | test_ce=0.734281 | 5.7s
+epoch 16 | train_ce=0.739917 | test_ce=0.731656 | 5.3s
+epoch 17 | train_ce=0.738720 | test_ce=0.732820 | 5.3s
+epoch 18 | train_ce=0.735632 | test_ce=0.731129 | 5.2s
+epoch 19 | train_ce=0.733330 | test_ce=0.728637 | 5.1s
+epoch 20 | train_ce=0.733775 | test_ce=0.734155 | 5.3s
+Best test_ce=0.728637 → C:\Users\monfalcone\PycharmProjects\TinyMLInternship\models\checkpoints\nnue\dual_h128_H256_fast_ft20\best.pt
+CE plot → C:\Users\monfalcone\PycharmProjects\TinyMLInternship\plots\dual_nnue_ce_128_256_ft20.png
+matched 50,000-row CE (best weights, seed=0) | train_ce=0.731998 | test_ce=0.731651 | gap=+0.000346
+full test (in-memory best) | test_ce=0.733210 | n=1,000,363
+
+(.venv) C:\Users\monfalcone\PycharmProjects\TinyMLInternship>py -3.12 -u scripts/train_nnue.py --epochs 20 --lr 0.01 --hidden-dim 128 --hidden2-dim 256 --batches-per-epoch 50 --batch-size 1024 --run-name dual_h128_H256_fast_ft30 --plot plots/dual_nnue_ce_128_256_ft30.png --test-subset-size 5000 --train-val-subset-size 5000 --test-fraction 0.30 --fast
+Split: random 30% of each slice → test (seed=0); rest → train
+Slices: C:\Users\monfalcone\PycharmProjects\TinyMLInternship\data\processed\board_eval\fen_value_visits
+  train pool 3,501,555 in 165 slices | test 5,000/1,500,569 | batch 1024 row-weighted × 50 steps/epoch
+  per-epoch test subset 5,000 of 1,500,569 (seed=0); full eval of best.pt at the end
+  frozen train_ce on 5,000/3,501,555 rows (seed=0, same row-weighted measure as test; n=5,000 is noisy, full compare is printed at the end)
+single net | L1 128×2 + L2 256 + WDL softmax | 174,723 params | loss=soft CE | train steps 50×1024 | test 5,000/1,500,569 | cpu
+Output: C:\Users\monfalcone\PycharmProjects\TinyMLInternship\models\checkpoints\nnue\dual_h128_H256_fast_ft30
+epoch 00 | train_ce=1.098443 | test_ce=1.098494 | 0.9s
+epoch 01 | train_ce=0.854964 | test_ce=0.849965 | 5.7s
+epoch 02 | train_ce=0.802063 | test_ce=0.791302 | 5.2s
+epoch 03 | train_ce=0.778826 | test_ce=0.768699 | 5.3s
+epoch 04 | train_ce=0.769028 | test_ce=0.763152 | 5.1s
+epoch 05 | train_ce=0.763911 | test_ce=0.756640 | 5.3s
+epoch 06 | train_ce=0.750201 | test_ce=0.748708 | 5.2s
+epoch 07 | train_ce=0.749120 | test_ce=0.749257 | 5.4s
+epoch 08 | train_ce=0.746387 | test_ce=0.739163 | 5.4s
+epoch 09 | train_ce=0.746328 | test_ce=0.739674 | 5.2s
+epoch 10 | train_ce=0.741125 | test_ce=0.736680 | 5.6s
+epoch 11 | train_ce=0.736442 | test_ce=0.730662 | 7.7s
+epoch 12 | train_ce=0.734176 | test_ce=0.730645 | 5.6s
+epoch 13 | train_ce=0.735332 | test_ce=0.733143 | 5.8s
+epoch 14 | train_ce=0.730402 | test_ce=0.726533 | 5.6s
+epoch 15 | train_ce=0.731286 | test_ce=0.728513 | 5.5s
+epoch 16 | train_ce=0.726109 | test_ce=0.717459 | 5.7s
+epoch 17 | train_ce=0.729179 | test_ce=0.724684 | 5.6s
+epoch 18 | train_ce=0.724454 | test_ce=0.720872 | 5.7s
+epoch 19 | train_ce=0.721905 | test_ce=0.717378 | 5.4s
+epoch 20 | train_ce=0.721176 | test_ce=0.720305 | 5.5s
+Best test_ce=0.717378 → C:\Users\monfalcone\PycharmProjects\TinyMLInternship\models\checkpoints\nnue\dual_h128_H256_fast_ft30\best.pt
+CE plot → C:\Users\monfalcone\PycharmProjects\TinyMLInternship\plots\dual_nnue_ce_128_256_ft30.png
+matched 50,000-row CE (best weights, seed=0) | train_ce=0.726812 | test_ce=0.726650 | gap=+0.000161
+full test (in-memory best) | test_ce=0.727319 | n=1,500,569
+
+(.venv) C:\Users\monfalcone\PycharmProjects\TinyMLInternship>py -3.12 -u scripts/train_nnue.py --epochs 20 --lr 0.01 --hidden-dim 128 --hidden2-dim 256 --batches-per-epoch 50 --batch-size 1024 --run-name dual_h128_H256_fast_ft40 --plot plots/dual_nnue_ce_128_256_ft40.png --test-subset-size 5000 --train-val-subset-size 5000 --test-fraction 0.40 --fast
+Split: random 40% of each slice → test (seed=0); rest → train
+Slices: C:\Users\monfalcone\PycharmProjects\TinyMLInternship\data\processed\board_eval\fen_value_visits
+  train pool 3,001,338 in 165 slices | test 5,000/2,000,786 | batch 1024 row-weighted × 50 steps/epoch
+  per-epoch test subset 5,000 of 2,000,786 (seed=0); full eval of best.pt at the end
+  frozen train_ce on 5,000/3,001,338 rows (seed=0, same row-weighted measure as test; n=5,000 is noisy, full compare is printed at the end)
+single net | L1 128×2 + L2 256 + WDL softmax | 174,723 params | loss=soft CE | train steps 50×1024 | test 5,000/2,000,786 | cpu
+Output: C:\Users\monfalcone\PycharmProjects\TinyMLInternship\models\checkpoints\nnue\dual_h128_H256_fast_ft40
+epoch 00 | train_ce=1.097373 | test_ce=1.097526 | 1.0s
+epoch 01 | train_ce=0.846037 | test_ce=0.849597 | 7.0s
+epoch 02 | train_ce=0.789124 | test_ce=0.786666 | 6.2s
+epoch 03 | train_ce=0.762652 | test_ce=0.764389 | 6.4s
+epoch 04 | train_ce=0.762679 | test_ce=0.760345 | 6.5s
+epoch 05 | train_ce=0.751747 | test_ce=0.747736 | 7.0s
+epoch 06 | train_ce=0.748481 | test_ce=0.741295 | 6.3s
+epoch 07 | train_ce=0.738388 | test_ce=0.741486 | 5.9s
+epoch 08 | train_ce=0.735213 | test_ce=0.733047 | 7.1s
+epoch 09 | train_ce=0.730416 | test_ce=0.729393 | 7.0s
+epoch 10 | train_ce=0.737239 | test_ce=0.730174 | 6.8s
+epoch 11 | train_ce=0.729482 | test_ce=0.727630 | 6.4s
+epoch 12 | train_ce=0.731618 | test_ce=0.727966 | 5.4s
+epoch 13 | train_ce=0.728144 | test_ce=0.720930 | 5.1s
+epoch 14 | train_ce=0.727783 | test_ce=0.720956 | 5.0s
+epoch 15 | train_ce=0.725510 | test_ce=0.722013 | 5.0s
+epoch 16 | train_ce=0.726334 | test_ce=0.722663 | 5.0s
+epoch 17 | train_ce=0.721738 | test_ce=0.721206 | 5.0s
+epoch 18 | train_ce=0.719092 | test_ce=0.717884 | 5.0s
+epoch 19 | train_ce=0.719964 | test_ce=0.718891 | 4.9s
+epoch 20 | train_ce=0.720431 | test_ce=0.715153 | 5.1s
+Best test_ce=0.715153 → C:\Users\monfalcone\PycharmProjects\TinyMLInternship\models\checkpoints\nnue\dual_h128_H256_fast_ft40\best.pt
+CE plot → C:\Users\monfalcone\PycharmProjects\TinyMLInternship\plots\dual_nnue_ce_128_256_ft40.png
+matched 50,000-row CE (best weights, seed=0) | train_ce=0.725963 | test_ce=0.728077 | gap=-0.002114
+full test (in-memory best) | test_ce=0.729587 | n=2,000,786
+
+(.venv) C:\Users\monfalcone\PycharmProjects\TinyMLInternship>py -3.12 -u scripts/train_nnue.py --epochs 20 --lr 0.01 --hidden-dim 128 --hidden2-dim 256 --batches-per-epoch 50 --batch-size 1024 --run-name dual_h128_H256_fast_ft50 --plot plots/dual_nnue_ce_128_256_ft50.png --test-subset-size 5000 --train-val-subset-size 5000 --test-fraction 0.50 --fast
+Split: random 50% of each slice → test (seed=0); rest → train
+Slices: C:\Users\monfalcone\PycharmProjects\TinyMLInternship\data\processed\board_eval\fen_value_visits
+  train pool 2,501,099 in 165 slices | test 5,000/2,501,025 | batch 1024 row-weighted × 50 steps/epoch
+  per-epoch test subset 5,000 of 2,501,025 (seed=0); full eval of best.pt at the end
+  frozen train_ce on 5,000/2,501,099 rows (seed=0, same row-weighted measure as test; n=5,000 is noisy, full compare is printed at the end)
+single net | L1 128×2 + L2 256 + WDL softmax | 174,723 params | loss=soft CE | train steps 50×1024 | test 5,000/2,501,025 | cpu
+Output: C:\Users\monfalcone\PycharmProjects\TinyMLInternship\models\checkpoints\nnue\dual_h128_H256_fast_ft50
+epoch 00 | train_ce=1.097640 | test_ce=1.097698 | 0.7s
+epoch 01 | train_ce=0.873765 | test_ce=0.858149 | 6.0s
+epoch 02 | train_ce=0.802682 | test_ce=0.796418 | 6.2s
+epoch 03 | train_ce=0.785598 | test_ce=0.777736 | 6.1s
+epoch 04 | train_ce=0.777286 | test_ce=0.770515 | 6.1s
+epoch 05 | train_ce=0.767032 | test_ce=0.762380 | 6.3s
+epoch 06 | train_ce=0.765800 | test_ce=0.753198 | 5.9s
+epoch 07 | train_ce=0.758103 | test_ce=0.751006 | 5.6s
+epoch 08 | train_ce=0.753701 | test_ce=0.745714 | 5.4s
+epoch 09 | train_ce=0.751951 | test_ce=0.743308 | 5.2s
+epoch 10 | train_ce=0.757809 | test_ce=0.749015 | 5.3s
+epoch 11 | train_ce=0.751045 | test_ce=0.740878 | 5.3s
+epoch 12 | train_ce=0.747645 | test_ce=0.734747 | 5.2s
+epoch 13 | train_ce=0.750704 | test_ce=0.739007 | 5.3s
+epoch 14 | train_ce=0.745723 | test_ce=0.732000 | 5.2s
+epoch 15 | train_ce=0.744401 | test_ce=0.728593 | 5.4s
+epoch 16 | train_ce=0.742233 | test_ce=0.730247 | 5.3s
+epoch 17 | train_ce=0.740327 | test_ce=0.730322 | 8.1s
+epoch 18 | train_ce=0.740190 | test_ce=0.726765 | 5.4s
+epoch 19 | train_ce=0.734360 | test_ce=0.726557 | 5.2s
+epoch 20 | train_ce=0.733096 | test_ce=0.725631 | 5.4s
+Best test_ce=0.725631 → C:\Users\monfalcone\PycharmProjects\TinyMLInternship\models\checkpoints\nnue\dual_h128_H256_fast_ft50\best.pt
+CE plot → C:\Users\monfalcone\PycharmProjects\TinyMLInternship\plots\dual_nnue_ce_128_256_ft50.png
+matched 50,000-row CE (best weights, seed=0) | train_ce=0.729643 | test_ce=0.724882 | gap=+0.004761
+full test (in-memory best) | test_ce=0.729163 | n=2,501,025
+
+(.venv) C:\Users\monfalcone\PycharmProjects\TinyMLInternship>py -3.12 -u scripts/train_nnue.py --epochs 20 --lr 0.01 --hidden-dim 128 --hidden2-dim 256 --batches-per-epoch 50 --batch-size 1024 --run-name dual_h128_H256_fast_ft90 --plot plots/dual_nnue_ce_128_256_ft90.png --test-subset-size 5000 --train-val-subset-size 5000 --test-fraction 0.90 --fast
+Split: random 90% of each slice → test (seed=0); rest → train
+Slices: C:\Users\monfalcone\PycharmProjects\TinyMLInternship\data\processed\board_eval\fen_value_visits
+  train pool 500,285 in 165 slices | test 5,000/4,501,839 | batch 1024 row-weighted × 50 steps/epoch
+  per-epoch test subset 5,000 of 4,501,839 (seed=0); full eval of best.pt at the end
+  frozen train_ce on 5,000/500,285 rows (seed=0, same row-weighted measure as test; n=5,000 is noisy, full compare is printed at the end)
+single net | L1 128×2 + L2 256 + WDL softmax | 174,723 params | loss=soft CE | train steps 50×1024 | test 5,000/4,501,839 | cpu
+Output: C:\Users\monfalcone\PycharmProjects\TinyMLInternship\models\checkpoints\nnue\dual_h128_H256_fast_ft90
+epoch 00 | train_ce=1.097872 | test_ce=1.097860 | 0.7s
+epoch 01 | train_ce=0.829962 | test_ce=0.832296 | 4.6s
+epoch 02 | train_ce=0.789167 | test_ce=0.787765 | 4.5s
+epoch 03 | train_ce=0.769783 | test_ce=0.770454 | 4.6s
+epoch 04 | train_ce=0.759580 | test_ce=0.758726 | 4.5s
+epoch 05 | train_ce=0.753742 | test_ce=0.757597 | 4.7s
+epoch 06 | train_ce=0.748657 | test_ce=0.754243 | 4.7s
+epoch 07 | train_ce=0.746069 | test_ce=0.748903 | 4.7s
+epoch 08 | train_ce=0.740277 | test_ce=0.744676 | 4.7s
+epoch 09 | train_ce=0.737880 | test_ce=0.741632 | 5.0s
+epoch 10 | train_ce=0.731051 | test_ce=0.737363 | 5.1s
+epoch 11 | train_ce=0.731549 | test_ce=0.735766 | 5.1s
+epoch 12 | train_ce=0.732391 | test_ce=0.737659 | 5.1s
+epoch 13 | train_ce=0.727391 | test_ce=0.734185 | 5.2s
+epoch 14 | train_ce=0.727105 | test_ce=0.733183 | 5.1s
+epoch 15 | train_ce=0.718765 | test_ce=0.732407 | 5.3s
+epoch 16 | train_ce=0.715792 | test_ce=0.731173 | 5.3s
+epoch 17 | train_ce=0.717875 | test_ce=0.727372 | 5.3s
+epoch 18 | train_ce=0.712318 | test_ce=0.729322 | 5.3s
+epoch 19 | train_ce=0.711567 | test_ce=0.727981 | 5.1s
+epoch 20 | train_ce=0.712519 | test_ce=0.729963 | 5.2s
+Best test_ce=0.727372 → C:\Users\monfalcone\PycharmProjects\TinyMLInternship\models\checkpoints\nnue\dual_h128_H256_fast_ft90\best.pt
+CE plot → C:\Users\monfalcone\PycharmProjects\TinyMLInternship\plots\dual_nnue_ce_128_256_ft90.png
+matched 50,000-row CE (best weights, seed=0) | train_ce=0.723683 | test_ce=0.737037 | gap=-0.013354
+full test (in-memory best) | test_ce=0.736718 | n=4,501,839
+
+(.venv) C:\Users\monfalcone\PycharmProjects\TinyMLInternship>py -3.12 -u scripts/train_nnue.py --epochs 20 --lr 0.01 --hidden-dim 128 --hidden2-dim 256 --batches-per-epoch 50 --batch-size 1024 --run-name dual_h128_H256_fast_ft95 --plot plots/dual_nnue_ce_128_256_ft95.png --test-subset-size 5000 --train-val-subset-size 5000 --test-fraction 0.95 --fast
+Split: random 95% of each slice → test (seed=0); rest → train
+Slices: C:\Users\monfalcone\PycharmProjects\TinyMLInternship\data\processed\board_eval\fen_value_visits
+  train pool 250,192 in 165 slices | test 5,000/4,751,932 | batch 1024 row-weighted × 50 steps/epoch
+  per-epoch test subset 5,000 of 4,751,932 (seed=0); full eval of best.pt at the end
+  frozen train_ce on 5,000/250,192 rows (seed=0, same row-weighted measure as test; n=5,000 is noisy, full compare is printed at the end)
+single net | L1 128×2 + L2 256 + WDL softmax | 174,723 params | loss=soft CE | train steps 50×1024 | test 5,000/4,751,932 | cpu
+Output: C:\Users\monfalcone\PycharmProjects\TinyMLInternship\models\checkpoints\nnue\dual_h128_H256_fast_ft95
+epoch 00 | train_ce=1.096717 | test_ce=1.096649 | 0.6s
+epoch 01 | train_ce=0.860412 | test_ce=0.865865 | 4.8s
+epoch 02 | train_ce=0.802126 | test_ce=0.811374 | 4.8s
+epoch 03 | train_ce=0.786935 | test_ce=0.801953 | 4.8s
+epoch 04 | train_ce=0.775839 | test_ce=0.784785 | 5.1s
+epoch 05 | train_ce=0.761570 | test_ce=0.777221 | 5.2s
+epoch 06 | train_ce=0.756247 | test_ce=0.773387 | 5.2s
+epoch 07 | train_ce=0.754017 | test_ce=0.769692 | 5.2s
+epoch 08 | train_ce=0.749011 | test_ce=0.768661 | 5.2s
+epoch 09 | train_ce=0.744536 | test_ce=0.766314 | 5.2s
+epoch 10 | train_ce=0.735828 | test_ce=0.762826 | 5.2s
+epoch 11 | train_ce=0.731427 | test_ce=0.760743 | 5.2s
+epoch 12 | train_ce=0.727742 | test_ce=0.759888 | 5.3s
+epoch 13 | train_ce=0.729335 | test_ce=0.757365 | 5.3s
+epoch 14 | train_ce=0.722093 | test_ce=0.758345 | 5.2s
+epoch 15 | train_ce=0.725220 | test_ce=0.756929 | 5.3s
+epoch 16 | train_ce=0.719835 | test_ce=0.762686 | 5.3s
+epoch 17 | train_ce=0.719318 | test_ce=0.760853 | 5.2s
+epoch 18 | train_ce=0.717110 | test_ce=0.755527 | 5.3s
+epoch 19 | train_ce=0.714407 | test_ce=0.757565 | 5.2s
+epoch 20 | train_ce=0.711747 | test_ce=0.750683 | 5.2s
+Best test_ce=0.750683 → C:\Users\monfalcone\PycharmProjects\TinyMLInternship\models\checkpoints\nnue\dual_h128_H256_fast_ft95\best.pt
+CE plot → C:\Users\monfalcone\PycharmProjects\TinyMLInternship\plots\dual_nnue_ce_128_256_ft95.png
+matched 50,000-row CE (best weights, seed=0) | train_ce=0.711824 | test_ce=0.749140 | gap=-0.037316
+full test (in-memory best) | test_ce=0.751015 | n=4,751,932
+
+(.venv) C:\Users\monfalcone\PycharmProjects\TinyMLInternship>py -3.12 -u scripts/train_nnue.py --epochs 20 --lr 0.01 --hidden-dim 128 --hidden2-dim 256 --batches-per-epoch 50 --batch-size 1024 --run-name dual_h128_H256_fast_ft80 --plot plots/dual_nnue_ce_128_256_ft80.png --test-subset-size 5000 --train-val-subset-size 5000 --test-fraction 0.80 --fast
+Split: random 80% of each slice → test (seed=0); rest → train
+Slices: C:\Users\monfalcone\PycharmProjects\TinyMLInternship\data\processed\board_eval\fen_value_visits
+  train pool 1,000,492 in 165 slices | test 5,000/4,001,632 | batch 1024 row-weighted × 50 steps/epoch
+  per-epoch test subset 5,000 of 4,001,632 (seed=0); full eval of best.pt at the end
+  frozen train_ce on 5,000/1,000,492 rows (seed=0, same row-weighted measure as test; n=5,000 is noisy, full compare is printed at the end)
+single net | L1 128×2 + L2 256 + WDL softmax | 174,723 params | loss=soft CE | train steps 50×1024 | test 5,000/4,001,632 | cpu
+Output: C:\Users\monfalcone\PycharmProjects\TinyMLInternship\models\checkpoints\nnue\dual_h128_H256_fast_ft80
+epoch 00 | train_ce=1.098781 | test_ce=1.098846 | 1.0s
+epoch 01 | train_ce=0.846822 | test_ce=0.846856 | 6.2s
+epoch 02 | train_ce=0.803968 | test_ce=0.800212 | 5.7s
+epoch 03 | train_ce=0.784954 | test_ce=0.783562 | 5.7s
+epoch 04 | train_ce=0.777866 | test_ce=0.773082 | 5.8s
+epoch 05 | train_ce=0.770788 | test_ce=0.765739 | 4.6s
+epoch 06 | train_ce=0.762774 | test_ce=0.764327 | 5.2s
+epoch 07 | train_ce=0.757193 | test_ce=0.756927 | 5.1s
+epoch 08 | train_ce=0.758643 | test_ce=0.752093 | 6.1s
+epoch 09 | train_ce=0.752657 | test_ce=0.752684 | 7.8s
+epoch 10 | train_ce=0.746984 | test_ce=0.751226 | 5.8s
+epoch 11 | train_ce=0.745197 | test_ce=0.746439 | 6.0s
+epoch 12 | train_ce=0.744198 | test_ce=0.745809 | 7.8s
+epoch 13 | train_ce=0.743566 | test_ce=0.738946 | 8.0s
+epoch 14 | train_ce=0.740497 | test_ce=0.741532 | 7.9s
+epoch 15 | train_ce=0.740147 | test_ce=0.742268 | 7.9s
+epoch 16 | train_ce=0.738000 | test_ce=0.740073 | 8.0s
+epoch 17 | train_ce=0.733055 | test_ce=0.734716 | 8.1s
+epoch 18 | train_ce=0.731907 | test_ce=0.734194 | 8.1s
+epoch 19 | train_ce=0.732814 | test_ce=0.732951 | 7.9s
+epoch 20 | train_ce=0.733143 | test_ce=0.732388 | 8.0s
+Best test_ce=0.732388 → C:\Users\monfalcone\PycharmProjects\TinyMLInternship\models\checkpoints\nnue\dual_h128_H256_fast_ft80\best.pt
+CE plot → C:\Users\monfalcone\PycharmProjects\TinyMLInternship\plots\dual_nnue_ce_128_256_ft80.png
+matched 50,000-row CE (best weights, seed=0) | train_ce=0.721309 | test_ce=0.731570 | gap=-0.010261
+full test (in-memory best) | test_ce=0.730960 | n=4,001,632
+
+(.venv) C:\Users\monfalcone\PycharmProjects\TinyMLInternship>py -3.12 -u scripts/train_nnue.py --epochs 20 --lr 0.01 --hidden-dim 128 --hidden2-dim 256 --batches-per-epoch 50 --batch-size 1024 --run-name dual_h128_H256_fast_ft98 --plot plots/dual_nnue_ce_128_256_ft98.png --test-subset-size 5000 --train-val-subset-size 5000 --test-fraction 0.98 --fast
+Split: random 98% of each slice → test (seed=0); rest → train
+Slices: C:\Users\monfalcone\PycharmProjects\TinyMLInternship\data\processed\board_eval\fen_value_visits
+  train pool 100,126 in 165 slices | test 5,000/4,901,998 | batch 1024 row-weighted × 50 steps/epoch
+  per-epoch test subset 5,000 of 4,901,998 (seed=0); full eval of best.pt at the end
+  frozen train_ce on 5,000/100,126 rows (seed=0, same row-weighted measure as test; n=5,000 is noisy, full compare is printed at the end)
+single net | L1 128×2 + L2 256 + WDL softmax | 174,723 params | loss=soft CE | train steps 50×1024 | test 5,000/4,901,998 | cpu
+Output: C:\Users\monfalcone\PycharmProjects\TinyMLInternship\models\checkpoints\nnue\dual_h128_H256_fast_ft98
+epoch 00 | train_ce=1.098821 | test_ce=1.098826 | 0.6s
+epoch 01 | train_ce=0.824074 | test_ce=0.838459 | 4.6s
+epoch 02 | train_ce=0.772424 | test_ce=0.812686 | 4.6s
+epoch 03 | train_ce=0.748518 | test_ce=0.790005 | 4.6s
+epoch 04 | train_ce=0.732004 | test_ce=0.785268 | 4.6s
+epoch 05 | train_ce=0.723288 | test_ce=0.782929 | 4.8s
+epoch 06 | train_ce=0.716465 | test_ce=0.788326 | 4.9s
+epoch 07 | train_ce=0.704581 | test_ce=0.782089 | 5.4s
+epoch 08 | train_ce=0.697120 | test_ce=0.779383 | 5.2s
+epoch 09 | train_ce=0.684076 | test_ce=0.778778 | 5.2s
+epoch 10 | train_ce=0.681836 | test_ce=0.780798 | 6.4s
+epoch 11 | train_ce=0.676930 | test_ce=0.781246 | 8.1s
+epoch 12 | train_ce=0.670970 | test_ce=0.783671 | 8.0s
+epoch 13 | train_ce=0.673884 | test_ce=0.786105 | 8.1s
+epoch 14 | train_ce=0.664799 | test_ce=0.781208 | 6.0s
+epoch 15 | train_ce=0.663443 | test_ce=0.778200 | 5.2s
+epoch 16 | train_ce=0.662186 | test_ce=0.783520 | 5.3s
+epoch 17 | train_ce=0.656750 | test_ce=0.779275 | 5.3s
+epoch 18 | train_ce=0.652546 | test_ce=0.781767 | 5.2s
+epoch 19 | train_ce=0.650814 | test_ce=0.787626 | 5.1s
+epoch 20 | train_ce=0.647566 | test_ce=0.786883 | 5.3s
+Best test_ce=0.778200 → C:\Users\monfalcone\PycharmProjects\TinyMLInternship\models\checkpoints\nnue\dual_h128_H256_fast_ft98\best.pt
+CE plot → C:\Users\monfalcone\PycharmProjects\TinyMLInternship\plots\dual_nnue_ce_128_256_ft98.png
+matched 50,000-row CE (best weights, seed=0) | train_ce=0.664688 | test_ce=0.789981 | gap=-0.125293
+full test (in-memory best) | test_ce=0.786941 | n=4,901,998
+
+(.venv) C:\Users\monfalcone\PycharmProjects\TinyMLInternship>py -3.12 -u scripts/train_nnue.py --epochs 20 --lr 0.01 --hidden-dim 128 --hidden2-dim 256 --batches-per-epoch 50 --batch-size 1024 --run-name dual_h128_H256_fast_ft99 --plot plots/dual_nnue_ce_128_256_ft99.png --test-subset-size 5000 --train-val-subset-size 5000 --test-fraction 0.99 --fast
+Split: random 99% of each slice → test (seed=0); rest → train
+Slices: C:\Users\monfalcone\PycharmProjects\TinyMLInternship\data\processed\board_eval\fen_value_visits
+  train pool 50,107 in 165 slices | test 5,000/4,952,017 | batch 1024 row-weighted × 50 steps/epoch
+  per-epoch test subset 5,000 of 4,952,017 (seed=0); full eval of best.pt at the end
+  frozen train_ce on 5,000/50,107 rows (seed=0, same row-weighted measure as test; n=5,000 is noisy, full compare is printed at the end)
+single net | L1 128×2 + L2 256 + WDL softmax | 174,723 params | loss=soft CE | train steps 50×1024 | test 5,000/4,952,017 | cpu
+Output: C:\Users\monfalcone\PycharmProjects\TinyMLInternship\models\checkpoints\nnue\dual_h128_H256_fast_ft99
+epoch 00 | train_ce=1.100723 | test_ce=1.100488 | 0.8s
+epoch 01 | train_ce=0.810882 | test_ce=0.852360 | 5.0s
+epoch 02 | train_ce=0.750892 | test_ce=0.827635 | 4.7s
+epoch 03 | train_ce=0.720866 | test_ce=0.824317 | 5.4s
+epoch 04 | train_ce=0.697955 | test_ce=0.826810 | 5.1s
+epoch 05 | train_ce=0.679030 | test_ce=0.826324 | 5.1s
+epoch 06 | train_ce=0.666919 | test_ce=0.823734 | 5.1s
+epoch 07 | train_ce=0.656718 | test_ce=0.830200 | 5.1s
+epoch 08 | train_ce=0.647774 | test_ce=0.833887 | 5.1s
+epoch 09 | train_ce=0.642206 | test_ce=0.835175 | 5.0s
+epoch 10 | train_ce=0.633918 | test_ce=0.833353 | 5.1s
+epoch 11 | train_ce=0.630035 | test_ce=0.839899 | 5.1s
+epoch 12 | train_ce=0.623847 | test_ce=0.836656 | 5.2s
+epoch 13 | train_ce=0.622555 | test_ce=0.845998 | 5.1s
+epoch 14 | train_ce=0.618521 | test_ce=0.844024 | 5.1s
+epoch 15 | train_ce=0.615702 | test_ce=0.848483 | 5.2s
+epoch 16 | train_ce=0.612909 | test_ce=0.846086 | 5.1s
+epoch 17 | train_ce=0.613359 | test_ce=0.856031 | 5.1s
+epoch 18 | train_ce=0.609115 | test_ce=0.850450 | 5.1s
+epoch 19 | train_ce=0.608364 | test_ce=0.851235 | 5.1s
+epoch 20 | train_ce=0.607950 | test_ce=0.852427 | 5.1s
+Best test_ce=0.823734 → C:\Users\monfalcone\PycharmProjects\TinyMLInternship\models\checkpoints\nnue\dual_h128_H256_fast_ft99\best.pt
+CE plot → C:\Users\monfalcone\PycharmProjects\TinyMLInternship\plots\dual_nnue_ce_128_256_ft99.png
+matched 50,000-row CE (best weights, seed=0) | train_ce=0.668927 | test_ce=0.816393 | gap=-0.147466
+full test (in-memory best) | test_ce=0.812989 | n=4,952,017
+
+(.venv) C:\Users\monfalcone\PycharmProjects\TinyMLInternship>py -3.12 -u scripts/train_nnue.py --epochs 20 --lr 0.01 --hidden-dim 128 --hidden2-dim 256 --batches-per-epoch 50 --batch-size 1024 --run-name dual_h128_H256_fast_ft97 --plot plots/dual_nnue_ce_128_256_ft97.png --test-subset-size 5000 --train-val-subset-size 5000 --test-fraction 0.97 --fast
+Split: random 97% of each slice → test (seed=0); rest → train
+Slices: C:\Users\monfalcone\PycharmProjects\TinyMLInternship\data\processed\board_eval\fen_value_visits
+  train pool 150,142 in 165 slices | test 5,000/4,851,982 | batch 1024 row-weighted × 50 steps/epoch
+  per-epoch test subset 5,000 of 4,851,982 (seed=0); full eval of best.pt at the end
+  frozen train_ce on 5,000/150,142 rows (seed=0, same row-weighted measure as test; n=5,000 is noisy, full compare is printed at the end)
+single net | L1 128×2 + L2 256 + WDL softmax | 174,723 params | loss=soft CE | train steps 50×1024 | test 5,000/4,851,982 | cpu
+Output: C:\Users\monfalcone\PycharmProjects\TinyMLInternship\models\checkpoints\nnue\dual_h128_H256_fast_ft97
+epoch 00 | train_ce=1.096420 | test_ce=1.096529 | 0.6s
+epoch 01 | train_ce=0.847890 | test_ce=0.852794 | 4.5s
+epoch 02 | train_ce=0.790418 | test_ce=0.797850 | 4.4s
+epoch 03 | train_ce=0.768619 | test_ce=0.779841 | 4.5s
+epoch 04 | train_ce=0.764568 | test_ce=0.782702 | 4.5s
+epoch 05 | train_ce=0.759804 | test_ce=0.774415 | 4.7s
+epoch 06 | train_ce=0.750268 | test_ce=0.768816 | 4.6s
+epoch 07 | train_ce=0.748303 | test_ce=0.768119 | 4.7s
+epoch 08 | train_ce=0.729504 | test_ce=0.766946 | 4.9s
+epoch 09 | train_ce=0.724536 | test_ce=0.773006 | 5.1s
+epoch 10 | train_ce=0.721830 | test_ce=0.771513 | 5.2s
+epoch 11 | train_ce=0.710265 | test_ce=0.763180 | 5.1s
+epoch 12 | train_ce=0.704275 | test_ce=0.757514 | 5.4s
+epoch 13 | train_ce=0.694619 | test_ce=0.763590 | 7.5s
+epoch 14 | train_ce=0.691404 | test_ce=0.765651 | 7.3s
+epoch 15 | train_ce=0.690782 | test_ce=0.765612 | 8.2s
+epoch 16 | train_ce=0.690220 | test_ce=0.766078 | 8.1s
+epoch 17 | train_ce=0.686061 | test_ce=0.761868 | 7.9s
+epoch 18 | train_ce=0.683365 | test_ce=0.761310 | 8.1s
+epoch 19 | train_ce=0.679664 | test_ce=0.766202 | 7.8s
+epoch 20 | train_ce=0.676200 | test_ce=0.763818 | 7.4s
+Best test_ce=0.757514 → C:\Users\monfalcone\PycharmProjects\TinyMLInternship\models\checkpoints\nnue\dual_h128_H256_fast_ft97\best.pt
+CE plot → C:\Users\monfalcone\PycharmProjects\TinyMLInternship\plots\dual_nnue_ce_128_256_ft97.png
+matched 50,000-row CE (best weights, seed=0) | train_ce=0.704106 | test_ce=0.760023 | gap=-0.055917
+full test (in-memory best) | test_ce=0.762993 | n=4,851,982
+
+(.venv) C:\Users\monfalcone\PycharmProjects\TinyMLInternship>py -3.12 -u scripts/plot_nnue_vs_train_size.py
+Wrote plots\nnue_ce_vs_train_size.png
+Wrote plots\nnue_ce_vs_train_size.pdf
+
+(.venv) C:\Users\monfalcone\PycharmProjects\TinyMLInternship>py -3.12 -u scripts/train_nnue.py --epochs 20 --lr 0.01 --hidden-dim 128 --hidden2-dim 256 --batches-per-epoch 50 --batch-size 1024 --run-name dual_h128_H256_fast_ft70 --plot plots/dual_nnue_ce_128_256_ft70.png --test-subset-size 5000 --train-val-subset-size 5000 --test-fraction 0.70 --fast
+Split: random 70% of each slice → test (seed=0); rest → train
+Slices: C:\Users\monfalcone\PycharmProjects\TinyMLInternship\data\processed\board_eval\fen_value_visits
+  train pool 1,500,717 in 165 slices | test 5,000/3,501,407 | batch 1024 row-weighted × 50 steps/epoch
+  per-epoch test subset 5,000 of 3,501,407 (seed=0); full eval of best.pt at the end
+  frozen train_ce on 5,000/1,500,717 rows (seed=0, same row-weighted measure as test; n=5,000 is noisy, full compare is printed at the end)
+single net | L1 128×2 + L2 256 + WDL softmax | 174,723 params | loss=soft CE | train steps 50×1024 | test 5,000/3,501,407 | cpu
+Output: C:\Users\monfalcone\PycharmProjects\TinyMLInternship\models\checkpoints\nnue\dual_h128_H256_fast_ft70
+epoch 00 | train_ce=1.099687 | test_ce=1.099423 | 3.0s
+epoch 01 | train_ce=0.835924 | test_ce=0.828670 | 15.4s
+epoch 02 | train_ce=0.789575 | test_ce=0.786111 | 8.0s
+epoch 03 | train_ce=0.775928 | test_ce=0.770706 | 10.1s
+epoch 04 | train_ce=0.763267 | test_ce=0.766892 | 13.9s
+epoch 05 | train_ce=0.762071 | test_ce=0.757731 | 13.8s
+epoch 06 | train_ce=0.747935 | test_ce=0.748736 | 13.1s
+epoch 07 | train_ce=0.750261 | test_ce=0.747568 | 13.9s
+epoch 08 | train_ce=0.745824 | test_ce=0.739040 | 12.9s
+epoch 09 | train_ce=0.741355 | test_ce=0.739285 | 6.3s
+epoch 10 | train_ce=0.736022 | test_ce=0.733400 | 12.8s
+epoch 11 | train_ce=0.734295 | test_ce=0.732799 | 14.1s
+epoch 12 | train_ce=0.733841 | test_ce=0.730153 | 12.4s
+epoch 13 | train_ce=0.730438 | test_ce=0.726237 | 13.6s
+epoch 14 | train_ce=0.724833 | test_ce=0.729258 | 15.2s
+epoch 15 | train_ce=0.727211 | test_ce=0.725013 | 16.4s
+epoch 16 | train_ce=0.728642 | test_ce=0.727221 | 11.0s
+epoch 17 | train_ce=0.725299 | test_ce=0.721861 | 15.1s
+epoch 18 | train_ce=0.722494 | test_ce=0.722866 | 14.3s
+epoch 19 | train_ce=0.720790 | test_ce=0.719539 | 13.5s
+epoch 20 | train_ce=0.719944 | test_ce=0.720542 | 13.7s
+Best test_ce=0.719539 → C:\Users\monfalcone\PycharmProjects\TinyMLInternship\models\checkpoints\nnue\dual_h128_H256_fast_ft70\best.pt
+CE plot → C:\Users\monfalcone\PycharmProjects\TinyMLInternship\plots\dual_nnue_ce_128_256_ft70.png
+matched 50,000-row CE (best weights, seed=0) | train_ce=0.716290 | test_ce=0.728815 | gap=-0.012524
+full test (in-memory best) | test_ce=0.726705 | n=3,501,407
+
+(.venv) C:\Users\monfalcone\PycharmProjects\TinyMLInternship>py -3.12 -u scripts/train_nnue.py --epochs 20 --lr 0.01 --hidden-dim 128 --hidden2-dim 256 --batches-per-epoch 50 --batch-size 1024 --run-name dual_h128_H256_fast_ft60 --plot plots/dual_nnue_ce_128_256_ft60.png --test-subset-size 5000 --train-val-subset-size 5000 --test-fraction 0.60 --fast
+Split: random 60% of each slice → test (seed=0); rest → train
+Slices: C:\Users\monfalcone\PycharmProjects\TinyMLInternship\data\processed\board_eval\fen_value_visits
+  train pool 2,000,915 in 165 slices | test 5,000/3,001,209 | batch 1024 row-weighted × 50 steps/epoch
+  per-epoch test subset 5,000 of 3,001,209 (seed=0); full eval of best.pt at the end
+  frozen train_ce on 5,000/2,000,915 rows (seed=0, same row-weighted measure as test; n=5,000 is noisy, full compare is printed at the end)
+single net | L1 128×2 + L2 256 + WDL softmax | 174,723 params | loss=soft CE | train steps 50×1024 | test 5,000/3,001,209 | cpu
+Output: C:\Users\monfalcone\PycharmProjects\TinyMLInternship\models\checkpoints\nnue\dual_h128_H256_fast_ft60
+epoch 00 | train_ce=1.099296 | test_ce=1.099095 | 1.5s
+epoch 01 | train_ce=0.841257 | test_ce=0.832096 | 11.9s
+epoch 02 | train_ce=0.793072 | test_ce=0.790882 | 14.7s
+epoch 03 | train_ce=0.776569 | test_ce=0.777095 | 10.9s
+epoch 04 | train_ce=0.771071 | test_ce=0.764132 | 8.2s
+epoch 05 | train_ce=0.761869 | test_ce=0.757084 | 11.0s
+epoch 06 | train_ce=0.757881 | test_ce=0.752933 | 6.4s
+epoch 07 | train_ce=0.751962 | test_ce=0.744937 | 7.0s
+epoch 08 | train_ce=0.746897 | test_ce=0.745888 | 10.3s
+epoch 09 | train_ce=0.746433 | test_ce=0.743740 | 7.7s
+epoch 10 | train_ce=0.739369 | test_ce=0.736442 | 6.3s
+epoch 11 | train_ce=0.740568 | test_ce=0.737809 | 6.2s
+epoch 12 | train_ce=0.737476 | test_ce=0.732075 | 6.2s
+epoch 13 | train_ce=0.741850 | test_ce=0.738776 | 11.7s
+epoch 14 | train_ce=0.736197 | test_ce=0.730756 | 7.1s
+epoch 15 | train_ce=0.732700 | test_ce=0.728146 | 8.4s
+epoch 16 | train_ce=0.730388 | test_ce=0.732119 | 6.5s
+epoch 17 | train_ce=0.729339 | test_ce=0.732531 | 6.4s
+epoch 18 | train_ce=0.728680 | test_ce=0.727960 | 6.4s
+epoch 19 | train_ce=0.725871 | test_ce=0.723804 | 11.0s
+epoch 20 | train_ce=0.728395 | test_ce=0.729783 | 15.1s
+Best test_ce=0.723804 → C:\Users\monfalcone\PycharmProjects\TinyMLInternship\models\checkpoints\nnue\dual_h128_H256_fast_ft60\best.pt
+CE plot → C:\Users\monfalcone\PycharmProjects\TinyMLInternship\plots\dual_nnue_ce_128_256_ft60.png
+matched 50,000-row CE (best weights, seed=0) | train_ce=0.722124 | test_ce=0.727930 | gap=-0.005807
+full test (in-memory best) | test_ce=0.729762 | n=3,001,209
+
+(.venv) C:\Users\monfalcone\PycharmProjects\TinyMLInternship>
