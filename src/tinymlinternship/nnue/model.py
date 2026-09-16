@@ -65,18 +65,51 @@ class DualHiddenNNUE(nn.Module):
         features.scatter_add_(1, safe, mask.to(dtype=features.dtype))
         return crelu(self.l1(features), self.crelu_clip)
 
+    def stm_concat(
+        self,
+        white_h: torch.Tensor,
+        black_h: torch.Tensor,
+        stm_white: torch.Tensor,
+    ) -> torch.Tensor:
+        """STM-ordered dual accumulator ``h = [h_stm ‖ h_opp]`` of size ``2W``."""
+        stm_mask = stm_white.unsqueeze(1)
+        stm_h = torch.where(stm_mask, white_h, black_h)
+        opp_h = torch.where(stm_mask, black_h, white_h)
+        return torch.cat([stm_h, opp_h], dim=1)
+
+    def l1_concat(
+        self,
+        white_features: torch.Tensor,
+        black_features: torch.Tensor,
+        stm_white: torch.Tensor,
+        white_mask: torch.Tensor | None = None,
+        black_mask: torch.Tensor | None = None,
+    ) -> torch.Tensor:
+        """Shared L1 on both POVs, concatenated in STM order. No head."""
+        if (white_mask is None) != (black_mask is None):
+            raise ValueError("white_mask and black_mask must both be set or both omitted")
+        if white_mask is None:
+            white_h = self.l1_dense(white_features)
+            black_h = self.l1_dense(black_features)
+        else:
+            white_h = self.l1_sparse(white_features, white_mask)
+            black_h = self.l1_sparse(black_features, black_mask)
+        return self.stm_concat(white_h, black_h, stm_white)
+
+    def head_from_h(self, h: torch.Tensor) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
+        """``h → (logits, pre_l2, h2)``. ``h2 = CReLU(pre_l2)``."""
+        pre_l2 = self.l2(h)
+        h2 = crelu(pre_l2, self.crelu_clip)
+        return self.head(h2), pre_l2, h2
+
     def _head_from_accumulators(
         self,
         white_h: torch.Tensor,
         black_h: torch.Tensor,
         stm_white: torch.Tensor,
     ) -> torch.Tensor:
-        stm_mask = stm_white.unsqueeze(1)
-        stm_h = torch.where(stm_mask, white_h, black_h)
-        opp_h = torch.where(stm_mask, black_h, white_h)
-        concat = torch.cat([stm_h, opp_h], dim=1)
-        h2 = crelu(self.l2(concat), self.crelu_clip)
-        return self.head(h2)  # STM WDL logits; softmax in loss / probabilities()
+        logits, _pre_l2, _h2 = self.head_from_h(self.stm_concat(white_h, black_h, stm_white))
+        return logits  # STM WDL logits; softmax in loss / probabilities()
 
     def forward(
         self,
