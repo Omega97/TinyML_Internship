@@ -49,11 +49,21 @@ class DualHiddenNNUE(nn.Module):
         return crelu(self.l1(features), self.crelu_clip)
 
     def l1_sparse(self, indices: torch.Tensor, mask: torch.Tensor) -> torch.Tensor:
-        """``indices`` (B, K) int64, ``mask`` (B, K) bool. Pad slots must be masked."""
+        """``indices`` (B, K) int64, ``mask`` (B, K) bool. Pad slots must be masked.
+
+        Pads contribute 0 via ``scatter_add_``. Materializing the binary 844-vector
+        and using ``nn.Linear`` hits Tensor Cores; embedding-gather of ``(B, K, W)``
+        is bandwidth-heavy on large GPUs (GB10 / Spark).
+        """
         safe = indices.long().clamp(min=0, max=self.feature_dim - 1)
-        gathered = F.embedding(safe, self.l1.weight.t())
-        gathered = gathered * mask.unsqueeze(-1).to(dtype=gathered.dtype)
-        return crelu(gathered.sum(dim=1) + self.l1.bias, self.crelu_clip)
+        features = torch.zeros(
+            safe.shape[0],
+            self.feature_dim,
+            device=safe.device,
+            dtype=self.l1.weight.dtype,
+        )
+        features.scatter_add_(1, safe, mask.to(dtype=features.dtype))
+        return crelu(self.l1(features), self.crelu_clip)
 
     def _head_from_accumulators(
         self,
@@ -73,10 +83,27 @@ class DualHiddenNNUE(nn.Module):
         white_features: torch.Tensor,
         black_features: torch.Tensor,
         stm_white: torch.Tensor,
+        white_mask: torch.Tensor | None = None,
+        black_mask: torch.Tensor | None = None,
     ) -> torch.Tensor:
-        return self._head_from_accumulators(
-            self.l1_dense(white_features),
-            self.l1_dense(black_features),
+        """Dense ``(B, 844)`` when masks are omitted; sparse indices when given.
+
+        ``torch.compile(model)`` traces this ``forward``, so training must call
+        the module (not ``forward_sparse``) for CUDA graphs to apply.
+        """
+        if (white_mask is None) != (black_mask is None):
+            raise ValueError("white_mask and black_mask must both be set or both omitted")
+        if white_mask is None:
+            return self._head_from_accumulators(
+                self.l1_dense(white_features),
+                self.l1_dense(black_features),
+                stm_white,
+            )
+        return self.forward_sparse(
+            white_features,
+            white_mask,
+            black_features,
+            black_mask,
             stm_white,
         )
 

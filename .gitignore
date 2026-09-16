@@ -12,6 +12,10 @@ data/processed/
 *.pgn
 *.bz2
 *.h
+!src/sardine_cfish/*.h
+
+# Local engine binaries (symlink / copy; not source)
+lc0.exe
 
 # Models
 /models/checkpoints/

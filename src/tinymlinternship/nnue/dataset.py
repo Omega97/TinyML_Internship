@@ -1,7 +1,8 @@
 """``{fen, wdl, visits}`` tables → sparse dual-POV batches for NNUE.
 
 844 features are encoded **once** per source table into a ``*.nnue/`` cache
-next to the file, then loaded as in-memory tensors on later runs.
+or per-slice ``features.npz``. Training reads those arrays with memory-mapping
+so 60M+ rows stay on disk; only the current batch is copied into RAM.
 Target is STM ``wdl`` of shape ``(N, 3)``. Slices that only store White-POV
 ``value`` are converted with the max-entropy WDL map.
 """
@@ -12,6 +13,8 @@ import bisect
 import hashlib
 import json
 import re
+import struct
+import zipfile
 from pathlib import Path
 from typing import Any
 
@@ -19,10 +22,17 @@ import chess
 import numpy as np
 import pandas as pd
 import torch
-from torch.utils.data import Dataset, Sampler
+from numpy.lib.format import read_array_header_1_0, read_array_header_2_0, read_magic
+from torch.utils.data import Dataset, Sampler, Subset
 
 from tinymlinternship.data.wdl import wdl_from_row
 from tinymlinternship.features import FEATURE_DIM, encode_dual
+
+# ZIP local-file header (PK\x03\x04). ``np.load(..., mmap_mode="r")`` ignores
+# mmap for ``.npz`` (a zip); we parse this header and ``np.memmap`` the
+# uncompressed ``.npy`` payload instead.
+_ZIP_LOCAL_HEADER = struct.Struct("<IHHHHHIIIHH")
+_ZIP_LOCAL_HEADER_SIG = 0x04034B50
 
 MAX_ACTIVE_FEATURES = 128
 CACHE_VERSION = 2
@@ -353,10 +363,10 @@ def save_feature_cache(
 
 
 def load_feature_cache(cache_dir: Path) -> dict[str, np.ndarray]:
-    """Load arrays into RAM (not memmap) so later epochs stay off disk."""
+    """Memory-map cache ``.npy`` files (``mmap_mode='r'``); pages fault in on slice."""
     arrays: dict[str, np.ndarray] = {}
     for name in CACHE_ARRAYS:
-        arrays[name] = np.load(cache_dir / f"{name}.npy")
+        arrays[name] = np.load(cache_dir / f"{name}.npy", mmap_mode="r")
     return arrays
 
 
@@ -376,7 +386,7 @@ def ensure_feature_cache(
     df = load_fen_value_visits(source)
     arrays = encode_frames(df, max_active=max_active, progress=progress)
     save_feature_cache(cache_dir, arrays, source=source, max_active=max_active)
-    return cache_dir, arrays
+    return cache_dir, load_feature_cache(cache_dir)
 
 
 def slice_source_json(folder: Path) -> Path | None:
@@ -451,18 +461,78 @@ def save_slice_feature_db(
     return npz
 
 
-def load_slice_feature_db(folder: Path) -> dict[str, np.ndarray]:
-    with np.load(slice_features_path(folder)) as npz:
-        missing = set(SLICE_DB_ARRAYS) - set(npz.files)
-        if missing:
-            raise ValueError(
-                f"{folder} features.npz missing {sorted(missing)}; "
-                "re-encode with scripts/encode_slice_features.py --rebuild"
+def _mmap_npz(path: Path) -> dict[str, np.ndarray]:
+    """Memory-map uncompressed ``.npz`` members without copying arrays into RAM.
+
+    ``np.load(path, mmap_mode="r")`` does **not** mmap a zip archive (numpy
+    extracts each ``.npy`` into a regular ndarray). ``np.savez`` stores
+    uncompressed members, so we can ``np.memmap`` the payload in place.
+    Compressed members fall back to an in-memory load of that file only.
+    """
+    path = Path(path)
+    if not path.is_file():
+        raise FileNotFoundError(path)
+    with zipfile.ZipFile(path) as zf:
+        infos = [info for info in zf.infolist() if info.filename.endswith(".npy")]
+        compressed = [info.filename for info in infos if info.compress_type != zipfile.ZIP_STORED]
+    if compressed:
+        with np.load(path) as npz:
+            return {info.filename[:-4]: np.array(npz[info.filename[:-4]]) for info in infos}
+
+    arrays: dict[str, np.ndarray] = {}
+    with path.open("rb") as fh:
+        for info in infos:
+            fh.seek(int(info.header_offset))
+            hdr = fh.read(_ZIP_LOCAL_HEADER.size)
+            if len(hdr) != _ZIP_LOCAL_HEADER.size:
+                raise ValueError(f"{path} truncated zip header for {info.filename}")
+            sig, _ver, flag, _comp, _mt, _md, _crc, _cs, _us, namelen, extralen = (
+                _ZIP_LOCAL_HEADER.unpack(hdr)
             )
-        wdl = npz["wdl"]
-        if wdl.ndim != 2 or wdl.shape[1] != 3:
-            raise ValueError(f"{folder} features.npz wdl must be (N, 3), got {wdl.shape}")
-        return {name: np.array(npz[name]) for name in SLICE_DB_ARRAYS}
+            if sig != _ZIP_LOCAL_HEADER_SIG:
+                raise ValueError(f"{path} bad zip local header for {info.filename}")
+            if flag & 1:
+                raise ValueError(f"{path} encrypted zip member {info.filename}")
+            fh.read(int(namelen))
+            fh.read(int(extralen))
+            version = read_magic(fh)
+            if version == (1, 0):
+                shape, fortran, dtype = read_array_header_1_0(fh)
+            elif version == (2, 0):
+                shape, fortran, dtype = read_array_header_2_0(fh)
+            else:
+                raise ValueError(f"{path} unsupported npy version {version} in {info.filename}")
+            key = info.filename[:-4]
+            arrays[key] = np.memmap(
+                path,
+                dtype=dtype,
+                mode="r",
+                offset=int(fh.tell()),
+                shape=shape,
+                order="F" if fortran else "C",
+            )
+    return arrays
+
+
+def load_slice_feature_db(folder: Path) -> dict[str, np.ndarray]:
+    """Memory-map ``folder/features.npz`` (no full-array copy into RAM)."""
+    path = slice_features_path(folder)
+    if not path.is_file():
+        raise FileNotFoundError(
+            f"missing {path}; encode with scripts/encode_slice_features.py"
+        )
+    arrays = _mmap_npz(path)
+    missing = set(SLICE_DB_ARRAYS) - set(arrays)
+    if missing:
+        raise ValueError(
+            f"{folder} features.npz missing {sorted(missing)}; "
+            "re-encode with scripts/encode_slice_features.py --rebuild"
+        )
+    wdl = arrays["wdl"]
+    if wdl.ndim != 2 or wdl.shape[1] != 3:
+        raise ValueError(f"{folder} features.npz wdl must be (N, 3), got {wdl.shape}")
+    keep = [name for name in arrays if name in SLICE_DB_ARRAYS or name == "visits"]
+    return {name: arrays[name] for name in keep}
 
 
 def ensure_slice_feature_db(
@@ -482,7 +552,8 @@ def ensure_slice_feature_db(
     df = load_fen_value_visits(source)
     arrays = encode_frames(df, max_active=max_active, progress=progress)
     save_slice_feature_db(folder, arrays, source=source, max_active=max_active)
-    return npz, {name: arrays[name] for name in SLICE_DB_ARRAYS}
+    # Re-open as memmap so the encode buffers can be freed.
+    return npz, load_slice_feature_db(folder)
 
 
 def discover_slice_folders(root: Path) -> list[Path]:
@@ -515,6 +586,8 @@ def _subset_arrays(
     exclude_hashes: set[int] | None = None,
     max_rows: int = 0,
 ) -> dict[str, np.ndarray]:
+    if not exclude_hashes and not (max_rows and max_rows > 0):
+        return arrays
     n = int(arrays["wdl"].shape[0])
     keep = np.ones(n, dtype=np.bool_)
     if exclude_hashes:
@@ -527,11 +600,24 @@ def _subset_arrays(
         rng = np.random.RandomState(0)
         idx = rng.choice(idx, size=int(max_rows), replace=False)
         idx.sort()
+    if idx.size == n and bool(np.all(idx == np.arange(n, dtype=idx.dtype))):
+        return arrays
     return {name: arrays[name][idx] for name in arrays}
 
 
+def _as_numpy_index(index: torch.Tensor | np.ndarray | int) -> np.ndarray:
+    if isinstance(index, torch.Tensor):
+        return index.detach().to(dtype=torch.long, device="cpu").numpy().reshape(-1)
+    return np.asarray(index, dtype=np.int64).reshape(-1)
+
+
 class FenValueVisitsDataset(Dataset):
-    """In-memory sparse 844 features (from cache or a one-shot encode)."""
+    """Sparse 844 features backed by memory-mapped ``.npy`` / ``features.npz``.
+
+    Arrays stay on disk. ``__getitem__`` / ``gather`` copy only the requested
+    rows into tensors. Train/test splits store an index map; they do not pack
+    a second copy of the slice.
+    """
 
     def __init__(
         self,
@@ -589,31 +675,116 @@ class FenValueVisitsDataset(Dataset):
 
         self._attach_arrays(arrays)
 
-    def _attach_arrays(self, arrays: dict[str, np.ndarray]) -> None:
+    def _attach_arrays(
+        self,
+        arrays: dict[str, np.ndarray],
+        row_index: np.ndarray | None = None,
+    ) -> None:
         if "wdl" not in arrays:
             raise ValueError(
                 "features.npz is missing 'wdl' (N, 3); re-encode with "
                 "scripts/encode_slice_features.py --rebuild"
             )
-        wdl = np.ascontiguousarray(arrays["wdl"], dtype=np.float32)
+        wdl = arrays["wdl"]
         if wdl.ndim != 2 or wdl.shape[1] != 3:
             raise ValueError(f"wdl must have shape (N, 3), got {wdl.shape}")
-        wdl = np.clip(wdl, 0.0, None)
-        denom = wdl.sum(axis=1, keepdims=True)
-        denom = np.maximum(denom, 1e-8)
-        wdl = wdl / denom
         self._np = arrays
-        width = int(arrays["white_idx"].shape[1])
-        self.white_idx = torch.from_numpy(np.ascontiguousarray(arrays["white_idx"]))
-        self.black_idx = torch.from_numpy(np.ascontiguousarray(arrays["black_idx"]))
-        self.white_mask = torch.from_numpy(_mask_from_counts(arrays["white_n"], width))
-        self.black_mask = torch.from_numpy(_mask_from_counts(arrays["black_n"], width))
-        self.stm_white = torch.from_numpy(arrays["stm"].astype(np.bool_))
-        self.wdl = torch.from_numpy(wdl)
-        if "visits" in arrays:
-            self.visits = torch.from_numpy(np.ascontiguousarray(arrays["visits"]))
+        self._width = int(arrays["white_idx"].shape[1])
+        if row_index is None:
+            self._row_index = None
+            self._n = int(wdl.shape[0])
         else:
-            self.visits = torch.ones(self.wdl.shape[0], dtype=torch.float32)
+            idx = np.asarray(row_index, dtype=np.int64).reshape(-1)
+            n_src = int(wdl.shape[0])
+            if idx.size == 0:
+                raise ValueError("row index is empty")
+            if int(idx.min()) < 0 or int(idx.max()) >= n_src:
+                raise ValueError(f"row index out of range for n={n_src}")
+            self._row_index = idx
+            self._n = int(idx.shape[0])
+
+    def _physical_rows(self, logical: np.ndarray) -> np.ndarray:
+        idx = np.asarray(logical, dtype=np.int64).reshape(-1)
+        if self._row_index is None:
+            return idx
+        return self._row_index[idx]
+
+    def _take_np(self, name: str) -> np.ndarray:
+        arr = self._np[name]
+        if self._row_index is None:
+            return arr
+        return arr[self._row_index]
+
+    @property
+    def white_idx(self) -> torch.Tensor:
+        return torch.from_numpy(np.array(self._take_np("white_idx"), copy=True, order="C"))
+
+    @property
+    def black_idx(self) -> torch.Tensor:
+        return torch.from_numpy(np.array(self._take_np("black_idx"), copy=True, order="C"))
+
+    @property
+    def white_mask(self) -> torch.Tensor:
+        counts = np.array(self._take_np("white_n"), copy=True, order="C")
+        return torch.from_numpy(_mask_from_counts(counts, self._width))
+
+    @property
+    def black_mask(self) -> torch.Tensor:
+        counts = np.array(self._take_np("black_n"), copy=True, order="C")
+        return torch.from_numpy(_mask_from_counts(counts, self._width))
+
+    @property
+    def stm_white(self) -> torch.Tensor:
+        return torch.from_numpy(np.asarray(self._take_np("stm")).astype(np.bool_, copy=True))
+
+    @property
+    def wdl(self) -> torch.Tensor:
+        return torch.from_numpy(_normalize_wdl_np(self._take_np("wdl")))
+
+    @property
+    def visits(self) -> torch.Tensor:
+        if "visits" in self._np:
+            return torch.from_numpy(
+                np.array(self._take_np("visits"), copy=True, order="C", dtype=np.float32)
+            )
+        return torch.ones(len(self), dtype=torch.float32)
+
+    def gather(self, index: torch.Tensor | np.ndarray | int) -> dict[str, torch.Tensor]:
+        """Copy ``index`` rows from the memmap into a packed batch dict."""
+        logical = _as_numpy_index(index)
+        k = int(logical.size)
+        if k == 0:
+            raise ValueError("gather needs at least one index")
+        n = len(self)
+        if int(logical.min()) < 0 or int(logical.max()) >= n:
+            raise IndexError(f"row index out of range for n={n}")
+        phys = self._physical_rows(logical)
+        order = np.argsort(phys, kind="mergesort")
+        sorted_phys = phys[order]
+        inv = np.empty(k, dtype=np.int64)
+        inv[order] = np.arange(k, dtype=np.int64)
+
+        def _rows(name: str, dtype: np.dtype | None = None) -> np.ndarray:
+            arr = np.ascontiguousarray(self._np[name][sorted_phys], dtype=dtype)
+            return arr[inv]
+
+        white_n = torch.from_numpy(np.ascontiguousarray(_rows("white_n", np.uint8))).long()
+        black_n = torch.from_numpy(np.ascontiguousarray(_rows("black_n", np.uint8))).long()
+        ar = torch.arange(self._width, dtype=torch.long)
+        stm = np.asarray(_rows("stm")).astype(np.bool_, copy=False)
+        if "visits" in self._np:
+            weight = np.ascontiguousarray(_rows("visits"), dtype=np.float32)
+        else:
+            weight = np.ones(k, dtype=np.float32)
+        return {
+            "white_idx": torch.from_numpy(np.ascontiguousarray(_rows("white_idx", np.int16))).long(),
+            "white_mask": ar < white_n.unsqueeze(1),
+            "black_idx": torch.from_numpy(np.ascontiguousarray(_rows("black_idx", np.int16))).long(),
+            "black_mask": ar < black_n.unsqueeze(1),
+            "stm_white": torch.from_numpy(np.ascontiguousarray(stm)),
+            "target": torch.from_numpy(_normalize_wdl_np(_rows("wdl"))),
+            "weight": torch.from_numpy(weight),
+        }
 
     @classmethod
     def from_slice_root(
@@ -639,7 +810,7 @@ class FenValueVisitsDataset(Dataset):
                 rebuild=rebuild,
                 progress=progress,
             )
-            blocks.append(arrays)
+            blocks.append({name: np.ascontiguousarray(arrays[name]) for name in arrays})
         merged = concat_slice_arrays(blocks)
         merged = _subset_arrays(merged, max_rows=max_rows)
         ds = cls.__new__(cls)
@@ -659,7 +830,7 @@ class FenValueVisitsDataset(Dataset):
         rebuild: bool = False,
         progress: bool = True,
     ) -> list[FenValueVisitsDataset]:
-        """One in-memory dataset per slice folder (no concat)."""
+        """One memmapped dataset per slice folder (no concat, no tensor pack)."""
         folders = discover_slice_folders(root)
         folders, _skipped = apply_holdout_skip(folders, skip_names)
         if not folders:
@@ -677,29 +848,21 @@ class FenValueVisitsDataset(Dataset):
         return out
 
     def __len__(self) -> int:
-        return int(self.wdl.shape[0])
+        return int(self._n)
 
     def take_rows(self, indices: np.ndarray) -> FenValueVisitsDataset:
-        """New dataset with the given row indices (order preserved)."""
+        """New dataset with the given row indices (order preserved, arrays shared)."""
         idx = np.asarray(indices, dtype=np.int64).reshape(-1)
         n = len(self)
         if idx.size == 0:
             raise ValueError("take_rows needs at least one index")
-        if idx.min() < 0 or idx.max() >= n:
+        if int(idx.min()) < 0 or int(idx.max()) >= n:
             raise ValueError(f"row index out of range for n={n}")
-        torch_idx = torch.from_numpy(idx)
         clone = FenValueVisitsDataset.__new__(FenValueVisitsDataset)
         clone.max_active = self.max_active
         clone.feature_dim = self.feature_dim
         clone.cache_dir = self.cache_dir
-        clone._np = {key: value[idx] for key, value in self._np.items()}
-        clone.white_idx = self.white_idx[torch_idx]
-        clone.black_idx = self.black_idx[torch_idx]
-        clone.white_mask = self.white_mask[torch_idx]
-        clone.black_mask = self.black_mask[torch_idx]
-        clone.stm_white = self.stm_white[torch_idx]
-        clone.wdl = self.wdl[torch_idx]
-        clone.visits = self.visits[torch_idx]
+        clone._attach_arrays(self._np, row_index=self._physical_rows(idx))
         return clone
 
     def narrow_rows(self, start: int, end: int) -> FenValueVisitsDataset:
@@ -712,15 +875,52 @@ class FenValueVisitsDataset(Dataset):
         return self.take_rows(np.arange(start_i, end_i, dtype=np.int64))
 
     def __getitem__(self, index: int) -> dict[str, torch.Tensor]:
+        i = int(index)
+        n = len(self)
+        if i < 0:
+            i += n
+        if i < 0 or i >= n:
+            raise IndexError(index)
+        phys = int(self._physical_rows(np.asarray([i], dtype=np.int64))[0])
+        width = self._width
+        white_n = int(self._np["white_n"][phys])
+        black_n = int(self._np["black_n"][phys])
+        white_mask = torch.zeros(width, dtype=torch.bool)
+        black_mask = torch.zeros(width, dtype=torch.bool)
+        if white_n:
+            white_mask[:white_n] = True
+        if black_n:
+            black_mask[:black_n] = True
+        wdl = _normalize_wdl_np(np.asarray(self._np["wdl"][phys : phys + 1]))[0]
+        if "visits" in self._np:
+            weight = np.float32(self._np["visits"][phys])
+        else:
+            weight = np.float32(1.0)
+        stm = bool(self._np["stm"][phys])
         return {
-            "white_idx": self.white_idx[index],
-            "white_mask": self.white_mask[index],
-            "black_idx": self.black_idx[index],
-            "black_mask": self.black_mask[index],
-            "stm_white": self.stm_white[index],
-            "target": self.wdl[index],
-            "weight": self.visits[index],
+            "white_idx": torch.from_numpy(
+                np.ascontiguousarray(self._np["white_idx"][phys], dtype=np.int16)
+            ),
+            "white_mask": white_mask,
+            "black_idx": torch.from_numpy(
+                np.ascontiguousarray(self._np["black_idx"][phys], dtype=np.int16)
+            ),
+            "black_mask": black_mask,
+            "stm_white": torch.tensor(stm, dtype=torch.bool),
+            "target": torch.from_numpy(wdl),
+            "weight": torch.tensor(weight, dtype=torch.float32),
         }
+
+
+_PACK_KEYS = (
+    "white_idx",
+    "white_mask",
+    "black_idx",
+    "black_mask",
+    "stm_white",
+    "target",
+    "weight",
+)
 
 
 class MixedSliceDataset(Dataset):
@@ -759,6 +959,10 @@ class ConcatSliceDataset(Dataset):
     def __len__(self) -> int:
         return int(self._offsets[-1])
 
+    @property
+    def device(self) -> torch.device:
+        return torch.device("cpu")
+
     def __getitem__(self, index: int) -> dict[str, torch.Tensor]:
         i = int(index)
         n = len(self)
@@ -769,6 +973,468 @@ class ConcatSliceDataset(Dataset):
         slice_id = bisect.bisect_right(self._offsets, i) - 1
         row = i - self._offsets[slice_id]
         return self.slices[slice_id][row]
+
+    def gather(self, index: torch.Tensor | np.ndarray | int) -> dict[str, torch.Tensor]:
+        """Batch gather from memmapped slices; copies only the requested rows."""
+        idx = _as_numpy_index(index)
+        k = int(idx.size)
+        if k == 0:
+            raise ValueError("gather needs at least one index")
+        n = len(self)
+        if int(idx.min()) < 0 or int(idx.max()) >= n:
+            raise IndexError(f"row index out of range for n={n}")
+        offsets = np.asarray(self._offsets, dtype=np.int64)
+        slice_ids = np.searchsorted(offsets[1:], idx, side="right")
+        local = idx - offsets[slice_ids]
+        order = np.argsort(slice_ids, kind="mergesort")
+        sorted_sids = slice_ids[order]
+        sorted_local = local[order]
+        inv = np.empty(k, dtype=np.int64)
+        inv[order] = np.arange(k, dtype=np.int64)
+        inv_t = torch.from_numpy(inv)
+
+        pieces: dict[str, list[torch.Tensor]] = {key: [] for key in _PACK_KEYS}
+        start = 0
+        while start < k:
+            sid = int(sorted_sids[start])
+            end = start + 1
+            while end < k and int(sorted_sids[end]) == sid:
+                end += 1
+            part = self.slices[sid].gather(sorted_local[start:end])
+            for key in _PACK_KEYS:
+                pieces[key].append(part[key])
+            start = end
+        return {key: torch.cat(parts, dim=0)[inv_t] for key, parts in pieces.items()}
+
+    def iter_batches(self, batch_size: int, *, pad: bool = False):
+        n = len(self)
+        width = int(batch_size)
+        if width < 1:
+            raise ValueError("batch_size must be >= 1")
+        for start in range(0, n, width):
+            end = min(start + width, n)
+            batch = self.gather(np.arange(start, end, dtype=np.int64))
+            got = end - start
+            if pad and got < width:
+                extra = width - got
+                padded: dict[str, torch.Tensor] = {}
+                for key, tensor in batch.items():
+                    zeros = torch.zeros(
+                        (extra, *tensor.shape[1:]),
+                        dtype=tensor.dtype,
+                        device=tensor.device,
+                    )
+                    padded[key] = torch.cat([tensor, zeros], dim=0)
+                batch = padded
+            yield batch
+
+
+class PackedSparseTensors:
+    """Column-major sparse NNUE table for batched integer gathers.
+
+    ``ConcatSliceDataset.__getitem__`` plus ``collate_sparse`` builds each
+    batch as thousands of Python dicts. This concatenates the underlying
+    tensors once so a batch is one gather per column — the path that can
+    stay on GPU for the whole run.
+    """
+
+    __slots__ = ("_t",)
+
+    def __init__(self, tensors: dict[str, torch.Tensor]) -> None:
+        missing = [key for key in _PACK_KEYS if key not in tensors]
+        if missing:
+            raise ValueError(f"packed tensors missing {missing}")
+        n = int(tensors["target"].shape[0])
+        if n < 1:
+            raise ValueError("packed tensors need at least one row")
+        for key in _PACK_KEYS:
+            if int(tensors[key].shape[0]) != n:
+                raise ValueError(f"{key} rows {tensors[key].shape[0]} != {n}")
+        normalized = {
+            "white_idx": tensors["white_idx"].long(),
+            "white_mask": tensors["white_mask"].bool(),
+            "black_idx": tensors["black_idx"].long(),
+            "black_mask": tensors["black_mask"].bool(),
+            "stm_white": tensors["stm_white"].bool(),
+            "target": tensors["target"].float(),
+            "weight": tensors["weight"].float(),
+        }
+        self._t = normalized
+
+    def __len__(self) -> int:
+        return int(self._t["target"].shape[0])
+
+    def __getitem__(self, key: str) -> torch.Tensor:
+        return self._t[key]
+
+    @property
+    def device(self) -> torch.device:
+        return self._t["target"].device
+
+    def pin_memory(self) -> PackedSparseTensors:
+        if self.device.type != "cpu":
+            return self
+        return PackedSparseTensors({key: tensor.pin_memory() for key, tensor in self._t.items()})
+
+    def to(
+        self,
+        device: torch.device | str,
+        *,
+        non_blocking: bool = False,
+    ) -> PackedSparseTensors:
+        dev = torch.device(device)
+        moved: dict[str, torch.Tensor] = {}
+        for key, tensor in self._t.items():
+            out = tensor.to(device=dev, non_blocking=non_blocking)
+            if key in {"white_idx", "black_idx"} and out.dtype != torch.int64:
+                out = out.long()
+            elif key in {"white_mask", "black_mask", "stm_white"} and out.dtype != torch.bool:
+                out = out.bool()
+            moved[key] = out
+        return PackedSparseTensors(moved)
+
+    def index_select(self, index: torch.Tensor) -> PackedSparseTensors:
+        index = index.to(device=self.device, dtype=torch.long)
+        return PackedSparseTensors(
+            {key: tensor.index_select(0, index) for key, tensor in self._t.items()}
+        )
+
+    def gather(self, index: torch.Tensor) -> dict[str, torch.Tensor]:
+        index = index.to(device=self.device, dtype=torch.long)
+        return {key: tensor[index] for key, tensor in self._t.items()}
+
+    def slice_rows(self, start: int, end: int) -> dict[str, torch.Tensor]:
+        sl = slice(int(start), int(end))
+        return {key: tensor[sl] for key, tensor in self._t.items()}
+
+    def iter_batches(self, batch_size: int, *, pad: bool = False):
+        n = len(self)
+        width = int(batch_size)
+        if width < 1:
+            raise ValueError("batch_size must be >= 1")
+        for start in range(0, n, width):
+            end = min(start + width, n)
+            batch = self.slice_rows(start, end)
+            got = end - start
+            if pad and got < width:
+                extra = width - got
+                padded: dict[str, torch.Tensor] = {}
+                for key, tensor in batch.items():
+                    zeros = torch.zeros(
+                        (extra, *tensor.shape[1:]),
+                        dtype=tensor.dtype,
+                        device=tensor.device,
+                    )
+                    padded[key] = torch.cat([tensor, zeros], dim=0)
+                batch = padded
+            yield batch
+
+    @classmethod
+    def from_dataset(cls, dataset: object) -> PackedSparseTensors:
+        if isinstance(dataset, PackedSparseTensors):
+            return dataset
+        if isinstance(dataset, Subset):
+            idx = np.asarray(dataset.indices, dtype=np.int64)
+            base = dataset.dataset
+            if hasattr(base, "gather"):
+                return cls(base.gather(idx))
+            return cls.from_dataset(base).index_select(torch.as_tensor(idx, dtype=torch.long))
+        if isinstance(dataset, (ConcatSliceDataset, FenValueVisitsDataset)):
+            n = len(dataset)
+            if n < 1:
+                raise ValueError("packed tensors need at least one row")
+            return cls(dataset.gather(np.arange(n, dtype=np.int64)))
+        raise TypeError(f"cannot pack sparse tensors from {type(dataset)!r}")
+
+
+def _slice_n_rows(folder: Path) -> int:
+    meta_path = folder / SLICE_FEATURES_META
+    if meta_path.is_file():
+        try:
+            meta = json.loads(meta_path.read_text(encoding="utf-8"))
+            n = int(meta.get("n_rows", -1))
+            if n >= 0:
+                return n
+        except (OSError, json.JSONDecodeError, TypeError, ValueError):
+            pass
+    path = slice_features_path(folder)
+    if not path.is_file():
+        raise FileNotFoundError(f"missing {path}; encode with scripts/encode_slice_features.py")
+    return int(_mmap_npz(path)["wdl"].shape[0])
+
+
+def _open_slice_npz(folder: Path) -> dict[str, np.ndarray]:
+    """Memory-map ``features.npz`` (dict of arrays; no zip extraction of full tables)."""
+    return load_slice_feature_db(folder)
+
+
+def _normalize_wdl_np(wdl: np.ndarray) -> np.ndarray:
+    out = np.clip(np.ascontiguousarray(wdl, dtype=np.float32), 0.0, None)
+    denom = np.maximum(out.sum(axis=1, keepdims=True), 1e-8)
+    return out / denom
+
+
+def _alloc_compact(
+    n: int,
+    width: int,
+    device: torch.device | str | None = None,
+) -> dict[str, torch.Tensor]:
+    n = int(n)
+    width = int(width)
+    dev = torch.device(device or "cpu")
+    return {
+        "white_idx": torch.empty((n, width), dtype=torch.int16, device=dev),
+        "white_n": torch.empty((n,), dtype=torch.uint8, device=dev),
+        "black_idx": torch.empty((n, width), dtype=torch.int16, device=dev),
+        "black_n": torch.empty((n,), dtype=torch.uint8, device=dev),
+        "stm": torch.empty((n,), dtype=torch.bool, device=dev),
+        "wdl": torch.empty((n, 3), dtype=torch.float32, device=dev),
+        "weight": torch.empty((n,), dtype=torch.float32, device=dev),
+    }
+
+
+def _copy_slice_rows(
+    dst: dict[str, torch.Tensor],
+    start: int,
+    npz: dict[str, np.ndarray],
+    rows: np.ndarray,
+) -> int:
+    k = int(rows.size)
+    if k == 0:
+        return 0
+    end = start + k
+    dst["white_idx"][start:end].copy_(
+        torch.from_numpy(np.ascontiguousarray(npz["white_idx"][rows], dtype=np.int16))
+    )
+    dst["black_idx"][start:end].copy_(
+        torch.from_numpy(np.ascontiguousarray(npz["black_idx"][rows], dtype=np.int16))
+    )
+    dst["white_n"][start:end].copy_(
+        torch.from_numpy(np.ascontiguousarray(npz["white_n"][rows], dtype=np.uint8))
+    )
+    dst["black_n"][start:end].copy_(
+        torch.from_numpy(np.ascontiguousarray(npz["black_n"][rows], dtype=np.uint8))
+    )
+    dst["stm"][start:end].copy_(
+        torch.from_numpy(np.asarray(npz["stm"][rows]).astype(np.bool_, copy=False))
+    )
+    dst["wdl"][start:end].copy_(torch.from_numpy(_normalize_wdl_np(npz["wdl"][rows])))
+    if "visits" in npz:
+        vis = np.ascontiguousarray(npz["visits"][rows], dtype=np.float32)
+    else:
+        vis = np.ones(k, dtype=np.float32)
+    dst["weight"][start:end].copy_(torch.from_numpy(vis))
+    return k
+
+
+class CompactPackedTensors:
+    """Sparse tables in on-disk dtypes; promote only the gathered minibatch.
+
+    Stores int16 indices and uint8 counts (no ``(N, 128)`` masks, no int64
+    index tables). Lives on CPU or CUDA. ``gather`` / ``iter_batches`` return
+    the same dict as ``PackedSparseTensors`` so the train loop is unchanged.
+
+    On CUDA this is the path that keeps the GPU busy: ``torch.randint`` and
+    gather run on-device, and only the batch is promoted to int64 / bool masks.
+    61M rows is ~32 GiB (vs ~130 GiB for int64 + masks).
+    """
+
+    __slots__ = ("_t", "_width", "_arange")
+
+    def __init__(self, tensors: dict[str, torch.Tensor]) -> None:
+        n = int(tensors["wdl"].shape[0])
+        if n < 1:
+            raise ValueError("compact pack needs at least one row")
+        width = int(tensors["white_idx"].shape[1])
+        self._width = width
+        device = tensors["wdl"].device
+
+        def _keep(tensor: torch.Tensor, dtype: torch.dtype) -> torch.Tensor:
+            if tensor.dtype == dtype and tensor.device == device and tensor.is_contiguous():
+                return tensor
+            return tensor.to(device=device, dtype=dtype).contiguous()
+
+        self._t = {
+            "white_idx": _keep(tensors["white_idx"], torch.int16),
+            "white_n": _keep(tensors["white_n"], torch.uint8),
+            "black_idx": _keep(tensors["black_idx"], torch.int16),
+            "black_n": _keep(tensors["black_n"], torch.uint8),
+            "stm": _keep(tensors["stm"], torch.bool),
+            "wdl": _keep(tensors["wdl"], torch.float32),
+            "weight": _keep(tensors["weight"], torch.float32),
+        }
+        for key, tensor in self._t.items():
+            if int(tensor.shape[0]) != n:
+                raise ValueError(f"{key} rows {tensor.shape[0]} != {n}")
+            if tensor.device != device:
+                raise ValueError(f"{key} device {tensor.device} != {device}")
+        self._arange = torch.arange(width, dtype=torch.long, device=device)
+
+    def __len__(self) -> int:
+        return int(self._t["wdl"].shape[0])
+
+    @property
+    def device(self) -> torch.device:
+        return self._t["wdl"].device
+
+    @property
+    def width(self) -> int:
+        return int(self._width)
+
+    @property
+    def nbytes(self) -> int:
+        return int(sum(t.nbytes for t in self._t.values()))
+
+    def gather(self, index: torch.Tensor) -> dict[str, torch.Tensor]:
+        index = index.to(device=self.device, dtype=torch.long)
+        white_n = self._t["white_n"][index].long()
+        black_n = self._t["black_n"][index].long()
+        ar = self._arange
+        return {
+            "white_idx": self._t["white_idx"][index].long(),
+            "white_mask": ar < white_n.unsqueeze(1),
+            "black_idx": self._t["black_idx"][index].long(),
+            "black_mask": ar < black_n.unsqueeze(1),
+            "stm_white": self._t["stm"][index],
+            "target": self._t["wdl"][index],
+            "weight": self._t["weight"][index],
+        }
+
+    def to(
+        self,
+        device: torch.device | str,
+        *,
+        non_blocking: bool = False,
+    ) -> CompactPackedTensors:
+        dev = torch.device(device)
+        if self.device == dev:
+            return self
+        return CompactPackedTensors(
+            {key: tensor.to(device=dev, non_blocking=non_blocking) for key, tensor in self._t.items()}
+        )
+
+    def slice_rows(self, start: int, end: int) -> dict[str, torch.Tensor]:
+        return self.gather(
+            torch.arange(int(start), int(end), dtype=torch.long, device=self.device)
+        )
+
+    def iter_batches(self, batch_size: int, *, pad: bool = False):
+        n = len(self)
+        width = int(batch_size)
+        if width < 1:
+            raise ValueError("batch_size must be >= 1")
+        for start in range(0, n, width):
+            end = min(start + width, n)
+            batch = self.slice_rows(start, end)
+            got = end - start
+            if pad and got < width:
+                extra = width - got
+                padded: dict[str, torch.Tensor] = {}
+                for key, tensor in batch.items():
+                    zeros = torch.zeros(
+                        (extra, *tensor.shape[1:]),
+                        dtype=tensor.dtype,
+                        device=tensor.device,
+                    )
+                    padded[key] = torch.cat([tensor, zeros], dim=0)
+                batch = padded
+            yield batch
+
+    def index_select(self, index: torch.Tensor) -> CompactPackedTensors:
+        index = index.to(device=self.device, dtype=torch.long)
+        return CompactPackedTensors(
+            {
+                "white_idx": self._t["white_idx"][index],
+                "white_n": self._t["white_n"][index],
+                "black_idx": self._t["black_idx"][index],
+                "black_n": self._t["black_n"][index],
+                "stm": self._t["stm"][index],
+                "wdl": self._t["wdl"][index],
+                "weight": self._t["weight"][index],
+            }
+        )
+
+
+def load_compact_split(
+    folders: list[Path],
+    test_fraction: float,
+    *,
+    seed: int = 0,
+    rebuild: bool = False,
+    progress: bool = True,
+    max_active: int = MAX_ACTIVE_FEATURES,
+    device: torch.device | str | None = None,
+) -> tuple[CompactPackedTensors, CompactPackedTensors]:
+    """Load ``features.npz`` sequentially into compact train/test tables.
+
+    Split matches ``split_random_fraction`` (per-slice i.i.d., same seed).
+    Peak extra RAM is one memmapped slice (row copies only) plus the compact
+    tables on ``device`` (CPU or CUDA). CUDA fill is slice-by-slice so the
+    host never holds a second full copy.
+    """
+    frac = float(test_fraction)
+    if not 0.0 < frac < 1.0:
+        raise ValueError(f"test fraction must be in (0, 1), got {test_fraction}")
+    if not folders:
+        raise FileNotFoundError("no slice folders to load")
+    dest = torch.device(device or "cpu")
+
+    if rebuild:
+        for folder in folders:
+            ensure_slice_feature_db(
+                folder, max_active=max_active, rebuild=True, progress=progress
+            )
+
+    rng = np.random.RandomState(int(seed))
+    counts: list[tuple[int, int, int]] = []
+    n_train = 0
+    n_test = 0
+    for folder in folders:
+        n = _slice_n_rows(folder)
+        n_te = int(n * frac)
+        n_tr = n - n_te
+        counts.append((n, n_tr, n_te))
+        n_train += n_tr
+        n_test += n_te
+    if n_train < 1:
+        raise ValueError("train split is empty; lower --test-fraction")
+    if n_test < 1:
+        raise ValueError("test split is empty; raise --test-fraction or use larger slices")
+
+    width = MAX_ACTIVE_FEATURES
+    first = _open_slice_npz(folders[0])
+    width = int(first["white_idx"].shape[1])
+    del first
+
+    train_buf = _alloc_compact(n_train, width, device=dest)
+    test_buf = _alloc_compact(n_test, width, device=dest)
+    i_tr = 0
+    i_te = 0
+    folder_iter: Any = folders
+    if progress:
+        try:
+            from tqdm import tqdm
+
+            folder_iter = tqdm(folders, desc=f"load slices → {dest}", unit="slice")
+        except ImportError:
+            folder_iter = folders
+
+    for folder, (n, _n_tr, n_te) in zip(folder_iter, counts):
+        perm = rng.permutation(n)
+        test_rows = perm[:n_te]
+        train_rows = perm[n_te:]
+        npz = _open_slice_npz(folder)
+        if int(npz["white_idx"].shape[1]) != width:
+            raise ValueError(
+                f"{folder} white_idx width {npz['white_idx'].shape[1]} != {width}"
+            )
+        i_tr += _copy_slice_rows(train_buf, i_tr, npz, train_rows)
+        i_te += _copy_slice_rows(test_buf, i_te, npz, test_rows)
+        del npz
+
+    if i_tr != n_train or i_te != n_test:
+        raise RuntimeError(f"compact fill mismatch train {i_tr}/{n_train} test {i_te}/{n_test}")
+    return CompactPackedTensors(train_buf), CompactPackedTensors(test_buf)
 
 
 class UniformRowBatchSampler(Sampler[list[int]]):
