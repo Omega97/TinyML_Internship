@@ -633,3 +633,196 @@ def test_inspect_sample_subset_is_deterministic():
     assert a[0] != c[0]
     assert len(a[0]) == 5
 
+
+def _load_train_nnue_gpu():
+    import importlib.util
+    from pathlib import Path
+
+    path = Path(__file__).parent.parent / "scripts" / "train_nnue-gpu.py"
+    spec = importlib.util.spec_from_file_location("train_nnue_gpu", path)
+    assert spec is not None and spec.loader is not None
+    mod = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(mod)
+    return mod
+
+
+def test_resolve_slices_dir_bare_name_under_default(tmp_path):
+    from pathlib import Path
+
+    train = _load_train_nnue_gpu()
+    name = "fen_value_visits_lichess_db_standard_rated_2026-07_0-5000_d90"
+    default = tmp_path / "data" / "processed" / "board_eval" / "fen_value_visits"
+    slice_dir = default / name
+    slice_dir.mkdir(parents=True)
+    got = train.resolve_slices_dir(
+        Path(name),
+        project_root=tmp_path,
+        default_slices=default,
+    )
+    assert got == slice_dir.resolve()
+
+
+def test_resolve_slices_dir_project_relative_wins(tmp_path):
+    from pathlib import Path
+
+    train = _load_train_nnue_gpu()
+    rel = Path("data/processed/board_eval/fen_value_visits")
+    at_root = tmp_path / rel
+    at_root.mkdir(parents=True)
+    default = tmp_path / "elsewhere"
+    default.mkdir()
+    got = train.resolve_slices_dir(
+        rel,
+        project_root=tmp_path,
+        default_slices=default,
+    )
+    assert got == at_root.resolve()
+
+
+def test_slice_folders_accepts_single_slice(tmp_path):
+    train = _load_train_nnue_gpu()
+    name = "fen_value_visits_lichess_db_standard_rated_2026-07_0-5000_d90"
+    folder = tmp_path / name
+    folder.mkdir()
+    (folder / f"{name}.json").write_text("[]", encoding="utf-8")
+    assert train.slice_folders(folder) == [folder]
+
+
+def _tiny_packed(n: int = 10, width: int = 8, seed: int = 0):
+    from tinymlinternship.nnue.dataset import PackedSparseTensors
+
+    g = torch.Generator().manual_seed(seed)
+    return PackedSparseTensors(
+        {
+            "white_idx": torch.randint(0, FEATURE_DIM, (n, width), generator=g),
+            "white_mask": torch.ones(n, width, dtype=torch.bool),
+            "black_idx": torch.randint(0, FEATURE_DIM, (n, width), generator=g),
+            "black_mask": torch.ones(n, width, dtype=torch.bool),
+            "stm_white": torch.ones(n, dtype=torch.bool),
+            "target": torch.softmax(torch.randn(n, 3, generator=g), dim=-1),
+            "weight": torch.ones(n),
+        }
+    )
+
+
+def test_packed_sparse_matches_getitem_and_collate(tmp_path):
+    import json
+
+    import chess
+
+    from tinymlinternship.nnue.dataset import (
+        ConcatSliceDataset,
+        FenValueVisitsDataset,
+        PackedSparseTensors,
+        collate_sparse,
+        split_random_fraction,
+    )
+
+    board = chess.Board()
+    fens = [board.fen()]
+    for move in board.legal_moves:
+        nxt = board.copy()
+        nxt.push(move)
+        fens.append(nxt.fen())
+        if len(fens) >= 10:
+            break
+
+    def _write(name: str, values: list[float]) -> None:
+        folder = tmp_path / name
+        folder.mkdir()
+        rows = [
+            {"fen": fen, "value": value, "visits": 1}
+            for fen, value in zip(fens, values)
+        ]
+        (folder / f"{name}.json").write_text(json.dumps(rows), encoding="utf-8")
+
+    _write("slice_a", [0.05 * i for i in range(10)])
+    _write("slice_b", [0.04 * i - 0.2 for i in range(10)])
+    slices = FenValueVisitsDataset.load_slice_datasets(tmp_path, progress=False)
+    train_parts, _test_parts = split_random_fraction(slices, 0.10, seed=0)
+    ds = ConcatSliceDataset(train_parts)
+    pack = PackedSparseTensors.from_dataset(ds)
+    assert len(pack) == len(ds)
+    idx = [0, 3, 8, len(ds) - 1]
+    collated = collate_sparse([ds[i] for i in idx])
+    gathered = pack.gather(torch.tensor(idx, dtype=torch.long))
+    for key in collated:
+        assert torch.equal(collated[key], gathered[key]), key
+
+
+def test_five_arg_forward_matches_forward_sparse():
+    torch.manual_seed(0)
+    model = DualHiddenNNUE(hidden_dim=8, hidden2_dim=16)
+    pack = _tiny_packed(4, width=8, seed=1)
+    batch = pack.gather(torch.arange(4))
+    sparse = model.forward_sparse(
+        batch["white_idx"],
+        batch["white_mask"],
+        batch["black_idx"],
+        batch["black_mask"],
+        batch["stm_white"],
+    )
+    via_forward = model(
+        batch["white_idx"],
+        batch["black_idx"],
+        batch["stm_white"],
+        batch["white_mask"],
+        batch["black_mask"],
+    )
+    assert torch.allclose(sparse, via_forward, atol=1e-6)
+
+
+def test_packed_eval_padding_does_not_change_ce():
+    train = _load_train_nnue_gpu()
+    torch.manual_seed(0)
+    model = DualHiddenNNUE(hidden_dim=8, hidden2_dim=16)
+    pack = _tiny_packed(5, width=8, seed=2)
+    device = torch.device("cpu")
+    a = train.evaluate(model, pack, device, amp_dtype=None, batch_size=4)
+    b = train.evaluate(model, pack, device, amp_dtype=None, batch_size=5)
+    assert a["n"] == 5
+    assert b["n"] == 5
+    assert a["ce"] == pytest.approx(b["ce"], rel=1e-5, abs=1e-6)
+
+
+def test_packed_train_epoch_cpu_runs():
+    train = _load_train_nnue_gpu()
+    torch.manual_seed(0)
+    model = DualHiddenNNUE(hidden_dim=8, hidden2_dim=16)
+    pack = _tiny_packed(16, width=8, seed=3)
+    opt = torch.optim.Adam(model.parameters(), lr=1e-2)
+    device = torch.device("cpu")
+    loss = train.train_epoch(
+        model,
+        pack,
+        opt,
+        device,
+        batch_size=8,
+        n_batches=3,
+        amp_dtype=None,
+    )
+    assert loss > 0.0
+
+
+@pytest.mark.skipif(not torch.cuda.is_available(), reason="cuda")
+def test_packed_gpu_train_and_eval_step():
+    train = _load_train_nnue_gpu()
+    torch.manual_seed(0)
+    device = torch.device("cuda")
+    model = DualHiddenNNUE(hidden_dim=8, hidden2_dim=16).to(device)
+    pack = _tiny_packed(32, width=8, seed=4).to(device)
+    opt = torch.optim.Adam(model.parameters(), lr=1e-2)
+    loss = train.train_epoch(
+        model,
+        pack,
+        opt,
+        device,
+        batch_size=16,
+        n_batches=2,
+        amp_dtype=torch.bfloat16,
+    )
+    metrics = train.evaluate(model, pack, device, amp_dtype=torch.bfloat16, batch_size=16)
+    assert loss > 0.0
+    assert metrics["n"] == 32
+    assert metrics["ce"] > 0.0
+

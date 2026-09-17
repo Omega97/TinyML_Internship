@@ -1,0 +1,28 @@
+{
+  "run_name": "moe_b3_1m",
+  "checkpoint": "/home/omar/jupyterlab/TinyML_Internship/models/checkpoints/nnue/dual_h128_H256_e200_bpe512_bs10000/best.pt",
+  "max_rows": 1000000,
+  "n_clusters": 3,
+  "reduce_dim": 48,
+  "bytes_per_million": 96000000,
+  "expert_labels": "dispatcher",
+  "metrics": {
+    "n_test": 50000.0,
+    "base_ce": 0.6301878094673157,
+    "base_mae": 0.13252051174640656,
+    "moe_ce": 0.6304054856300354,
+    "moe_mae": 0.13294778764247894,
+    "oracle_ce": 0.6283050179481506,
+    "oracle_mae": 0.12878070771694183
+  },
+  "plots": [
+    "/home/omar/jupyterlab/TinyML_Internship/plots/MoE/cluster_pca.png",
+    "/home/omar/jupyterlab/TinyML_Internship/plots/MoE/cluster_tsne.png",
+    "/home/omar/jupyterlab/TinyML_Internship/plots/MoE/cluster_sizes.png",
+    "/home/omar/jupyterlab/TinyML_Internship/plots/MoE/centroid_cosine.png",
+    "/home/omar/jupyterlab/TinyML_Internship/plots/MoE/dispatcher_acc.png",
+    "/home/omar/jupyterlab/TinyML_Internship/plots/MoE/dispatcher_confusion.png",
+    "/home/omar/jupyterlab/TinyML_Internship/plots/MoE/expert_ce_by_bucket.png",
+    "/home/omar/jupyterlab/TinyML_Internship/plots/MoE/moe_vs_base_ce.png"
+  ]
+}
