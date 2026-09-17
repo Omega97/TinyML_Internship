@@ -17,8 +17,11 @@ A specific cluster run::
     python3.12 run_cluster_explorer.py --work-dir data/processed/board_eval/moe/moe_b3_1m
 
 In the window:
-  * the **Clusters** spin box is k-means B (default 4). Changing it re-fits
-    clusters on the gradient vectors; points stay put, colors update
+  * top bar: clustering algorithm, working-set size (300…30k), display %
+    (the slider only hides points; it does not re-cluster)
+  * **Projection** toggles PCA / t-SNE / UMAP / Isomap / LLE and recomputes
+    the 2D layout (cluster colors stay; t-SNE/UMAP/Isomap/LLE can take a bit)
+  * the **Clusters** spin box is B for k-Means / k-Medoids (default 4)
   * left-click a point to pin its chess board (up to 5; oldest drops off)
   * click the same point again, or the card ×, to unpin
   * drag to pan, scroll to zoom — the connector lines follow

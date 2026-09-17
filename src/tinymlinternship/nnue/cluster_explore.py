@@ -42,7 +42,20 @@ OPTIONAL_TABLE_COLUMNS = (
 )
 
 
+NOISE_COLOR = "#9aa6b8"
+POOL_SIZES: tuple[int, ...] = (300, 1_000, 3_000, 10_000, 30_000)
+DEFAULT_POOL_SIZE = 10_000
+CLUSTER_ALGORITHMS: tuple[str, ...] = ("kmeans", "kmedoids", "dbscan")
+CLUSTER_ALGO_LABELS: dict[str, str] = {
+    "kmeans": "Mini-batch k-Means",
+    "kmedoids": "k-Medoids",
+    "dbscan": "DBSCAN",
+}
+
+
 def cluster_color(cluster_id: int, n_clusters: int | None = None) -> str:
+    if int(cluster_id) < 0:
+        return NOISE_COLOR
     n = max(int(n_clusters or 0), int(cluster_id) + 1, 1)
     if 0 <= int(cluster_id) < len(CLUSTER_COLORS) and n <= len(CLUSTER_COLORS):
         return CLUSTER_COLORS[int(cluster_id)]
@@ -104,9 +117,11 @@ class ExplorerData:
     cluster_seed: int = 0
     requested_clusters: int = 0
     method: str = "pca"
+    algorithm: str = "kmeans"
     source: str = ""
     n_source_rows: int = 0
     diagnostics: dict[str, Any] = field(default_factory=dict)
+    projection_cache: dict[str, np.ndarray] = field(default_factory=dict)
 
     def __post_init__(self) -> None:
         n = int(self.sample_id.shape[0])
@@ -131,11 +146,19 @@ class ExplorerData:
 
     @property
     def n_clusters(self) -> int:
-        if self.requested_clusters > 0:
-            return int(self.requested_clusters)
         if self.cluster_id.size == 0:
             return 0
-        return int(self.cluster_id.max()) + 1
+        pos = self.cluster_id[self.cluster_id >= 0]
+        inferred = int(pos.max()) + 1 if pos.size else 0
+        if str(self.algorithm) == "dbscan":
+            return inferred
+        if self.requested_clusters > 0:
+            return int(self.requested_clusters)
+        return inferred
+
+    @property
+    def has_noise(self) -> bool:
+        return bool(self.cluster_id.size and int(self.cluster_id.min()) < 0)
 
     def visible_mask(
         self,
@@ -389,36 +412,228 @@ def clustering_features(data: ExplorerData) -> np.ndarray:
     return np.column_stack(cols).astype(np.float32, copy=False)
 
 
+def normalize_cluster_algorithm(name: str) -> str:
+    key = str(name).strip().lower().replace(" ", "").replace("-", "").replace("_", "")
+    aliases = {
+        "kmeans": "kmeans",
+        "minibatchkmeans": "kmeans",
+        "kmedoids": "kmedoids",
+        "medoids": "kmedoids",
+        "dbscan": "dbscan",
+    }
+    if key not in aliases:
+        raise ValueError(f"unknown clustering algorithm {name!r}")
+    return aliases[key]
+
+
+def _label_diagnostics(labels: np.ndarray, n_clusters: int, *, inertia: float | None = None) -> dict[str, Any]:
+    labels = np.asarray(labels)
+    noise = int(np.sum(labels < 0))
+    pos = labels[labels >= 0].astype(np.int64, copy=False)
+    k = max(int(n_clusters), int(pos.max()) + 1 if pos.size else 0)
+    sizes = np.bincount(pos, minlength=k).astype(np.int64) if k else np.zeros(0, dtype=np.int64)
+    return {
+        "n_clusters": k,
+        "n_rows": int(labels.shape[0]),
+        "sizes": sizes.tolist(),
+        "noise": noise,
+        "empty": int(np.sum(sizes == 0)) if sizes.size else 0,
+        "min_size": int(sizes.min()) if sizes.size else 0,
+        "max_size": int(sizes.max()) if sizes.size else 0,
+        "inertia": None if inertia is None else float(inertia),
+    }
+
+
+def _fit_kmedoids(x: np.ndarray, n_clusters: int, seed: int) -> tuple[np.ndarray, np.ndarray]:
+    """FasterPAM on small n; CLARA (sampled FasterPAM) when a full distance matrix is too big."""
+    from sklearn.metrics.pairwise import euclidean_distances
+
+    import kmedoids
+
+    x = np.ascontiguousarray(x, dtype=np.float32)
+    n = int(x.shape[0])
+    k = int(n_clusters)
+    rng = np.random.RandomState(int(seed))
+
+    def _pam(block: np.ndarray, local_seed: int) -> np.ndarray:
+        dist = euclidean_distances(block)
+        result = kmedoids.fasterpam(dist, k, random_state=int(local_seed))
+        return np.asarray(result.medoids, dtype=np.int64)
+
+    if n <= 3_500:
+        medoids = _pam(x, seed)
+    else:
+        sample_n = min(n, 2_500)
+        best_medoids = None
+        best_cost = float("inf")
+        for trial in range(4):
+            idx = rng.choice(n, size=sample_n, replace=False)
+            local = _pam(x[idx], seed + trial)
+            medoids = idx[local].astype(np.int64, copy=False)
+            dist = euclidean_distances(x, x[medoids])
+            cost = float(dist.min(axis=1).sum())
+            if cost < best_cost:
+                best_cost = cost
+                best_medoids = medoids
+        medoids = best_medoids if best_medoids is not None else rng.choice(n, size=k, replace=False)
+    dist = euclidean_distances(x, x[medoids])
+    labels = dist.argmin(axis=1).astype(np.int16, copy=False)
+    return labels, medoids
+
+
+def _dbscan_cluster_count(labels: np.ndarray) -> int:
+    pos = np.asarray(labels)
+    pos = pos[pos >= 0]
+    return int(pos.max()) + 1 if pos.size else 0
+
+
+def _fit_dbscan(x: np.ndarray, seed: int) -> tuple[np.ndarray, dict[str, Any]]:
+    """Tighter ε and larger min_samples than the old 85th-percentile rule.
+
+    Default ε is the 30th percentile of 8-NN distances (was 85th). min_samples
+    scales with n and is much higher than before. If that does not yield 3–6
+    clusters, ε is searched over lower/higher percentiles.
+    """
+    from sklearn.cluster import DBSCAN
+    from sklearn.neighbors import NearestNeighbors
+
+    x = np.ascontiguousarray(x, dtype=np.float32)
+    n = int(x.shape[0])
+    n_neighbors = min(8, max(2, n - 1))
+    dists, _ = NearestNeighbors(n_neighbors=n_neighbors).fit(x).kneighbors(x)
+    kth = dists[:, -1]
+    min_samples = max(25, min(80, n // 120))
+    min_samples = min(min_samples, max(5, n // 8))
+
+    def _run(percentile: float) -> tuple[np.ndarray, int, float]:
+        eps = max(float(np.percentile(kth, percentile)), 1e-5)
+        labels = DBSCAN(eps=eps, min_samples=min_samples, n_jobs=-1).fit_predict(x)
+        return labels.astype(np.int16, copy=False), _dbscan_cluster_count(labels), eps
+
+    def _score(n_clusters: int) -> float:
+        if 3 <= n_clusters <= 6:
+            return 0.0
+        if n_clusters <= 0:
+            return 100.0
+        return abs(n_clusters - 4.5)
+
+    labels, n_clusters, eps = _run(30.0)
+    best = (_score(n_clusters), labels, n_clusters, eps, 30.0)
+    if best[0] != 0.0:
+        for percentile in (12, 16, 20, 24, 28, 32, 36, 42, 48, 55, 65):
+            lab, k, e = _run(float(percentile))
+            scored = (_score(k), lab, k, e, float(percentile))
+            if scored[0] < best[0]:
+                best = scored
+            if scored[0] == 0.0:
+                break
+    _score_v, labels, n_clusters, eps, percentile = best
+    meta = {
+        "dbscan_eps": float(eps),
+        "dbscan_min_samples": int(min_samples),
+        "dbscan_percentile": float(percentile),
+    }
+    return labels, meta
+
+
 def recluster(
     data: ExplorerData,
     n_clusters: int,
     *,
     seed: int | None = None,
+    algorithm: str | None = None,
 ) -> ExplorerData:
-    """Fit mini-batch k-means in place. Scatter coordinates are unchanged."""
-    from tinymlinternship.nnue.cluster import cluster_diagnostics, fit_minibatch_kmeans
+    """Fit the chosen algorithm in place. Scatter coordinates are unchanged."""
+    from tinymlinternship.nnue.cluster import fit_minibatch_kmeans
 
     x = clustering_features(data)
-    k = int(n_clusters)
-    if k < 2:
-        raise ValueError(f"n_clusters must be >= 2, got {k}")
-    if int(x.shape[0]) < k:
-        raise ValueError(f"need at least {k} points to fit {k} clusters, got {x.shape[0]}")
+    algo = normalize_cluster_algorithm(algorithm or data.algorithm or "kmeans")
     rng_seed = int(data.cluster_seed if seed is None else seed)
-    km = fit_minibatch_kmeans(
-        x,
-        k,
-        batch_size=min(10_000, int(x.shape[0])),
-        seed=rng_seed,
-    )
-    labels = km.predict(x).astype(np.int16, copy=False)
-    diag = cluster_diagnostics(labels, km.cluster_centers_, inertia=float(km.inertia_))
+    k = int(n_clusters)
+    if algo != "dbscan":
+        if k < 2:
+            raise ValueError(f"n_clusters must be >= 2, got {k}")
+        if int(x.shape[0]) < k:
+            raise ValueError(f"need at least {k} points to fit {k} clusters, got {x.shape[0]}")
+
+    if algo == "kmeans":
+        km = fit_minibatch_kmeans(
+            x,
+            k,
+            batch_size=min(10_000, int(x.shape[0])),
+            seed=rng_seed,
+        )
+        labels = km.predict(x).astype(np.int16, copy=False)
+        diag = _label_diagnostics(labels, k, inertia=float(km.inertia_))
+    elif algo == "kmedoids":
+        labels, medoids = _fit_kmedoids(x, k, rng_seed)
+        inertia = float(np.linalg.norm(x - x[medoids[labels]], axis=1).sum())
+        diag = _label_diagnostics(labels, k, inertia=inertia)
+    else:
+        labels, db_meta = _fit_dbscan(x, rng_seed)
+        pos = labels[labels >= 0]
+        k_found = int(pos.max()) + 1 if pos.size else 0
+        diag = _label_diagnostics(labels, k_found)
+        diag.update(db_meta)
+        k = k_found
+
     data.cluster_id = labels
-    data.requested_clusters = k
+    data.algorithm = algo
+    data.requested_clusters = int(k)
     data.cluster_seed = rng_seed
     data.diagnostics.update(diag)
+    data.diagnostics["algorithm"] = algo
     data.diagnostics["clustered_on"] = "gradients" if data.features is not None else "projection"
     return data
+
+
+PROJECTION_METHODS: tuple[str, ...] = ("pca", "tsne", "umap", "isomap", "lle")
+PROJECTION_LABELS: dict[str, str] = {
+    "pca": "PCA",
+    "tsne": "t-SNE",
+    "umap": "UMAP",
+    "isomap": "Isomap",
+    "lle": "LLE",
+}
+_PROJECTION_ALIASES: dict[str, str] = {
+    "pca": "pca",
+    "tsne": "tsne",
+    "t-sne": "tsne",
+    "t_sne": "tsne",
+    "umap": "umap",
+    "isomap": "isomap",
+    "lle": "lle",
+    "locally-linear-embedding": "lle",
+    "locally_linear_embedding": "lle",
+}
+
+
+def normalize_projection_method(name: str) -> str:
+    key = str(name).strip().lower().replace(" ", "-")
+    if key not in _PROJECTION_ALIASES:
+        raise ValueError(
+            f"unknown projection {name!r}; expected one of {tuple(PROJECTION_LABELS.values())}"
+        )
+    return _PROJECTION_ALIASES[key]
+
+
+def projection_label(method: str) -> str:
+    return PROJECTION_LABELS[normalize_projection_method(method)]
+
+
+def umap_available() -> bool:
+    try:
+        import umap  # noqa: F401
+    except ImportError:
+        return False
+    return True
+
+
+def _n_neighbors(n: int, default: int = 12, *, components: int = 2) -> int:
+    n = int(n)
+    cap = max(2, n - 1)
+    floor = max(2, int(components) + 1)
+    return int(min(cap, max(floor, int(default))))
 
 
 def project_gradients(
@@ -428,21 +643,96 @@ def project_gradients(
     n_components: int = 2,
     seed: int = 0,
 ) -> np.ndarray:
-    method = str(method).lower().strip()
+    method = normalize_projection_method(method)
     x = np.ascontiguousarray(gradients, dtype=np.float32)
+    n, dim = int(x.shape[0]), int(x.shape[1])
+    if n < 3:
+        raise ValueError(f"need at least 3 points to project, got {n}")
     k = max(2, int(n_components))
-    if method == "umap":
+    k = min(k, n - 1)
+    if method == "pca":
+        from sklearn.decomposition import PCA
+
+        k = min(k, dim)
+        coords = PCA(n_components=k, random_state=int(seed)).fit_transform(x)
+    elif method == "tsne":
+        from sklearn.manifold import TSNE
+
+        perplexity = float(min(30.0, max(5.0, (n - 1) / 3.0)))
+        coords = TSNE(
+            n_components=k,
+            perplexity=perplexity,
+            init="pca",
+            learning_rate="auto",
+            random_state=int(seed),
+            max_iter=500 if n >= 2_000 else 750,
+            n_jobs=-1,
+        ).fit_transform(x)
+    elif method == "umap":
         try:
             import umap
         except ImportError as exc:
             raise ImportError("UMAP is not installed; pip install umap-learn") from exc
-        reducer = umap.UMAP(n_components=k, random_state=int(seed), metric="euclidean")
-        return np.asarray(reducer.fit_transform(x), dtype=np.float32)
-    from sklearn.decomposition import PCA
+        coords = umap.UMAP(
+            n_components=k,
+            n_neighbors=_n_neighbors(n, 15, components=k),
+            min_dist=0.1,
+            metric="euclidean",
+            random_state=int(seed),
+        ).fit_transform(x)
+    elif method == "isomap":
+        from sklearn.manifold import Isomap
 
-    k = min(k, int(x.shape[1]), int(x.shape[0]))
-    coords = PCA(n_components=k, random_state=int(seed)).fit_transform(x)
-    return np.asarray(coords, dtype=np.float32)
+        coords = Isomap(
+            n_neighbors=_n_neighbors(n, 12, components=k),
+            n_components=k,
+            eigen_solver="auto",
+            n_jobs=-1,
+        ).fit_transform(x)
+    elif method == "lle":
+        from sklearn.manifold import LocallyLinearEmbedding
+
+        coords = LocallyLinearEmbedding(
+            n_neighbors=_n_neighbors(n, 12, components=k),
+            n_components=k,
+            random_state=int(seed),
+            eigen_solver="auto",
+            n_jobs=-1,
+        ).fit_transform(x)
+    else:
+        raise ValueError(f"unknown projection {method!r}")
+    return np.ascontiguousarray(coords, dtype=np.float32)
+
+
+def _apply_coords(data: ExplorerData, coords: np.ndarray, method: str) -> None:
+    coords = np.ascontiguousarray(coords, dtype=np.float32)
+    if coords.ndim != 2 or int(coords.shape[0]) != len(data) or int(coords.shape[1]) < 2:
+        raise ValueError(f"coords must be (n, >=2), got {coords.shape}")
+    data.coord_x = coords[:, 0]
+    data.coord_y = coords[:, 1]
+    data.coord_z = coords[:, 2] if coords.shape[1] > 2 else None
+    data.method = normalize_projection_method(method)
+    data.projection_cache[data.method] = coords
+
+
+def reproject(
+    data: ExplorerData,
+    method: str,
+    *,
+    seed: int | None = None,
+    n_components: int = 2,
+) -> ExplorerData:
+    """Recompute the 2D layout. Cluster labels are unchanged."""
+    method = normalize_projection_method(method)
+    cached = data.projection_cache.get(method)
+    if cached is not None and int(np.asarray(cached).shape[0]) == len(data):
+        _apply_coords(data, cached, method)
+        return data
+    x = clustering_features(data)
+    rng_seed = int(data.cluster_seed if seed is None else seed)
+    coords = project_gradients(x, method=method, n_components=n_components, seed=rng_seed)
+    _apply_coords(data, coords, method)
+    return data
 
 
 def load_table(path: Path) -> ExplorerData:
@@ -500,11 +790,12 @@ def load_table(path: Path) -> ExplorerData:
 def load_work_dir(
     work_dir: Path,
     *,
-    max_points: int = 30_000,
+    max_points: int = DEFAULT_POOL_SIZE,
     method: str = "pca",
     seed: int = 0,
     n_components: int = 2,
     n_clusters: int | None = 4,
+    algorithm: str = "kmeans",
 ) -> ExplorerData:
     import json
 
@@ -526,6 +817,7 @@ def load_work_dir(
         y = np.asarray(saved[idx], dtype=np.int16)
     else:
         y = np.zeros(int(idx.shape[0]), dtype=np.int16)
+    method = normalize_projection_method(method)
     coords = project_gradients(x, method=method, n_components=n_components, seed=seed)
     coord_z = coords[:, 2] if coords.shape[1] > 2 else None
     grad_norm = np.linalg.norm(x, axis=1).astype(np.float32, copy=False)
@@ -561,13 +853,20 @@ def load_work_dir(
         folders=folders,
         features=x,
         cluster_seed=int(seed),
-        method=str(method),
+        method=method,
+        algorithm="kmeans",
         source=str(work_dir),
         n_source_rows=n,
         diagnostics=diagnostics,
+        projection_cache={method: np.ascontiguousarray(coords, dtype=np.float32)},
     )
     if n_clusters is not None:
-        recluster(data, int(n_clusters), seed=int(seed))
+        recluster(
+            data,
+            int(n_clusters),
+            seed=int(seed),
+            algorithm=algorithm,
+        )
     return data
 
 
@@ -593,8 +892,9 @@ def make_demo_data(
     )
 
     start = chess.Board()
-    fens = np.empty(n, dtype=object)
-    for i in range(n):
+    n_fen = min(n, 256)
+    pool: list[str] = []
+    for _ in range(n_fen):
         board = start.copy()
         ply = int(rng.randint(2, 28))
         for _ in range(ply):
@@ -602,7 +902,10 @@ def make_demo_data(
             if not moves:
                 break
             board.push(moves[int(rng.randint(0, len(moves)))])
-        fens[i] = board.fen()
+        pool.append(board.fen())
+    fens = np.empty(n, dtype=object)
+    for i in range(n):
+        fens[i] = pool[i % n_fen]
 
     return ExplorerData(
         sample_id=np.arange(n, dtype=np.int64),
@@ -617,11 +920,90 @@ def make_demo_data(
         features=np.column_stack([coord[:, 0], coord[:, 1], coord_z]).astype(np.float32, copy=False),
         cluster_seed=int(seed),
         requested_clusters=k,
-        method="demo",
+        method="pca",
+        algorithm="kmeans",
         source="demo",
         n_source_rows=n,
         diagnostics={"n_clusters": k, "sizes": np.bincount(cluster_id, minlength=k).tolist()},
+        projection_cache={
+            "pca": np.column_stack([coord[:, 0], coord[:, 1]]).astype(np.float32, copy=False)
+        },
     )
+
+
+def reload_pool(
+    data: ExplorerData,
+    n_points: int,
+    *,
+    method: str | None = None,
+    n_clusters: int | None = None,
+    algorithm: str | None = None,
+) -> ExplorerData:
+    """Rebuild the working set to ``n_points`` (reprojects and re-clusters)."""
+    method = method or data.method
+    algorithm = algorithm or data.algorithm
+    seed = int(data.cluster_seed)
+    k = int(n_clusters if n_clusters is not None else max(int(data.requested_clusters or 2), 2))
+    n_points = max(int(n_points), 2)
+    if str(data.source) == "demo":
+        new = make_demo_data(n=n_points, n_clusters=max(k, 2), seed=seed)
+        try:
+            if normalize_projection_method(method) != "pca":
+                reproject(new, method, seed=seed)
+        except ValueError:
+            pass
+        recluster(new, k, seed=seed, algorithm=algorithm)
+        return new
+    path = Path(data.source)
+    if (path / "gradients.npy").is_file():
+        return load_work_dir(
+            path,
+            max_points=n_points,
+            method=method,
+            seed=seed,
+            n_clusters=k,
+            algorithm=algorithm,
+        )
+    take = min(n_points, len(data))
+    if take >= len(data) and take <= n_points:
+        recluster(data, k, seed=seed, algorithm=algorithm)
+        return data
+    rng = np.random.RandomState(seed)
+    idx = np.sort(rng.choice(len(data), size=take, replace=False))
+
+    def _sub(arr):
+        if arr is None:
+            return None
+        return arr[idx]
+
+    new = ExplorerData(
+        sample_id=_sub(data.sample_id),
+        coord_x=_sub(data.coord_x),
+        coord_y=_sub(data.coord_y),
+        coord_z=_sub(data.coord_z),
+        cluster_id=_sub(data.cluster_id),
+        fen=_sub(data.fen),
+        eval_target=_sub(data.eval_target),
+        eval_pred=_sub(data.eval_pred),
+        grad_norm=_sub(data.grad_norm),
+        slice_id=_sub(data.slice_id),
+        local_row=_sub(data.local_row),
+        folders=list(data.folders),
+        features=_sub(data.features),
+        cluster_seed=seed,
+        requested_clusters=k,
+        method=data.method,
+        algorithm=data.algorithm,
+        source=data.source,
+        n_source_rows=data.n_source_rows,
+    )
+    new.projection_cache.clear()
+    try:
+        reproject(new, method, seed=seed)
+    except ValueError:
+        pass
+    recluster(new, k, seed=seed, algorithm=algorithm)
+    return new
 
 
 def default_work_dir(root: Path) -> Path | None:

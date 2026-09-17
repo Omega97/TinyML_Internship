@@ -12,6 +12,7 @@ import pytest
 from tinymlinternship.config.settings import PROCESSED_DATA_DIR, PROJECT_ROOT
 from tinymlinternship.data.board_store import BOARD_EVAL_DIR_NAME
 from tinymlinternship.nnue.cluster_explore import (
+    DEFAULT_POOL_SIZE,
     FenResolver,
     SelectionModel,
     cluster_color,
@@ -20,7 +21,10 @@ from tinymlinternship.nnue.cluster_explore import (
     load_table,
     load_work_dir,
     make_demo_data,
+    project_gradients,
     recluster,
+    reload_pool,
+    reproject,
     resolve_position,
     stm_value_from_wdl,
 )
@@ -95,6 +99,64 @@ def test_visible_mask_filters_clusters():
     assert set(np.unique(data.cluster_id[mask])).issubset({0, 2})
 
 
+def test_project_gradients_all_methods():
+    rng = np.random.RandomState(0)
+    x = rng.randn(36, 8).astype(np.float32)
+    pca = project_gradients(x, method="pca", seed=0)
+    assert pca.shape == (36, 2)
+    for method in ("tsne", "isomap", "lle"):
+        coords = project_gradients(x, method=method, seed=0)
+        assert coords.shape == (36, 2), method
+        assert not np.allclose(coords, pca, atol=1e-3), method
+    try:
+        umap_coords = project_gradients(x, method="umap", seed=0)
+    except ImportError:
+        pytest.skip("umap-learn not installed")
+    assert umap_coords.shape == (36, 2)
+
+
+def test_reproject_uses_cache():
+    data = make_demo_data(n=40, n_clusters=3, seed=1)
+    x0 = data.coord_x.copy()
+    y0 = data.coord_y.copy()
+    reproject(data, "lle", seed=1)
+    assert data.method == "lle"
+    assert not np.allclose(data.coord_x, x0)
+    lle_x = data.coord_x.copy()
+    reproject(data, "pca", seed=1)
+    assert data.method == "pca"
+    np.testing.assert_allclose(data.coord_x, x0)
+    np.testing.assert_allclose(data.coord_y, y0)
+    reproject(data, "lle", seed=1)
+    np.testing.assert_allclose(data.coord_x, lle_x)
+
+
+def test_recluster_kmedoids_and_dbscan():
+    data = make_demo_data(n=80, n_clusters=4, seed=6)
+    recluster(data, 5, seed=6, algorithm="kmedoids")
+    assert data.algorithm == "kmedoids"
+    assert data.n_clusters == 5
+    assert int(data.cluster_id.min()) >= 0
+    recluster(data, 4, seed=6, algorithm="dbscan")
+    assert data.algorithm == "dbscan"
+    assert int(data.cluster_id.min()) >= -1
+    assert 3 <= data.n_clusters <= 6
+    bigger = make_demo_data(n=300, n_clusters=4, seed=6)
+    recluster(bigger, 4, seed=6, algorithm="dbscan")
+    assert 3 <= bigger.n_clusters <= 6
+
+
+def test_reload_pool_changes_n_not_display_only():
+    data = make_demo_data(n=300, n_clusters=3, seed=7)
+    bigger = reload_pool(data, 1000, n_clusters=3, algorithm="kmeans")
+    assert len(bigger) == 1000
+    assert bigger.algorithm == "kmeans"
+
+
+def test_default_pool_is_one_third_of_previous():
+    assert DEFAULT_POOL_SIZE == 10_000
+
+
 def test_recluster_changes_k():
     data = make_demo_data(n=80, n_clusters=4, seed=5)
     assert data.n_clusters == 4
@@ -132,6 +194,31 @@ def test_default_work_dir_finds_a_run():
     assert (found / "gradients.npy").is_file()
 
 
+def test_side_to_move_and_board_frame_colors():
+    from tinymlinternship.nnue.cluster_explorer_ui import (
+        _BOARD_COLORS_BLACK,
+        _BOARD_COLORS_WHITE,
+        _board_svg,
+        position_detail_text,
+        side_to_move_name,
+    )
+
+    white_fen = "rnbqkbnr/pppppppp/8/8/8/8/PPPPPPPP/RNBQKBNR w KQkq - 0 1"
+    black_fen = "rnbqkbnr/pppppppp/8/8/4P3/8/PPPP1PPP/RNBQKBNR b KQkq - 0 1"
+    assert side_to_move_name(white_fen) == "White"
+    assert side_to_move_name(black_fen) == "Black"
+    white_svg = _board_svg(white_fen).decode("utf-8")
+    black_svg = _board_svg(black_fen).decode("utf-8")
+    assert _BOARD_COLORS_WHITE["margin"] in white_svg
+    assert _BOARD_COLORS_WHITE["coord"] in white_svg
+    assert _BOARD_COLORS_BLACK["margin"] in black_svg
+    assert _BOARD_COLORS_BLACK["coord"] in black_svg
+    data = make_demo_data(n=8, n_clusters=3, seed=0)
+    text = position_detail_text(data.row(0))
+    assert text.startswith("to play  ")
+    assert "FEN  " in text
+
+
 def test_offscreen_window_pins_cards():
     os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
     from PyQt6.QtWidgets import QApplication
@@ -149,6 +236,10 @@ def test_offscreen_window_pins_cards():
     win._toggle(2)
     app.processEvents()
     assert len(win.cards) == 3
+    meta0 = win.cards[0].detail_text
+    assert meta0.startswith("to play  ")
+    assert "White" in meta0 or "Black" in meta0
+    assert not win.cards[0].hover_info.isVisible()
     assert len(win.selection) == 3
     links = list(win.iter_link_geometry())
     assert len(links) == 3
@@ -167,4 +258,16 @@ def test_offscreen_window_pins_cards():
     assert len(win.cluster_boxes) == 6
     assert 0 in win.cards
     assert "Cluster " in win.cards[0].header_label.text()
+    win.proj_buttons["isomap"].click()
+    app.processEvents()
+    assert win.data.method == "isomap"
+    labels_before = win.data.cluster_id.copy()
+    n_before = len(win._shown)
+    win.display_slider.setValue(30)
+    app.processEvents()
+    assert np.array_equal(win.data.cluster_id, labels_before)
+    assert len(win._shown) <= n_before
+    win.algo_buttons["kmedoids"].click()
+    app.processEvents()
+    assert win.data.algorithm == "kmedoids"
     win.close()

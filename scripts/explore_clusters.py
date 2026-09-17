@@ -21,6 +21,7 @@ sys.path.insert(0, str(Path(__file__).parent.parent / "src"))
 
 from tinymlinternship.config.settings import NNUE_CHECKPOINTS_DIR, PROJECT_ROOT
 from tinymlinternship.nnue.cluster_explore import (
+    DEFAULT_POOL_SIZE,
     default_work_dir,
     load_table,
     load_work_dir,
@@ -54,8 +55,18 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     )
     parser.add_argument("--table", type=Path, default=None, help="CSV/parquet with coord_x/coord_y/cluster_id/fen")
     parser.add_argument("--demo", action="store_true", help="Ignore on-disk data and open synthetic clusters")
-    parser.add_argument("--max-points", type=int, default=30_000, help="Subsample size (0 = all rows)")
-    parser.add_argument("--method", choices=("pca", "umap"), default="pca")
+    parser.add_argument(
+        "--max-points",
+        type=int,
+        default=DEFAULT_POOL_SIZE,
+        help="Working-set size for projection/clustering (default 10000; 0 = all rows)",
+    )
+    parser.add_argument(
+        "--method",
+        choices=("pca", "tsne", "umap", "isomap", "lle"),
+        default="pca",
+        help="Initial 2D projection (changeable in the window)",
+    )
     parser.add_argument("--seed", type=int, default=0)
     parser.add_argument("--max-select", type=int, default=5, help="FIFO pin budget (N)")
     parser.add_argument(
@@ -78,7 +89,8 @@ def load_data(args: argparse.Namespace):
     k = int(args.n_clusters)
     if args.demo:
         print(f"loading synthetic demo clusters  B={k}")
-        return make_demo_data(n=800, n_clusters=k, seed=int(args.seed))
+        n_demo = 300 if int(args.max_points) in (0, DEFAULT_POOL_SIZE) else int(args.max_points)
+        return make_demo_data(n=max(n_demo, k), n_clusters=k, seed=int(args.seed))
     if args.table is not None:
         path = _resolve(args.table)
         print(f"loading table {path}")
@@ -88,7 +100,7 @@ def load_data(args: argparse.Namespace):
     work_dir = _resolve(args.work_dir) if args.work_dir is not None else default_work_dir(PROJECT_ROOT)
     if work_dir is None:
         print("no MoE work-dir found; falling back to --demo")
-        return make_demo_data(n=800, n_clusters=k, seed=int(args.seed))
+        return make_demo_data(n=300, n_clusters=k, seed=int(args.seed))
     print(f"loading {work_dir}  method={args.method}  max_points={args.max_points}  B={k}")
     return load_work_dir(
         work_dir,
@@ -102,6 +114,7 @@ def load_data(args: argparse.Namespace):
 
 def run_self_test(data, max_select: int) -> int:
     os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
+    import numpy as np
     from PyQt6.QtWidgets import QApplication
 
     from tinymlinternship.nnue.cluster_explorer_ui import ClusterExplorerWindow
@@ -124,7 +137,15 @@ def run_self_test(data, max_select: int) -> int:
     app.processEvents()
     assert win.data.n_clusters == 6, f"expected B=6, got {win.data.n_clusters}"
     assert len(win.cluster_boxes) == 6
-    print("self-test ok: window opened, pin/unpin and recluster work")
+    win.proj_buttons["lle"].click()
+    app.processEvents()
+    assert win.data.method == "lle", f"expected lle, got {win.data.method}"
+    labels_before = win.data.cluster_id.copy()
+    win.display_slider.setValue(40)
+    app.processEvents()
+    assert np.array_equal(win.data.cluster_id, labels_before), "display % must not recluster"
+    assert len(win._shown) <= len(win.data)
+    print("self-test ok: window opened, pin/unpin, recluster, projection, display %")
     return 0
 
 
