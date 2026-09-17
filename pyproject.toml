@@ -35,6 +35,15 @@ train = [
     "tqdm",
     "scikit-learn",
 ]
+explore = [
+    "PyQt6",
+    "pyqtgraph",
+    "scikit-learn",
+    "python-chess>=1.0.0",
+    "pandas",
+    "numpy",
+    "pyarrow",
+]
 
 [tool.setuptools.packages.find]
 where = ["src"]

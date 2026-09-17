@@ -1,0 +1,186 @@
+
+## 1. Introduzione e Obiettivi
+
+Il presente documento definisce le specifiche funzionali e architetturali per uno strumento Python per la visualizzazione interattiva dei cluster di gradienti per campione (*per-sample gradients*). 
+
+L'obiettivo principale dell'applicazione è consentire la **diagnostica visiva e l'interpretabilità dei cluster**: l'utente deve poter esplorare lo spazio ridotto dei gradienti (es. tramite PCA o UMAP) e correlare direttamente la posizione geometrica di un punto nello spazio delle rappresentazioni con la corrispondente configurazione della scacchiera (stringa FEN e valutazione).
+
+---
+
+## 2. Requisiti di Layout e Interfaccia Utente (UI)
+
+L'interfaccia si suddivide verticalmente/orizzontalmente in **tre macro-componenti visivi principali**:
+
+
+```
+
++----------------------------------------------------+-----------------------+
+|  CANVAS DI PROIEZIONE (Scatter Plot 2D/3D)         |  PANNELLO LATERALE    |
+|                                                    |  (Side Inspector)     |
+|   [Cluster 0: Red]   [Cluster 1: Goldenrod]        |                       |
+|                                                    |  +-----------------+  |
+|         o            o                             |  | Scacchiera A    |  |
+|      o    O----------------------------------------+->| (FEN / Eval)    |  |
+|         o   (Segmento di collegamento)             |  +-----------------+  |
+|                                                    |                       |
+|   o                                                |  +-----------------+  |
+|        o                                           |  | Scacchiera B    |  |
+|                                                    |  +-----------------+  |
++----------------------------------------------------+-----------------------+
+|  BARRA DI CONTROLLO E STATO (Filtri, Cluster, Slices, Info)               |
++----------------------------------------------------------------------------+
+
+```
+
+### 2.1 Area Principale (Scatter Plot)
+* **Grafico a Dispersione (2D/3D)**: Visualizza ciascun campione di gradiente come un punto nello spazio ridotto.
+* **Codifica Cromatica**: Ogni cluster è identificato da un colore distinto a contrasto elevato (es. Rosso, Goldenrod, Verde, Blu).
+* **Gestione della Trasparenza**: I punti non selezionati hanno un'opacità parziale (es. `alpha = 0.6` o `0.7`) per ridurre il fenomeno dell'overplotting.
+
+### 2.2 Pannello Laterale (Side Inspector)
+* Posizionato sul margine destro (o sinistro) dello schermo.
+* Contiene le **schede delle posizioni selezionate** organizzate verticalmente.
+* Per ogni punto attivo, mostra:
+  * Render grafico della scacchiera (vista 2D standard con pezzi).
+  * Informazioni testuali: FEN, valutazione del modello ($y$ vs $\hat{y}$), ID del cluster, indice del campione e magnitudo del gradiente.
+
+### 2.3 Layer di Collegamento in Background
+* Un **layer grafico trasparente** interposto tra il plot e l'interfaccia utente per il tracciamento dei segmenti di linea che connettono i punti selezionati alle relative schede nel pannello laterale.
+
+---
+
+## 3. Specifiche di Interattività e UX
+
+### 3.1 Selezione del Punto (Click Event)
+1. **Primo Click su un Punto**:
+   * Il punto cambia stato da `Unselected` a `Selected`.
+   * **Ingrandimento**: Il raggio/dimensione del marker aumenta di un fattore $1.8 \times - 2.0 \times$.
+   * **In Primopiano (Z-Order)**: Il punto viene spostato in cima allo stack di rendering (`z-index` massimo) per non essere sovrapposto da altri punti adiacenti.
+   * **Evidenziazione Visiva**: Viene applicato un bordo d'evidenziazione (es. contorno bianco o nero di spessore maggiorato) oppure un effetto alone (*glow*).
+   * **Apertura Scheda**: Nel pannello laterale viene generata ed effettuata la transizione d'ingresso della scheda contenente la scacchiera corrispondente.
+   * **Generazione Segmento**: Viene tracciata una linea/segmento di collegamento semi-trasparente dal centro del punto fino all'intestazione della scheda nel pannello laterale.
+
+2. **Secondo Click sul Punto Selezionato (Toggle Off)**:
+   * Il punto ritorna allo stato `Unselected`.
+   * La dimensione, lo z-order e l'opacità del marker vengono ripristinati ai valori originali.
+   * La scheda corrispondente nel pannello laterale viene rimossa.
+   * Il segmento di collegamento viene cancellato.
+
+### 3.2 Gestione Multiselezione
+* L'applicazione deve supportare la selezione simultanea di un numero configurabile di punti (es. fino a $N = 5$ posizioni affiancate) per permettere la comparazione visiva diretta tra posizioni appartenenti allo stesso cluster o a cluster differenti.
+* Se si seleziona un nuovo punto oltre il limite massimo $N$, la selezione più vecchia viene deselezionata automaticamente (*FIFO*) oppure viene mostrato un avviso.
+
+### 3.3 Dynamic Line Tracking (Ricalcolo dei Segmenti)
+* Quando l'utente effettua **Zoom** o **Pan** (traslazione) sul canvas dello scatter plot:
+  * Le coordinate dello schermo dei punti selezionati cambiano.
+  * I segmenti di collegamento in background devono **ricalcolarsi in tempo reale** per mantenere il vincolo geometrico tra il punto spostato sul plot e la posizione fissa della scheda nel pannello laterale.
+
+---
+
+## 4. Specifiche sui Dati di Input e Modello Informativo
+
+Lo script deve caricare una struttura dati contenente le seguenti informazioni per ciascun campione:
+
+| Campo | Tipo Dati | Descrizione |
+| :--- | :--- | :--- |
+| `sample_id` | `uint64` / `int` | Identificativo univoco del campione nello slice/dataset. |
+| `coord_x` | `float32` | Prima coordinata proiettata (es. PCA-1 o UMAP-1). |
+| `coord_y` | `float32` | Seconda coordinata proiettata (es. PCA-2 o UMAP-2). |
+| `cluster_id` | `int16` | ID del cluster assegnato (es. da k-means). |
+| `fen` | `string` | Stringa FEN (*Forsyth-Edwards Notation*) della posizione sulla scacchiera. |
+| `eval_target` | `float32` | Valore target (es. esito partita o WDL / visits). |
+| `grad_norm` | `float32` | (Opzionale) Norma $L_2$ del gradiente prima della proiezione. |
+
+---
+
+## 5. Dettagli Implementativi e Requisiti Tecnologici
+
+### 5.1 Stack Tecnologico Raccomandato
+Per soddisfare i requisiti di **segmenti dinamici tra plot e UI** e **z-order istantaneo**, si raccomandano due approcci architetturali:
+
+#### Opzione A: Applicazione Desktop Nativa (**PyQt6 / PySide6 + PyQtGraph / Matplotlib**)
+* **Vantaggi**: Prestazioni elevate su centinaia di migliaia di punti, gestione nativa del layer di disegno overlay via `QPainter` per i segmenti di collegamento, supporto completo per eventi mouse e rendering SVG immediato di `python-chess`.
+* **Visualizzazione Scacchiera**: Utilizzo della libreria `chess.svg` convertita in `QPixmap` o `QSvgWidget`.
+
+#### Opzione B: Web Application (**Dash / Plotly + Custom JavaScript/CSS** oppure **Streamlit + HTML5 Canvas**)
+* **Vantaggi**: Nessuna installazione nativa richiesta, accessibile da browser.
+* **Segmenti di Collegamento**: Realizzati tramite un overlay `<canvas>` HTML5 posizionato sopra il div di Plotly, agganciato agli eventi `plotly_relayout` e `plotly_click`.
+
+---
+
+## 6. Algoritmo di Rendering e Ciclo degli Eventi (Event Loop)
+
+
+```
+
+[Inizio / Caricamento Dati]
+│
+▼
+[Render Iniziale Scatter Plot] ──► Imposta Marker Normali, Alpha = 0.7
+│
+▼
+┌────────────────────────────────────────────────────────┐
+│ Loop Principale Gestione Eventi (Event Listener)       │
+└────────────────────────────────────────────────────────┘
+│
+├─► Evento: ON_CLICK(point)
+│      ├── IF point IN SelectedPoints:
+│      │     ├── Rimuovi point da SelectedPoints
+│      │     ├── Ripristina Marker (Dimensione, Alpha, Z-Index)
+│      │     ├── Distruggi Widget Scacchiera in Side Panel
+│      │     └── Rimuovi Linea di Collegamento
+│      │
+│      └── ELSE:
+│            ├── Aggiungi point a SelectedPoints
+│            ├── Evidenzia Marker (Dimensione x 2, Border, Z-Index MAX)
+│            ├── Genera Widget Scacchiera in Side Panel (chess.svg)
+│            └── Traccia Linea dal Punto alla Scheda UI
+│
+├─► Evento: ON_PAN_ZOOM(canvas)
+│      └── Per ogni p in SelectedPoints:
+│            └── Aggiorna coordinate linea: (ScreenX(p), ScreenY(p)) -> (CardUI_X, CardUI_Y)
+│
+└─► Evento: ON_HOVER(point) [Opzionale]
+└── Mostra tooltip rapido (FEN breve, Cluster ID, Coord)
+
+```
+
+---
+
+## 7. Requisiti Non Funzionali e Prestazioni
+
+1. **Reattività (Frame Rate)**: La risposta al click e il ricalcolo delle linee durante il pan/zoom devono avvenire entro **30 ms** per garantire fluidità.
+2. **Scalabilità del Canvas**: Il grafico deve essere in grado di gestire da **10.000 a 100.000 punti** senza degradare le prestazioni di interazione (usando tecniche di *downsampling*, *decimation* visiva o rendering GPU via OpenGL/WebGL).
+3. **Qualità Visiva della Scacchiera**: Rendering chiaro vettoriale o ad alta risoluzione con evidenziazione dell'ultimo tratto/mossa se presente nei dati.
+
+
+
+---
+
+## Recommended Libraries
+
+Among the libraries across both stacks, popularity varies significantly by domain width, overall ecosystem adoption, and GitHub stars.
+
+Here is how these libraries rank in relative popularity:
+
+| Tier | Library | GitHub Stars | Popularity & Adoption Context |
+| --- | --- | --- | --- |
+| **Tier 1: Global Giants** | `scikit-learn`<br>
+
+<br>`pandas` | ~67k+<br>
+
+<br>~48k+ | **Industry Standards:** Essential across all of data science, machine learning, and general Python development. |
+| **Tier 2: Very Popular** | `plotly`<br>
+
+<br>`dash` | ~19k+<br>
+
+<br>~21k+ | **Web & BI Leaders:** Ubiquitous for web-based data visualization, interactive dashboards, and business intelligence (BI) tooling. |
+| **Tier 3: Popular & Niche** | `PyQt` / `PySide`<br>
+
+<br>`python-chess` | ~4k–10k+<br>
+
+<br>~3k+ | **Domain-Specific Standard:** Qt bindings are the go-to standard for traditional desktop applications; `python-chess` is the undisputed standard specifically for chess engine/FEN parsing in Python. |
+| **Tier 4: Specialized** | `pyqtgraph` | ~4.4k | **Niche Powerhouse:** Much less known overall than Plotly/Matplotlib, but the dominant standard for high-performance, real-time desktop plotting with GPU hardware acceleration. |
+
+---
+
