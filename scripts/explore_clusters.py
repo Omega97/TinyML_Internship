@@ -1,8 +1,9 @@
 #!/usr/bin/env python3
 """Interactive explorer for per-sample gradient clusters.
 
-Opens a Qt window: 2D scatter of the reduced gradients, a side inspector with
-chess boards, and live connector lines from selected points to their cards.
+Opens a Qt window: scatter of the reduced gradients, a side inspector with
+chess boards plus that sample's NNUE gradient graph, and live connector
+lines from selected points to their cards.
 
     python3.12 scripts/explore_clusters.py
     python3.12 scripts/explore_clusters.py --demo
@@ -65,10 +66,9 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         "--method",
         choices=("pca", "tsne", "umap", "isomap", "lle"),
         default="pca",
-        help="Initial 2D projection (changeable in the window)",
+        help="Initial projection (changeable in the window; 3D is a live toggle)",
     )
     parser.add_argument("--seed", type=int, default=0)
-    parser.add_argument("--max-select", type=int, default=5, help="FIFO pin budget (N)")
     parser.add_argument(
         "--n-clusters",
         type=int,
@@ -112,7 +112,7 @@ def load_data(args: argparse.Namespace):
     )
 
 
-def run_self_test(data, max_select: int) -> int:
+def run_self_test(data) -> int:
     os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
     import numpy as np
     from PyQt6.QtWidgets import QApplication
@@ -120,7 +120,7 @@ def run_self_test(data, max_select: int) -> int:
     from tinymlinternship.nnue.cluster_explorer_ui import ClusterExplorerWindow
 
     app = QApplication.instance() or QApplication([])
-    win = ClusterExplorerWindow(data, max_select=max_select, checkpoint=None)
+    win = ClusterExplorerWindow(data, checkpoint=None)
     win.show()
     app.processEvents()
     assert win.isVisible(), "window did not become visible"
@@ -157,7 +157,7 @@ def main(argv: list[str] | None = None) -> int:
         f"source={data.source}  method={data.method}"
     )
     if args.self_test:
-        return run_self_test(data, int(args.max_select))
+        return run_self_test(data)
 
     if not os.environ.get("DISPLAY") and not os.environ.get("WAYLAND_DISPLAY"):
         print("No DISPLAY set. The Qt window cannot open on this session.", file=sys.stderr)
@@ -169,7 +169,7 @@ def main(argv: list[str] | None = None) -> int:
 
     from tinymlinternship.nnue.cluster_explorer_ui import run_explorer
 
-    return run_explorer(data, max_select=int(args.max_select), checkpoint=ckpt)
+    return run_explorer(data, checkpoint=ckpt)
 
 
 if __name__ == "__main__":

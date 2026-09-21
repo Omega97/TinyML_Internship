@@ -20,12 +20,17 @@ In the window:
   * top bar: clustering algorithm, working-set size (300…30k), display %
     (the slider only hides points; it does not re-cluster)
   * **Projection** toggles PCA / t-SNE / UMAP / Isomap / LLE and recomputes
-    the 2D layout (cluster colors stay; t-SNE/UMAP/Isomap/LLE can take a bit)
+    the layout (cluster colors stay; t-SNE/UMAP/Isomap/LLE can take a bit)
   * the **Clusters** spin box is B for k-Means / k-Medoids (default 4)
-  * left-click a point to pin its chess board (up to 5; oldest drops off)
+  * left-click a point to pin its chess board (no pin cap) plus the
+    sample's NNUE gradient graph (blue +, red −, fade near 0)
   * click the same point again, or the card ×, to unpin
-  * drag to pan, scroll to zoom — the connector lines follow
-  * cluster checkboxes and the slice box filter the scatter
+  * drag to pan (2D) or orbit around the origin (3D); scroll to zoom
+  * cluster checkboxes filter the scatter
+  * **Light mode** (off by default): pure white plot, black text, light-gray
+    grid — cluster colors and chess pieces stay the same
+  * **3D view** (off by default): recomputes the embedding in 3D; drag orbits
+    the camera around the origin, scroll still zooms
   * Esc clears the pins
 """
 

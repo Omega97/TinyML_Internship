@@ -1,4 +1,4 @@
-"""Cluster explorer data model, FIFO selection, and offscreen window."""
+"""Cluster explorer data model, selection, and offscreen window."""
 
 from __future__ import annotations
 
@@ -21,6 +21,7 @@ from tinymlinternship.nnue.cluster_explore import (
     load_table,
     load_work_dir,
     make_demo_data,
+    orbit_project,
     project_gradients,
     recluster,
     reload_pool,
@@ -32,20 +33,19 @@ from tinymlinternship.nnue.cluster_explore import (
 SMOKE2 = PROCESSED_DATA_DIR / BOARD_EVAL_DIR_NAME / "moe" / "moe_smoke2"
 
 
-def test_selection_fifo_toggle():
-    sel = SelectionModel(max_n=3)
+def test_selection_toggle_is_unbounded():
+    sel = SelectionModel()
     sel.toggle(10)
     sel.toggle(20)
     sel.toggle(30)
     assert sel.order == [10, 20, 30]
-    selected, dropped = sel.toggle(40)
-    assert dropped == 10
-    assert selected == [20, 30, 40]
-    selected, dropped = sel.toggle(30)
-    assert dropped is None
-    assert selected == [20, 40]
-    sel.max_n = 1
-    assert sel.order == [40]
+    selected = sel.toggle(40)
+    assert selected == [10, 20, 30, 40]
+    selected = sel.toggle(30)
+    assert selected == [10, 20, 40]
+    for i in range(8):
+        sel.toggle(100 + i)
+    assert len(sel.order) == 11
 
 
 def test_demo_data_has_legal_fens():
@@ -66,6 +66,17 @@ def test_cluster_palette_matches_plan():
     assert colors[0].lower() == "#e74c3c"
     assert colors[1].lower() == "#daa520"
     assert cluster_color(0) == colors[0]
+
+
+def test_light_theme_is_white_and_does_not_swap_data_colors():
+    from tinymlinternship.nnue.cluster_explorer_ui import LIGHT_THEME
+
+    assert LIGHT_THEME.window_bg.lower() == "#ffffff"
+    assert LIGHT_THEME.text.lower() == "#111111"
+    assert LIGHT_THEME.selected_pen.lower() == "#111111"
+    assert LIGHT_THEME.grid_alpha > 0
+    assert cluster_color(0).lower() == "#e74c3c"
+    assert cluster_color(1).lower() == "#daa520"
 
 
 def test_stm_value_from_wdl():
@@ -113,6 +124,49 @@ def test_project_gradients_all_methods():
     except ImportError:
         pytest.skip("umap-learn not installed")
     assert umap_coords.shape == (36, 2)
+
+
+def test_project_gradients_three_components():
+    rng = np.random.RandomState(0)
+    x = rng.randn(40, 8).astype(np.float32)
+    pca3 = project_gradients(x, method="pca", n_components=3, seed=0)
+    assert pca3.shape == (40, 3)
+    pca2 = project_gradients(x, method="pca", n_components=2, seed=0)
+    np.testing.assert_allclose(pca3[:, :2], pca2, atol=1e-4)
+    lle3 = project_gradients(x, method="lle", n_components=3, seed=0)
+    assert lle3.shape == (40, 3)
+
+
+def test_reproject_2d_and_3d_caches_are_independent():
+    data = make_demo_data(n=40, n_clusters=3, seed=1)
+    x2 = data.coord_x.copy()
+    reproject(data, "pca", seed=1, n_components=3)
+    assert data.coord_z is not None
+    assert data.coord_z.shape == (40,)
+    assert not np.allclose(data.coord_x, x2)
+    x3 = data.coord_x.copy()
+    z3 = data.coord_z.copy()
+    reproject(data, "pca", seed=1, n_components=2)
+    np.testing.assert_allclose(data.coord_x, x2)
+    assert data.coord_z is None
+    reproject(data, "pca", seed=1, n_components=3)
+    np.testing.assert_allclose(data.coord_x, x3)
+    np.testing.assert_allclose(data.coord_z, z3)
+
+
+def test_orbit_project_keeps_origin_and_rotates():
+    x = np.array([0.0, 1.0, 0.0], dtype=np.float32)
+    y = np.array([0.0, 0.0, 1.0], dtype=np.float32)
+    z = np.array([0.0, 0.0, 0.0], dtype=np.float32)
+    sx, sy = orbit_project(x, y, z, azimuth_deg=0.0, elevation_deg=0.0)
+    np.testing.assert_allclose(sx[0], 0.0, atol=1e-6)
+    np.testing.assert_allclose(sy[0], 0.0, atol=1e-6)
+    np.testing.assert_allclose(sx[1], 0.0, atol=1e-5)
+    np.testing.assert_allclose(sy[1], 0.0, atol=1e-5)
+    np.testing.assert_allclose(sx[2], 1.0, atol=1e-5)
+    sx90, sy90 = orbit_project(x, y, z, azimuth_deg=90.0, elevation_deg=0.0)
+    np.testing.assert_allclose(sx90[1], -1.0, atol=1e-5)
+    np.testing.assert_allclose(sy90[1], 0.0, atol=1e-5)
 
 
 def test_reproject_uses_cache():
@@ -196,6 +250,7 @@ def test_default_work_dir_finds_a_run():
 
 def test_side_to_move_and_board_frame_colors():
     from tinymlinternship.nnue.cluster_explorer_ui import (
+        LIGHT_THEME,
         _BOARD_COLORS_BLACK,
         _BOARD_COLORS_WHITE,
         _board_svg,
@@ -223,19 +278,43 @@ def test_offscreen_window_pins_cards():
     os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
     from PyQt6.QtWidgets import QApplication
 
-    from tinymlinternship.nnue.cluster_explorer_ui import ClusterExplorerWindow
+    from tinymlinternship.nnue.cluster_explorer_ui import (
+        BOARD_SVG_SIZE,
+        DARK_THEME,
+        LIGHT_THEME,
+        _BOARD_COLORS_WHITE,
+        _board_svg,
+        ClusterExplorerWindow,
+    )
 
     app = QApplication.instance() or QApplication([])
     data = make_demo_data(n=30, n_clusters=3, seed=4)
-    win = ClusterExplorerWindow(data, max_select=5, checkpoint=None)
+    win = ClusterExplorerWindow(data, checkpoint=None)
     win.show()
     app.processEvents()
     assert win.isVisible()
+    assert not hasattr(win, "max_spin")
+    assert not hasattr(win, "slice_edit")
+    assert win.light_mode.isChecked() is False
+    assert win.theme.window_bg.lower() == "#121418"
     win._toggle(0)
     win._toggle(1)
     win._toggle(2)
     app.processEvents()
     assert len(win.cards) == 3
+    assert BOARD_SVG_SIZE == 165
+    assert win.cards[0].svg.width() == BOARD_SVG_SIZE
+    assert win.cards[0].svg.height() == BOARD_SVG_SIZE
+    assert win.cards[0].grad_view.width() == BOARD_SVG_SIZE
+    assert win.cards[0].grad_view.height() == BOARD_SVG_SIZE
+    assert win.cards[0].grad_view._grads is not None
+    assert win.cards[0].grad_view._grads.sizes[0] >= 3
+    assert win.cards[0].grad_view._grads.sizes[-1] == 3
+    assert DARK_THEME.input_bg.lower() == DARK_THEME.panel_bg.lower()
+    assert LIGHT_THEME.input_bg.lower() == LIGHT_THEME.panel_bg.lower()
+    assert win.theme.input_bg.lower() == win.theme.panel_bg.lower()
+    assert "QSpinBox" in win.styleSheet()
+    assert win.theme.panel_bg.lower() in win.styleSheet().lower()
     meta0 = win.cards[0].detail_text
     assert meta0.startswith("to play  ")
     assert "White" in meta0 or "Black" in meta0
@@ -270,4 +349,39 @@ def test_offscreen_window_pins_cards():
     win.algo_buttons["kmedoids"].click()
     app.processEvents()
     assert win.data.algorithm == "kmedoids"
+    win._clear_selection()
+    app.processEvents()
+    for i in range(6):
+        win._toggle(i)
+    app.processEvents()
+    assert len(win.cards) == 6
+    assert len(win.selection) == 6
+    win.light_mode.setChecked(True)
+    app.processEvents()
+    assert win.theme is LIGHT_THEME
+    assert win.theme.window_bg.lower() == "#ffffff"
+    assert win.theme.text.lower() == "#111111"
+    assert "#ffffff" in win.styleSheet().lower()
+    assert win.plot.backgroundBrush().color().name().lower() == "#ffffff"
+    white_fen = "rnbqkbnr/pppppppp/8/8/8/8/PPPPPPPP/RNBQKBNR w KQkq - 0 1"
+    svg = _board_svg(white_fen).decode("utf-8")
+    assert _BOARD_COLORS_WHITE["margin"] in svg
+    win.light_mode.setChecked(False)
+    app.processEvents()
+    assert win.theme.window_bg.lower() == "#121418"
+    assert win.view3d.isChecked() is False
+    win.view3d.setChecked(True)
+    app.processEvents()
+    assert win._view3d is True
+    assert win.data.coord_z is not None
+    assert win.data.coord_z.shape == (len(win.data),)
+    x_before = np.asarray(win._disp_x).copy()
+    win._azimuth = (win._azimuth + 40.0) % 360.0
+    win._update_display_coords()
+    win._apply_display_coords()
+    app.processEvents()
+    assert not np.allclose(win._disp_x, x_before)
+    win.view3d.setChecked(False)
+    app.processEvents()
+    assert win._view3d is False
     win.close()
