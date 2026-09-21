@@ -594,6 +594,49 @@ def projection_label(method: str) -> str:
     return PROJECTION_LABELS[normalize_projection_method(method)]
 
 
+def projection_cache_key(method: str, n_components: int) -> str:
+    return f"{normalize_projection_method(method)}:{int(n_components)}"
+
+
+def orbit_project(
+    x: np.ndarray,
+    y: np.ndarray,
+    z: np.ndarray,
+    azimuth_deg: float = 45.0,
+    elevation_deg: float = 25.0,
+) -> tuple[np.ndarray, np.ndarray]:
+    """Orthographic view of 3D points. Camera orbits the origin; world Z is up.
+
+    ``azimuth_deg`` is the rotation around Z (0 looks along +X).
+    ``elevation_deg`` is the angle above the XY plane, clamped to (-89, 89).
+    """
+    az = np.deg2rad(float(azimuth_deg))
+    el = np.deg2rad(float(np.clip(elevation_deg, -89.0, 89.0)))
+    ca, sa = np.cos(az), np.sin(az)
+    ce, se = np.cos(el), np.sin(el)
+    eye_x = ce * ca
+    eye_y = ce * sa
+    eye_z = se
+    right_x = -eye_y
+    right_y = eye_x
+    rn = float(np.hypot(right_x, right_y))
+    if rn < 1e-12:
+        right_x, right_y = 0.0, 1.0
+        rn = 1.0
+    right_x /= rn
+    right_y /= rn
+    right_z = 0.0
+    up_x = eye_y * right_z - eye_z * right_y
+    up_y = eye_z * right_x - eye_x * right_z
+    up_z = eye_x * right_y - eye_y * right_x
+    x = np.asarray(x, dtype=np.float32)
+    y = np.asarray(y, dtype=np.float32)
+    z = np.asarray(z, dtype=np.float32)
+    sx = x * right_x + y * right_y + z * right_z
+    sy = x * up_x + y * up_y + z * up_z
+    return sx.astype(np.float32, copy=False), sy.astype(np.float32, copy=False)
+
+
 def umap_available() -> bool:
     try:
         import umap  # noqa: F401
@@ -632,7 +675,7 @@ def project_gradients(
         from sklearn.manifold import TSNE
 
         perplexity = float(min(30.0, max(5.0, (n - 1) / 3.0)))
-        coords = TSNE(
+        tsne_kw: dict[str, Any] = dict(
             n_components=k,
             perplexity=perplexity,
             init="pca",
@@ -640,7 +683,11 @@ def project_gradients(
             random_state=int(seed),
             max_iter=500 if n >= 2_000 else 750,
             n_jobs=-1,
-        ).fit_transform(x)
+        )
+        if k >= 3:
+            # Barnes-Hut is 2D-only.
+            tsne_kw["method"] = "exact"
+        coords = TSNE(**tsne_kw).fit_transform(x)
     elif method == "umap":
         try:
             import umap
@@ -685,7 +732,7 @@ def _apply_coords(data: ExplorerData, coords: np.ndarray, method: str) -> None:
     data.coord_y = coords[:, 1]
     data.coord_z = coords[:, 2] if coords.shape[1] > 2 else None
     data.method = normalize_projection_method(method)
-    data.projection_cache[data.method] = coords
+    data.projection_cache[projection_cache_key(data.method, int(coords.shape[1]))] = coords
 
 
 def reproject(
@@ -695,15 +742,25 @@ def reproject(
     seed: int | None = None,
     n_components: int = 2,
 ) -> ExplorerData:
-    """Recompute the 2D layout. Cluster labels are unchanged."""
+    """Recompute the 2D or 3D layout. Cluster labels are unchanged."""
     method = normalize_projection_method(method)
-    cached = data.projection_cache.get(method)
-    if cached is not None and int(np.asarray(cached).shape[0]) == len(data):
-        _apply_coords(data, cached, method)
-        return data
+    k = max(2, int(n_components))
+    key = projection_cache_key(method, k)
+    cached = data.projection_cache.get(key)
+    if cached is None and k == 2:
+        legacy = data.projection_cache.get(method)
+        if legacy is not None:
+            arr = np.asarray(legacy)
+            if arr.ndim == 2 and int(arr.shape[1]) == 2:
+                cached = legacy
+    if cached is not None:
+        arr = np.asarray(cached)
+        if int(arr.shape[0]) == len(data) and int(arr.shape[1]) == k:
+            _apply_coords(data, arr, method)
+            return data
     x = clustering_features(data)
     rng_seed = int(data.cluster_seed if seed is None else seed)
-    coords = project_gradients(x, method=method, n_components=n_components, seed=rng_seed)
+    coords = project_gradients(x, method=method, n_components=k, seed=rng_seed)
     _apply_coords(data, coords, method)
     return data
 
@@ -831,7 +888,11 @@ def load_work_dir(
         source=str(work_dir),
         n_source_rows=n,
         diagnostics=diagnostics,
-        projection_cache={method: np.ascontiguousarray(coords, dtype=np.float32)},
+        projection_cache={
+            projection_cache_key(method, int(coords.shape[1])): np.ascontiguousarray(
+                coords, dtype=np.float32
+            )
+        },
     )
     if n_clusters is not None:
         recluster(
@@ -899,7 +960,7 @@ def make_demo_data(
         n_source_rows=n,
         diagnostics={"n_clusters": k, "sizes": np.bincount(cluster_id, minlength=k).tolist()},
         projection_cache={
-            "pca": np.column_stack([coord[:, 0], coord[:, 1]]).astype(np.float32, copy=False)
+            "pca:2": np.column_stack([coord[:, 0], coord[:, 1]]).astype(np.float32, copy=False)
         },
     )
 
@@ -911,6 +972,7 @@ def reload_pool(
     method: str | None = None,
     n_clusters: int | None = None,
     algorithm: str | None = None,
+    n_components: int = 2,
 ) -> ExplorerData:
     """Rebuild the working set to ``n_points`` (reprojects and re-clusters)."""
     method = method or data.method
@@ -918,11 +980,13 @@ def reload_pool(
     seed = int(data.cluster_seed)
     k = int(n_clusters if n_clusters is not None else max(int(data.requested_clusters or 2), 2))
     n_points = max(int(n_points), 2)
+    n_comp = max(2, int(n_components))
     if str(data.source) == "demo":
         new = make_demo_data(n=n_points, n_clusters=max(k, 2), seed=seed)
         try:
-            if normalize_projection_method(method) != "pca":
-                reproject(new, method, seed=seed)
+            need_proj = normalize_projection_method(method) != "pca" or n_comp != 2
+            if need_proj:
+                reproject(new, method, seed=seed, n_components=n_comp)
         except ValueError:
             pass
         recluster(new, k, seed=seed, algorithm=algorithm)
@@ -936,9 +1000,14 @@ def reload_pool(
             seed=seed,
             n_clusters=k,
             algorithm=algorithm,
+            n_components=n_comp,
         )
     take = min(n_points, len(data))
     if take >= len(data) and take <= n_points:
+        try:
+            reproject(data, method, seed=seed, n_components=n_comp)
+        except ValueError:
+            pass
         recluster(data, k, seed=seed, algorithm=algorithm)
         return data
     rng = np.random.RandomState(seed)
@@ -972,7 +1041,7 @@ def reload_pool(
     )
     new.projection_cache.clear()
     try:
-        reproject(new, method, seed=seed)
+        reproject(new, method, seed=seed, n_components=n_comp)
     except ValueError:
         pass
     recluster(new, k, seed=seed, algorithm=algorithm)

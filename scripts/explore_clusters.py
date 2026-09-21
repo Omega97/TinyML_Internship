@@ -65,7 +65,7 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         "--method",
         choices=("pca", "tsne", "umap", "isomap", "lle"),
         default="pca",
-        help="Initial 2D projection (changeable in the window)",
+        help="Initial projection (changeable in the window; 3D is a live toggle)",
     )
     parser.add_argument("--seed", type=int, default=0)
     parser.add_argument(

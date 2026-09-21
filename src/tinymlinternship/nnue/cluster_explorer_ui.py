@@ -3,12 +3,13 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+from math import hypot
 from pathlib import Path
 
 import numpy as np
 import pyqtgraph as pg
 from PyQt6.QtCore import QByteArray, QEvent, QPointF, QRect, QSize, Qt, QTimer, pyqtSignal
-from PyQt6.QtGui import QColor, QFont, QPainter, QPen
+from PyQt6.QtGui import QColor, QFont, QPainter, QPalette, QPen
 from PyQt6.QtSvgWidgets import QSvgWidget
 from PyQt6.QtWidgets import (
     QApplication,
@@ -45,6 +46,7 @@ from tinymlinternship.nnue.cluster_explore import (
     projection_label,
     recluster,
     reload_pool,
+    orbit_project,
     reproject,
     resolve_position,
     umap_available,
@@ -55,7 +57,10 @@ UNSELECTED_SIZE = 8.0
 SELECTED_SIZE_SCALE = 2.0
 CLICK_RADIUS_PX = 12.0
 INSPECTOR_WIDTH = 340
-BOARD_SVG_SIZE = 220
+BOARD_SVG_SIZE = 165
+ORBIT_DRAG_PX = 5.0
+ORBIT_DEG_PER_PX = 0.4
+ORBIT_ELEV_MAX = 85.0
 
 
 @dataclass(frozen=True)
@@ -95,7 +100,7 @@ DARK_THEME = ExplorerTheme(
     muted="#9aa6b8",
     border="#3a4454",
     bar_edge="#2e3644",
-    input_bg="#2a3140",
+    input_bg="#1b1f27",
     button_bg="#2f3948",
     button_hover="#3d4a5c",
     button_checked_bg="#3d5a80",
@@ -121,7 +126,7 @@ LIGHT_THEME = ExplorerTheme(
     muted="#5c6570",
     border="#c5ccd6",
     bar_edge="#e2e6eb",
-    input_bg="#ffffff",
+    input_bg="#f4f6f8",
     button_bg="#eef1f4",
     button_hover="#e2e7ee",
     button_checked_bg="#d6e4f5",
@@ -151,9 +156,17 @@ def _window_stylesheet(theme: ExplorerTheme) -> str:
     return f"""
         QMainWindow, QWidget {{ background: {t.window_bg}; color: {t.text}; }}
         QScrollArea {{ border: none; background: {t.panel_bg}; }}
-        QLineEdit, QSpinBox, QComboBox {{
-            background: {t.input_bg}; color: {t.text}; border: 1px solid {t.border};
+        QLabel, QCheckBox {{ background: transparent; color: {t.text}; }}
+        QWidget#chromeHost {{ background: transparent; }}
+        QLineEdit, QSpinBox, QComboBox, QAbstractSpinBox {{
+            background: {t.panel_bg}; color: {t.text}; border: 1px solid {t.border};
             border-radius: 4px; padding: 3px 6px;
+        }}
+        QAbstractSpinBox QLineEdit {{
+            background: {t.panel_bg}; color: {t.text}; border: none;
+        }}
+        QSpinBox::up-button, QSpinBox::down-button {{
+            background: {t.panel_bg}; border: none;
         }}
         QPushButton {{
             background: {t.button_bg}; color: {t.text}; border: 1px solid {t.border};
@@ -174,7 +187,6 @@ def _window_stylesheet(theme: ExplorerTheme) -> str:
             background: {t.slider_handle}; border-radius: 7px;
         }}
         QSlider::sub-page:horizontal {{ background: {t.slider_fill}; border-radius: 3px; }}
-        QLabel, QCheckBox {{ color: {t.text}; }}
         QLabel#mutedHint, QLabel#emptyLabel, QLabel#statusLabel {{
             color: {t.muted};
         }}
@@ -244,7 +256,11 @@ def position_detail_text(info: PositionInfo) -> str:
             f"FEN  {info.fen or '—'}",
             f"y (teacher)  {_fmt_eval(info.eval_target)}    ŷ (model)  {_fmt_eval(info.eval_pred)}",
             f"cluster  {info.cluster_id}    sample  {info.sample_id}    ||Δ||  {_fmt_eval(info.grad_norm).lstrip('+')}",
-            f"proj  ({info.coord_x:+.3f}, {info.coord_y:+.3f})",
+            (
+                f"proj  ({info.coord_x:+.3f}, {info.coord_y:+.3f}, {info.coord_z:+.3f})"
+                if info.coord_z is not None
+                else f"proj  ({info.coord_x:+.3f}, {info.coord_y:+.3f})"
+            ),
         ]
     )
     if info.slice_name:
@@ -464,6 +480,16 @@ class ClusterExplorerWindow(QMainWindow):
         self.cards: dict[int, BoardCard] = {}
         self._hover_idx: int | None = None
         self._pool_n = min(POOL_SIZES, key=lambda size: abs(size - len(data)))
+        self._view3d = False
+        self._azimuth = 45.0
+        self._elevation = 25.0
+        self._orbit_dragging = False
+        self._orbit_moved = False
+        self._orbit_last: QPointF | None = None
+        self._orbit_press: QPointF | None = None
+        self._scatter_brushes: list[QColor] = []
+        self._disp_x = data.coord_x
+        self._disp_y = data.coord_y
         self._shuffle_display_perm()
 
         self._set_title()
@@ -548,6 +574,7 @@ class ClusterExplorerWindow(QMainWindow):
         self.overlay.raise_()
 
         self.body.installEventFilter(self)
+        self.plot.viewport().installEventFilter(self)
         self.plot.scene().sigMouseClicked.connect(self._on_click)
         self.plot.scene().sigMouseMoved.connect(self._on_move)
         vb = self.plot.getViewBox()
@@ -639,6 +666,15 @@ class ClusterExplorerWindow(QMainWindow):
         )
         self.light_mode.toggled.connect(self._on_light_mode)
         layout.addWidget(self.light_mode)
+        self.view3d = QCheckBox("3D view")
+        self.view3d.setChecked(False)
+        self.view3d.setCursor(Qt.CursorShape.PointingHandCursor)
+        self.view3d.setToolTip(
+            "Recompute the embedding in 3D. Drag to orbit around the origin; "
+            "scroll still zooms. Cluster labels stay."
+        )
+        self.view3d.toggled.connect(self._on_view3d)
+        layout.addWidget(self.view3d)
         return bar
 
     def _build_controls(self) -> QWidget:
@@ -669,7 +705,7 @@ class ClusterExplorerWindow(QMainWindow):
                 btn.setEnabled(False)
                 btn.setToolTip("pip install umap-learn")
             else:
-                btn.setToolTip(f"Recompute the 2D layout with {PROJECTION_LABELS[key]}")
+                btn.setToolTip(f"Recompute the layout with {PROJECTION_LABELS[key]}")
             self.proj_group.addButton(btn)
             self.proj_buttons[key] = btn
             layout.addWidget(btn)
@@ -684,11 +720,14 @@ class ClusterExplorerWindow(QMainWindow):
         self.k_spin = QSpinBox()
         self.k_spin.setRange(2, 32)
         self.k_spin.setValue(max(2, int(self.data.n_clusters) or 4))
+        self.k_spin.setAutoFillBackground(True)
         self.k_spin.setToolTip("Number of clusters (B). Used by k-Means and k-Medoids.")
         self.k_spin.valueChanged.connect(self._on_n_clusters_changed)
         layout.addWidget(self.k_spin)
 
         self.cluster_box_host = QWidget()
+        self.cluster_box_host.setObjectName("chromeHost")
+        self.cluster_box_host.setAttribute(Qt.WidgetAttribute.WA_StyledBackground, True)
         self.cluster_box_layout = QHBoxLayout(self.cluster_box_host)
         self.cluster_box_layout.setContentsMargins(0, 0, 0, 0)
         self.cluster_box_layout.setSpacing(6)
@@ -715,6 +754,14 @@ class ClusterExplorerWindow(QMainWindow):
     def _apply_theme(self) -> None:
         t = self.theme
         self.setStyleSheet(_window_stylesheet(t))
+        if hasattr(self, "k_spin"):
+            pal = self.k_spin.palette()
+            fill = _qcolor(t.panel_bg)
+            pal.setColor(QPalette.ColorRole.Base, fill)
+            pal.setColor(QPalette.ColorRole.Button, fill)
+            pal.setColor(QPalette.ColorRole.Window, fill)
+            pal.setColor(QPalette.ColorRole.Text, _qcolor(t.text))
+            self.k_spin.setPalette(pal)
         pg.setConfigOption("background", t.window_bg)
         pg.setConfigOption("foreground", t.text)
         self.plot.setBackground(t.window_bg)
@@ -734,9 +781,178 @@ class ClusterExplorerWindow(QMainWindow):
         if hasattr(self, "selected_scatter"):
             self._refresh_selected_markers()
 
+    def _n_components(self) -> int:
+        return 3 if self._view3d else 2
+
+    def _on_view3d(self, checked: bool) -> None:
+        want = bool(checked)
+        if want == self._view3d:
+            return
+        method = self.data.method
+        try:
+            method = normalize_projection_method(method)
+        except ValueError:
+            method = "pca"
+        label = projection_label(method)
+        dim = "3D" if want else "2D"
+        self.status.setText(f"computing {label} {dim}…")
+        QApplication.setOverrideCursor(Qt.CursorShape.WaitCursor)
+        QApplication.processEvents()
+        try:
+            reproject(
+                self.data,
+                method,
+                seed=self.data.cluster_seed,
+                n_components=3 if want else 2,
+            )
+        except Exception as exc:
+            QApplication.restoreOverrideCursor()
+            self.status.setText(f"{label} {dim} failed: {exc}")
+            self.view3d.blockSignals(True)
+            self.view3d.setChecked(self._view3d)
+            self.view3d.blockSignals(False)
+            return
+        QApplication.restoreOverrideCursor()
+        self._view3d = want
+        if want:
+            self._azimuth = 45.0
+            self._elevation = 25.0
+        self._sync_orbit_mouse()
+        self._update_display_coords()
+        self._set_axis_labels()
+        self._rebuild_scatter()
+        if want:
+            self._fit_orbit_view()
+        else:
+            vb = self.plot.getViewBox()
+            vb.setAspectLocked(False)
+            vb.autoRange()
+        self._refresh_pinned_cards()
+        self._set_title()
+        QTimer.singleShot(0, self.overlay.update)
+
+    def _sync_orbit_mouse(self) -> None:
+        if self._view3d:
+            self.plot.setCursor(Qt.CursorShape.OpenHandCursor)
+        else:
+            self.plot.unsetCursor()
+            self._orbit_dragging = False
+            self._orbit_moved = False
+            self._orbit_last = None
+            self._orbit_press = None
+
+    def _update_display_coords(self) -> None:
+        if self._view3d:
+            z = self.data.coord_z
+            if z is None:
+                z = np.zeros_like(self.data.coord_x)
+            self._disp_x, self._disp_y = orbit_project(
+                self.data.coord_x,
+                self.data.coord_y,
+                z,
+                self._azimuth,
+                self._elevation,
+            )
+        else:
+            self._disp_x = self.data.coord_x
+            self._disp_y = self.data.coord_y
+
+    def _fit_orbit_view(self) -> None:
+        x = np.asarray(self.data.coord_x, dtype=np.float64)
+        y = np.asarray(self.data.coord_y, dtype=np.float64)
+        z = (
+            np.asarray(self.data.coord_z, dtype=np.float64)
+            if self.data.coord_z is not None
+            else np.zeros_like(x)
+        )
+        r = float(np.sqrt(x * x + y * y + z * z).max()) if x.size else 1.0
+        half = max(r * 1.2, 1e-3)
+        vb = self.plot.getViewBox()
+        vb.setAspectLocked(True, ratio=1.0)
+        vb.setRange(xRange=(-half, half), yRange=(-half, half), padding=0.0)
+
+    def _handle_orbit_event(self, event) -> bool:  # noqa: ANN001
+        kind = event.type()
+        if kind == QEvent.Type.MouseButtonPress:
+            if event.button() != Qt.MouseButton.LeftButton:
+                return False
+            self._orbit_dragging = True
+            self._orbit_moved = False
+            self._orbit_last = QPointF(event.position())
+            self._orbit_press = QPointF(event.position())
+            self.plot.setCursor(Qt.CursorShape.ClosedHandCursor)
+            return True
+        if kind == QEvent.Type.MouseMove:
+            if not self._orbit_dragging or self._orbit_last is None:
+                return False
+            pos = QPointF(event.position())
+            dx = float(pos.x() - self._orbit_last.x())
+            dy = float(pos.y() - self._orbit_last.y())
+            self._orbit_last = pos
+            if self._orbit_press is not None:
+                total = hypot(
+                    float(pos.x() - self._orbit_press.x()),
+                    float(pos.y() - self._orbit_press.y()),
+                )
+                if total >= ORBIT_DRAG_PX:
+                    self._orbit_moved = True
+            if self._orbit_moved:
+                self._azimuth = (self._azimuth + dx * ORBIT_DEG_PER_PX) % 360.0
+                self._elevation = float(
+                    np.clip(
+                        self._elevation - dy * ORBIT_DEG_PER_PX,
+                        -ORBIT_ELEV_MAX,
+                        ORBIT_ELEV_MAX,
+                    )
+                )
+                self._update_display_coords()
+                self._apply_display_coords()
+                self._refresh_selected_markers()
+                if hasattr(self, "overlay"):
+                    self.overlay.update()
+            return True
+        if kind == QEvent.Type.MouseButtonRelease:
+            if event.button() != Qt.MouseButton.LeftButton or not self._orbit_dragging:
+                return False
+            moved = self._orbit_moved
+            self._orbit_dragging = False
+            self._orbit_moved = False
+            self._orbit_last = None
+            self._orbit_press = None
+            self.plot.setCursor(Qt.CursorShape.OpenHandCursor)
+            if not moved:
+                scene_pt = self.plot.mapToScene(event.position().toPoint())
+                view_pt = self.plot.getViewBox().mapSceneToView(scene_pt)
+                idx = self._nearest(view_pt.x(), view_pt.y())
+                if idx is not None:
+                    self._toggle(idx)
+            return True
+        return False
+
+    def _apply_display_coords(self) -> None:
+        if self._shown.size == 0:
+            self.scatter.setData(x=[], y=[])
+            return
+        xs = self._disp_x[self._shown]
+        ys = self._disp_y[self._shown]
+        self.scatter.setData(
+            x=xs,
+            y=ys,
+            brush=self._scatter_brushes,
+            pen=None,
+            size=UNSELECTED_SIZE,
+        )
+
     def eventFilter(self, obj, event):  # noqa: ANN001
-        if obj is self.body and event.type() == event.Type.Resize:
+        if obj is self.body and event.type() == QEvent.Type.Resize:
             self._sync_overlay()
+        elif (
+            self._view3d
+            and hasattr(self, "plot")
+            and obj is self.plot.viewport()
+            and self._handle_orbit_event(event)
+        ):
+            return True
         return super().eventFilter(obj, event)
 
     def _sync_overlay(self) -> None:
@@ -856,6 +1072,7 @@ class ClusterExplorerWindow(QMainWindow):
                 method=self.data.method,
                 n_clusters=max(2, int(self.k_spin.value()) if hasattr(self, "k_spin") else 4),
                 algorithm=self.data.algorithm,
+                n_components=self._n_components(),
             )
         except Exception as exc:
             QApplication.restoreOverrideCursor()
@@ -875,11 +1092,15 @@ class ClusterExplorerWindow(QMainWindow):
         self._pool_n = int(pool_n)
         self.resolver = FenResolver(data.folders)
         self._shuffle_display_perm()
+        self._update_display_coords()
         self._set_axis_labels()
         self._sync_k_spin()
         self._rebuild_cluster_boxes()
         self._rebuild_scatter()
-        self.plot.getViewBox().autoRange()
+        if self._view3d:
+            self._fit_orbit_view()
+        else:
+            self.plot.getViewBox().autoRange()
         self._set_title()
         QTimer.singleShot(0, self.overlay.update)
 
@@ -892,6 +1113,10 @@ class ClusterExplorerWindow(QMainWindow):
             card.set_info(info, color=color)
 
     def _set_axis_labels(self) -> None:
+        if self._view3d:
+            self.plot.setLabel("bottom", "view X")
+            self.plot.setLabel("left", "view Y")
+            return
         label = projection_label(self.data.method) if self.data.method else "proj"
         self.plot.setLabel("bottom", f"{label}-1")
         self.plot.setLabel("left", f"{label}-2")
@@ -901,9 +1126,10 @@ class ClusterExplorerWindow(QMainWindow):
             method = projection_label(self.data.method)
         except ValueError:
             method = self.data.method
+        dim = "3D" if self._view3d else "2D"
         self.setWindowTitle(
             f"SARDINE cluster explorer  ·  {len(self.data):,} pts  "
-            f"·  {self.data.n_clusters} clusters  ·  {method}"
+            f"·  {self.data.n_clusters} clusters  ·  {method} {dim}"
         )
 
     def _on_projection_toggled(self, button: QPushButton, checked: bool) -> None:
@@ -926,7 +1152,12 @@ class ClusterExplorerWindow(QMainWindow):
         QApplication.setOverrideCursor(Qt.CursorShape.WaitCursor)
         QApplication.processEvents()
         try:
-            reproject(self.data, method, seed=self.data.cluster_seed)
+            reproject(
+                self.data,
+                method,
+                seed=self.data.cluster_seed,
+                n_components=self._n_components(),
+            )
         except Exception as exc:
             QApplication.restoreOverrideCursor()
             self.status.setText(f"{label} failed: {exc}")
@@ -936,9 +1167,13 @@ class ClusterExplorerWindow(QMainWindow):
             self.proj_group.blockSignals(False)
             return
         QApplication.restoreOverrideCursor()
+        self._update_display_coords()
         self._set_axis_labels()
         self._rebuild_scatter()
-        self.plot.getViewBox().autoRange()
+        if self._view3d:
+            self._fit_orbit_view()
+        else:
+            self.plot.getViewBox().autoRange()
         self._refresh_pinned_cards()
         self._set_title()
         QTimer.singleShot(0, self.overlay.update)
@@ -988,11 +1223,12 @@ class ClusterExplorerWindow(QMainWindow):
                 drawn[np.asarray(self.selection.order, dtype=np.int64)] = True
             mask = mask & drawn
         self._shown = np.flatnonzero(mask).astype(np.int64, copy=False)
-        xs = self.data.coord_x[self._shown]
-        ys = self.data.coord_y[self._shown]
+        self._update_display_coords()
         labels = self.data.cluster_id[self._shown]
-        brushes = [_qcolor(cluster_color(int(c), self.data.n_clusters), UNSELECTED_ALPHA) for c in labels]
-        self.scatter.setData(x=xs, y=ys, brush=brushes, pen=None, size=UNSELECTED_SIZE)
+        self._scatter_brushes = [
+            _qcolor(cluster_color(int(c), self.data.n_clusters), UNSELECTED_ALPHA) for c in labels
+        ]
+        self._apply_display_coords()
         self._refresh_selected_markers()
         if hasattr(self, "status"):
             self._refresh_status()
@@ -1004,8 +1240,8 @@ class ClusterExplorerWindow(QMainWindow):
             self.selected_scatter.setData(x=[], y=[])
             return
         idx = np.asarray(self.selection.order, dtype=np.int64)
-        xs = self.data.coord_x[idx]
-        ys = self.data.coord_y[idx]
+        xs = self._disp_x[idx]
+        ys = self._disp_y[idx]
         pens = []
         brushes = []
         for i in idx:
@@ -1031,8 +1267,8 @@ class ClusterExplorerWindow(QMainWindow):
         h = max(float(vb.height()), 1.0)
         sx = (xmax - xmin) / w
         sy = (ymax - ymin) / h
-        dx = (self.data.coord_x[self._shown] - float(x)) / sx
-        dy = (self.data.coord_y[self._shown] - float(y)) / sy
+        dx = (self._disp_x[self._shown] - float(x)) / sx
+        dy = (self._disp_y[self._shown] - float(y)) / sy
         d2 = dx * dx + dy * dy
         j = int(np.argmin(d2))
         if float(d2[j]) > CLICK_RADIUS_PX * CLICK_RADIUS_PX:
@@ -1040,6 +1276,8 @@ class ClusterExplorerWindow(QMainWindow):
         return int(self._shown[j])
 
     def _on_click(self, event) -> None:  # noqa: ANN001
+        if self._view3d:
+            return
         if event.button() != Qt.MouseButton.LeftButton or event.double():
             return
         view_pt = self.plot.getViewBox().mapSceneToView(event.scenePos())
@@ -1050,6 +1288,8 @@ class ClusterExplorerWindow(QMainWindow):
         self._toggle(idx)
 
     def _on_move(self, pos) -> None:  # noqa: ANN001
+        if self._orbit_dragging:
+            return
         view_pt = self.plot.getViewBox().mapSceneToView(pos)
         idx = self._nearest(view_pt.x(), view_pt.y())
         self._hover_idx = idx
@@ -1059,9 +1299,13 @@ class ClusterExplorerWindow(QMainWindow):
             return
         info = self.data.row(idx)
         fen = _short_fen(info.fen, 36)
+        if info.coord_z is not None:
+            xyz = f"({info.coord_x:+.3f}, {info.coord_y:+.3f}, {info.coord_z:+.3f})"
+        else:
+            xyz = f"({info.coord_x:+.3f}, {info.coord_y:+.3f})"
         text = (
             f"#{info.sample_id}  cluster {info.cluster_id}\n"
-            f"({info.coord_x:+.3f}, {info.coord_y:+.3f})\n"
+            f"{xyz}\n"
             f"{fen}"
         )
         scene_pt = self.plot.getViewBox().mapViewToScene(view_pt)
@@ -1136,7 +1380,9 @@ class ClusterExplorerWindow(QMainWindow):
             f"  ·  {algo}"
             f"  ·  B={self.data.n_clusters}"
             f"  ·  {len(self.selection)} pinned"
-            f"  ·  {self.data.method}{size_txt}{noise_txt}{hover}"
+            f"  ·  {self.data.method}"
+            f"{' 3D' if self._view3d else ''}"
+            f"{size_txt}{noise_txt}{hover}"
         )
 
     def _to_overlay(self, widget: QWidget, local) -> QPointF:
@@ -1151,8 +1397,8 @@ class ClusterExplorerWindow(QMainWindow):
         return QRect(widget.mapFrom(self.body, rect.topLeft()), rect.size())
 
     def _point_in_overlay(self, index: int) -> QPointF | None:
-        x = float(self.data.coord_x[index])
-        y = float(self.data.coord_y[index])
+        x = float(self._disp_x[index])
+        y = float(self._disp_y[index])
         scene_pt = self.plot.getViewBox().mapViewToScene(pg.Point(x, y))
         plot_pt = self.plot.mapFromScene(scene_pt)
         if not self.plot.rect().contains(plot_pt):

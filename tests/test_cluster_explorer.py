@@ -1,4 +1,4 @@
-"""Cluster explorer data model, FIFO selection, and offscreen window."""
+"""Cluster explorer data model, selection, and offscreen window."""
 
 from __future__ import annotations
 
@@ -21,6 +21,7 @@ from tinymlinternship.nnue.cluster_explore import (
     load_table,
     load_work_dir,
     make_demo_data,
+    orbit_project,
     project_gradients,
     recluster,
     reload_pool,
@@ -123,6 +124,49 @@ def test_project_gradients_all_methods():
     except ImportError:
         pytest.skip("umap-learn not installed")
     assert umap_coords.shape == (36, 2)
+
+
+def test_project_gradients_three_components():
+    rng = np.random.RandomState(0)
+    x = rng.randn(40, 8).astype(np.float32)
+    pca3 = project_gradients(x, method="pca", n_components=3, seed=0)
+    assert pca3.shape == (40, 3)
+    pca2 = project_gradients(x, method="pca", n_components=2, seed=0)
+    np.testing.assert_allclose(pca3[:, :2], pca2, atol=1e-4)
+    lle3 = project_gradients(x, method="lle", n_components=3, seed=0)
+    assert lle3.shape == (40, 3)
+
+
+def test_reproject_2d_and_3d_caches_are_independent():
+    data = make_demo_data(n=40, n_clusters=3, seed=1)
+    x2 = data.coord_x.copy()
+    reproject(data, "pca", seed=1, n_components=3)
+    assert data.coord_z is not None
+    assert data.coord_z.shape == (40,)
+    assert not np.allclose(data.coord_x, x2)
+    x3 = data.coord_x.copy()
+    z3 = data.coord_z.copy()
+    reproject(data, "pca", seed=1, n_components=2)
+    np.testing.assert_allclose(data.coord_x, x2)
+    assert data.coord_z is None
+    reproject(data, "pca", seed=1, n_components=3)
+    np.testing.assert_allclose(data.coord_x, x3)
+    np.testing.assert_allclose(data.coord_z, z3)
+
+
+def test_orbit_project_keeps_origin_and_rotates():
+    x = np.array([0.0, 1.0, 0.0], dtype=np.float32)
+    y = np.array([0.0, 0.0, 1.0], dtype=np.float32)
+    z = np.array([0.0, 0.0, 0.0], dtype=np.float32)
+    sx, sy = orbit_project(x, y, z, azimuth_deg=0.0, elevation_deg=0.0)
+    np.testing.assert_allclose(sx[0], 0.0, atol=1e-6)
+    np.testing.assert_allclose(sy[0], 0.0, atol=1e-6)
+    np.testing.assert_allclose(sx[1], 0.0, atol=1e-5)
+    np.testing.assert_allclose(sy[1], 0.0, atol=1e-5)
+    np.testing.assert_allclose(sx[2], 1.0, atol=1e-5)
+    sx90, sy90 = orbit_project(x, y, z, azimuth_deg=90.0, elevation_deg=0.0)
+    np.testing.assert_allclose(sx90[1], -1.0, atol=1e-5)
+    np.testing.assert_allclose(sy90[1], 0.0, atol=1e-5)
 
 
 def test_reproject_uses_cache():
@@ -235,6 +279,8 @@ def test_offscreen_window_pins_cards():
     from PyQt6.QtWidgets import QApplication
 
     from tinymlinternship.nnue.cluster_explorer_ui import (
+        BOARD_SVG_SIZE,
+        DARK_THEME,
         LIGHT_THEME,
         _BOARD_COLORS_WHITE,
         _board_svg,
@@ -256,6 +302,14 @@ def test_offscreen_window_pins_cards():
     win._toggle(2)
     app.processEvents()
     assert len(win.cards) == 3
+    assert BOARD_SVG_SIZE == 165
+    assert win.cards[0].svg.width() == BOARD_SVG_SIZE
+    assert win.cards[0].svg.height() == BOARD_SVG_SIZE
+    assert DARK_THEME.input_bg.lower() == DARK_THEME.panel_bg.lower()
+    assert LIGHT_THEME.input_bg.lower() == LIGHT_THEME.panel_bg.lower()
+    assert win.theme.input_bg.lower() == win.theme.panel_bg.lower()
+    assert "QSpinBox" in win.styleSheet()
+    assert win.theme.panel_bg.lower() in win.styleSheet().lower()
     meta0 = win.cards[0].detail_text
     assert meta0.startswith("to play  ")
     assert "White" in meta0 or "Black" in meta0
@@ -310,4 +364,19 @@ def test_offscreen_window_pins_cards():
     win.light_mode.setChecked(False)
     app.processEvents()
     assert win.theme.window_bg.lower() == "#121418"
+    assert win.view3d.isChecked() is False
+    win.view3d.setChecked(True)
+    app.processEvents()
+    assert win._view3d is True
+    assert win.data.coord_z is not None
+    assert win.data.coord_z.shape == (len(win.data),)
+    x_before = np.asarray(win._disp_x).copy()
+    win._azimuth = (win._azimuth + 40.0) % 360.0
+    win._update_display_coords()
+    win._apply_display_coords()
+    app.processEvents()
+    assert not np.allclose(win._disp_x, x_before)
+    win.view3d.setChecked(False)
+    app.processEvents()
+    assert win._view3d is False
     win.close()
