@@ -1,8 +1,9 @@
 #!/usr/bin/env python3
 """Interactive explorer for per-sample gradient clusters.
 
-Opens a Qt window: 2D scatter of the reduced gradients, a side inspector with
-chess boards, and live connector lines from selected points to their cards.
+Opens a Qt window: scatter of the reduced gradients, a side inspector with
+chess boards plus that sample's NNUE gradient graph, and live connector
+lines from selected points to their cards.
 
     python3.12 scripts/explore_clusters.py
     python3.12 scripts/explore_clusters.py --demo

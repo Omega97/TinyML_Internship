@@ -309,6 +309,23 @@ class ModelPredictor:
             self._model = None
         return self._model
 
+    def _gather_batch(
+        self,
+        folders: Sequence[Path],
+        slice_id: int | None,
+        local_row: int | None,
+    ):
+        if slice_id is None or local_row is None:
+            return None
+        sid = int(slice_id)
+        if sid < 0 or sid >= len(folders):
+            return None
+        from tinymlinternship.nnue.dataset import FenValueVisitsDataset
+
+        if sid not in self._datasets:
+            self._datasets[sid] = FenValueVisitsDataset(Path(folders[sid]), progress=False)
+        return self._datasets[sid].gather(np.array([int(local_row)], dtype=np.int64))
+
     def predict(
         self,
         folders: Sequence[Path],
@@ -320,18 +337,12 @@ class ModelPredictor:
         model = self._load()
         if model is None:
             return None
-        sid = int(slice_id)
-        if sid < 0 or sid >= len(folders):
-            return None
         try:
             import torch
 
-            from tinymlinternship.nnue.dataset import FenValueVisitsDataset
-
-            if sid not in self._datasets:
-                self._datasets[sid] = FenValueVisitsDataset(Path(folders[sid]), progress=False)
-            ds = self._datasets[sid]
-            batch = ds.gather(np.array([int(local_row)], dtype=np.int64))
+            batch = self._gather_batch(folders, slice_id, local_row)
+            if batch is None:
+                return None
             with torch.no_grad():
                 logits = model(
                     batch["white_idx"],
@@ -342,6 +353,35 @@ class ModelPredictor:
                 )
                 probs = torch.softmax(logits.float(), dim=-1)[0]
             return float(probs[0] - probs[2])
+        except Exception:
+            return None
+
+    def weight_grads(
+        self,
+        folders: Sequence[Path],
+        slice_id: int | None,
+        local_row: int | None,
+        *,
+        fen: str | None = None,
+        eval_target: float | None = None,
+    ):
+        """Analytic 4-layer ``dL/dW`` for a pinned sample, or ``None``."""
+        model = self._load()
+        if model is None:
+            return None
+        try:
+            from tinymlinternship.nnue.grad_graph import batch_from_fen, sample_weight_grads
+
+            batch = None
+            try:
+                batch = self._gather_batch(folders, slice_id, local_row)
+            except Exception:
+                batch = None
+            if batch is None:
+                if not fen:
+                    return None
+                batch = batch_from_fen(fen, eval_target=eval_target, device=self.device)
+            return sample_weight_grads(model, batch)
         except Exception:
             return None
 

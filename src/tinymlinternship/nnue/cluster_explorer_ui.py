@@ -9,7 +9,7 @@ from pathlib import Path
 import numpy as np
 import pyqtgraph as pg
 from PyQt6.QtCore import QByteArray, QEvent, QPointF, QRect, QSize, Qt, QTimer, pyqtSignal
-from PyQt6.QtGui import QColor, QFont, QPainter, QPalette, QPen
+from PyQt6.QtGui import QColor, QFont, QImage, QPainter, QPalette, QPen, QPixmap
 from PyQt6.QtSvgWidgets import QSvgWidget
 from PyQt6.QtWidgets import (
     QApplication,
@@ -51,13 +51,22 @@ from tinymlinternship.nnue.cluster_explore import (
     resolve_position,
     umap_available,
 )
+from tinymlinternship.nnue.grad_graph import (
+    NnueWeightGrads,
+    edge_rgba,
+    layer_edges,
+    neuron_xy,
+    standardize_weight_grads,
+    toy_weight_grads,
+)
 
 UNSELECTED_ALPHA = 0.65
 UNSELECTED_SIZE = 8.0
 SELECTED_SIZE_SCALE = 2.0
 CLICK_RADIUS_PX = 12.0
-INSPECTOR_WIDTH = 340
+INSPECTOR_WIDTH = 400
 BOARD_SVG_SIZE = 165
+GRAD_GRAPH_PAD = 7
 ORBIT_DRAG_PX = 5.0
 ORBIT_DEG_PER_PX = 0.4
 ORBIT_ELEV_MAX = 85.0
@@ -313,6 +322,91 @@ class LinkOverlay(QWidget):
             painter.drawEllipse(dst, 2.6, 2.6)
 
 
+def _render_grad_pixmap(
+    grads: NnueWeightGrads,
+    size: int,
+    *,
+    rail_color: str = "#9aa6b8",
+) -> QPixmap:
+    """Paint standardized weight edges: blue +, red −, fade near 0."""
+    size = max(int(size), 32)
+    img = QImage(size, size, QImage.Format.Format_ARGB32_Premultiplied)
+    img.fill(QColor(0, 0, 0, 0))
+    painter = QPainter(img)
+    painter.setRenderHint(QPainter.RenderHint.Antialiasing, False)
+    pad = float(GRAD_GRAPH_PAD)
+    span = max(float(size) - 2.0 * pad, 1.0)
+    sizes = grads.sizes
+    rail = _qcolor(rail_color, 0.35)
+
+    def to_px(x: float, y: float) -> tuple[float, float]:
+        return pad + float(x) * span, pad + float(y) * span
+
+    for layer, n in enumerate(sizes):
+        x0, y0 = to_px(*neuron_xy(layer, 0, n))
+        x1, y1 = to_px(*neuron_xy(layer, max(n - 1, 0), n))
+        painter.setPen(QPen(rail, 1))
+        painter.drawLine(QPointF(x0, y0), QPointF(x1, y1))
+        if n <= 24:
+            painter.setPen(Qt.PenStyle.NoPen)
+            painter.setBrush(rail)
+            for i in range(n):
+                px, py = to_px(*neuron_xy(layer, i, n))
+                painter.drawEllipse(QPointF(px, py), 2.2, 2.2)
+
+    for src_layer, weight in enumerate(grads.matrices):
+        src_n = sizes[src_layer]
+        dst_n = sizes[src_layer + 1]
+        i_s, js, zs = layer_edges(weight)
+        for i, j, z in zip(i_s.tolist(), js.tolist(), zs.tolist()):
+            r, g, b, a = edge_rgba(float(z))
+            if a < 8:
+                continue
+            painter.setPen(QPen(_qcolor(f"#{r:02x}{g:02x}{b:02x}", a / 255.0), 1))
+            x0, y0 = to_px(*neuron_xy(src_layer, int(i), src_n))
+            x1, y1 = to_px(*neuron_xy(src_layer + 1, int(j), dst_n))
+            painter.drawLine(QPointF(x0, y0), QPointF(x1, y1))
+    painter.end()
+    return QPixmap.fromImage(img)
+
+
+class GradNetWidget(QWidget):
+    """Square NNUE-shaped sample-gradient graph, same size as the board."""
+
+    def __init__(self, parent: QWidget | None = None) -> None:
+        super().__init__(parent)
+        self._grads: NnueWeightGrads | None = None
+        self._pixmap: QPixmap | None = None
+        self._rail = "#9aa6b8"
+        self.setFixedSize(QSize(BOARD_SVG_SIZE, BOARD_SVG_SIZE))
+        self.setToolTip(
+            "Per-sample NNUE gradient (σ=1).\n"
+            "Blue = positive, red = negative; more transparent near 0."
+        )
+
+    def set_rail_color(self, color: str) -> None:
+        if color == self._rail:
+            return
+        self._rail = color
+        self._pixmap = None
+        self.update()
+
+    def set_grads(self, grads: NnueWeightGrads | None) -> None:
+        self._grads = grads
+        self._pixmap = None
+        self.update()
+
+    def paintEvent(self, event) -> None:  # noqa: ANN001
+        painter = QPainter(self)
+        if self._grads is None:
+            return
+        if self._pixmap is None or self._pixmap.size() != self.size():
+            self._pixmap = _render_grad_pixmap(
+                self._grads, self.width(), rail_color=self._rail
+            )
+        painter.drawPixmap(0, 0, self._pixmap)
+
+
 class BoardCard(QFrame):
     closed = pyqtSignal(int)
 
@@ -323,6 +417,7 @@ class BoardCard(QFrame):
         parent: QWidget | None = None,
         *,
         theme: ExplorerTheme = DARK_THEME,
+        grads: NnueWeightGrads | None = None,
     ) -> None:
         super().__init__(parent)
         self.index = int(info.index)
@@ -345,10 +440,19 @@ class BoardCard(QFrame):
         layout.addLayout(header)
         self.anchor = self.header_label
 
+        boards = QHBoxLayout()
+        boards.setContentsMargins(0, 0, 0, 0)
+        boards.setSpacing(8)
         self.svg = QSvgWidget()
         self.svg.setFixedSize(QSize(BOARD_SVG_SIZE, BOARD_SVG_SIZE))
         self.svg.setMouseTracking(True)
-        layout.addWidget(self.svg, 0, Qt.AlignmentFlag.AlignHCenter)
+        boards.addWidget(self.svg, 0, Qt.AlignmentFlag.AlignLeft)
+        self.grad_view = GradNetWidget()
+        boards.addWidget(self.grad_view, 0, Qt.AlignmentFlag.AlignLeft)
+        boards.addStretch(1)
+        layout.addLayout(boards)
+        if grads is not None:
+            self.grad_view.set_grads(grads)
 
         self.detail_text = ""
         self.hover_info = QLabel()
@@ -368,6 +472,7 @@ class BoardCard(QFrame):
         self.theme = theme
         self._apply_chrome(self.color)
         t = theme
+        self.grad_view.set_rail_color(t.muted)
         self.close_btn.setStyleSheet(
             f"QPushButton {{ background: {t.close_bg}; color: {t.close_fg}; border: none; border-radius: 11px; }}"
             "QPushButton:hover { background: #e74c3c; color: #ffffff; }"
@@ -539,7 +644,10 @@ class ClusterExplorerWindow(QMainWindow):
         title = QLabel("Side inspector")
         title.setFont(QFont("Sans Serif", 11, QFont.Weight.DemiBold))
         inspector_layout.addWidget(title)
-        hint = QLabel("Click a point to pin a board. Hover the board for FEN and eval.")
+        hint = QLabel(
+            "Click a point to pin a board. Hover the board for FEN and eval. "
+            "The graph is that sample's NNUE gradient (blue +, red −)."
+        )
         hint.setObjectName("mutedHint")
         hint.setWordWrap(True)
         inspector_layout.addWidget(hint)
@@ -557,8 +665,8 @@ class ClusterExplorerWindow(QMainWindow):
         self.card_layout.addStretch(1)
         self.scroll.setWidget(self.card_host)
         inspector_layout.addWidget(self.scroll, 1)
-        inspector_host.setMinimumWidth(280)
-        inspector_host.setMaximumWidth(420)
+        inspector_host.setMinimumWidth(360)
+        inspector_host.setMaximumWidth(520)
         splitter.addWidget(inspector_host)
         splitter.setStretchFactor(0, 1)
         splitter.setStretchFactor(1, 0)
@@ -1334,7 +1442,19 @@ class ClusterExplorerWindow(QMainWindow):
         finally:
             QApplication.restoreOverrideCursor()
         color = cluster_color(info.cluster_id, self.data.n_clusters)
-        card = BoardCard(info, color, theme=self.theme)
+        grads = None
+        if self.predictor is not None:
+            grads = self.predictor.weight_grads(
+                self.data.folders,
+                info.slice_id,
+                info.local_row,
+                fen=info.fen,
+                eval_target=info.eval_target,
+            )
+        if grads is None:
+            grads = toy_weight_grads(int(info.sample_id))
+        grads = standardize_weight_grads(grads)
+        card = BoardCard(info, color, theme=self.theme, grads=grads)
         card.closed.connect(self._toggle)
         self.cards[index] = card
         # Keep card order matching selection FIFO.

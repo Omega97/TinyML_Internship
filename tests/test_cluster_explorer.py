@@ -305,6 +305,11 @@ def test_offscreen_window_pins_cards():
     assert BOARD_SVG_SIZE == 165
     assert win.cards[0].svg.width() == BOARD_SVG_SIZE
     assert win.cards[0].svg.height() == BOARD_SVG_SIZE
+    assert win.cards[0].grad_view.width() == BOARD_SVG_SIZE
+    assert win.cards[0].grad_view.height() == BOARD_SVG_SIZE
+    assert win.cards[0].grad_view._grads is not None
+    assert win.cards[0].grad_view._grads.sizes[0] >= 3
+    assert win.cards[0].grad_view._grads.sizes[-1] == 3
     assert DARK_THEME.input_bg.lower() == DARK_THEME.panel_bg.lower()
     assert LIGHT_THEME.input_bg.lower() == LIGHT_THEME.panel_bg.lower()
     assert win.theme.input_bg.lower() == win.theme.panel_bg.lower()

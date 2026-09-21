@@ -22,7 +22,8 @@ In the window:
   * **Projection** toggles PCA / t-SNE / UMAP / Isomap / LLE and recomputes
     the layout (cluster colors stay; t-SNE/UMAP/Isomap/LLE can take a bit)
   * the **Clusters** spin box is B for k-Means / k-Medoids (default 4)
-  * left-click a point to pin its chess board (no pin cap)
+  * left-click a point to pin its chess board (no pin cap) plus the
+    sample's NNUE gradient graph (blue +, red −, fade near 0)
   * click the same point again, or the card ×, to unpin
   * drag to pan (2D) or orbit around the origin (3D); scroll to zoom
   * cluster checkboxes filter the scatter
