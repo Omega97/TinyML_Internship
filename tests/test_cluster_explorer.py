@@ -32,20 +32,19 @@ from tinymlinternship.nnue.cluster_explore import (
 SMOKE2 = PROCESSED_DATA_DIR / BOARD_EVAL_DIR_NAME / "moe" / "moe_smoke2"
 
 
-def test_selection_fifo_toggle():
-    sel = SelectionModel(max_n=3)
+def test_selection_toggle_is_unbounded():
+    sel = SelectionModel()
     sel.toggle(10)
     sel.toggle(20)
     sel.toggle(30)
     assert sel.order == [10, 20, 30]
-    selected, dropped = sel.toggle(40)
-    assert dropped == 10
-    assert selected == [20, 30, 40]
-    selected, dropped = sel.toggle(30)
-    assert dropped is None
-    assert selected == [20, 40]
-    sel.max_n = 1
-    assert sel.order == [40]
+    selected = sel.toggle(40)
+    assert selected == [10, 20, 30, 40]
+    selected = sel.toggle(30)
+    assert selected == [10, 20, 40]
+    for i in range(8):
+        sel.toggle(100 + i)
+    assert len(sel.order) == 11
 
 
 def test_demo_data_has_legal_fens():
@@ -66,6 +65,17 @@ def test_cluster_palette_matches_plan():
     assert colors[0].lower() == "#e74c3c"
     assert colors[1].lower() == "#daa520"
     assert cluster_color(0) == colors[0]
+
+
+def test_light_theme_is_white_and_does_not_swap_data_colors():
+    from tinymlinternship.nnue.cluster_explorer_ui import LIGHT_THEME
+
+    assert LIGHT_THEME.window_bg.lower() == "#ffffff"
+    assert LIGHT_THEME.text.lower() == "#111111"
+    assert LIGHT_THEME.selected_pen.lower() == "#111111"
+    assert LIGHT_THEME.grid_alpha > 0
+    assert cluster_color(0).lower() == "#e74c3c"
+    assert cluster_color(1).lower() == "#daa520"
 
 
 def test_stm_value_from_wdl():
@@ -196,6 +206,7 @@ def test_default_work_dir_finds_a_run():
 
 def test_side_to_move_and_board_frame_colors():
     from tinymlinternship.nnue.cluster_explorer_ui import (
+        LIGHT_THEME,
         _BOARD_COLORS_BLACK,
         _BOARD_COLORS_WHITE,
         _board_svg,
@@ -223,14 +234,23 @@ def test_offscreen_window_pins_cards():
     os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
     from PyQt6.QtWidgets import QApplication
 
-    from tinymlinternship.nnue.cluster_explorer_ui import ClusterExplorerWindow
+    from tinymlinternship.nnue.cluster_explorer_ui import (
+        LIGHT_THEME,
+        _BOARD_COLORS_WHITE,
+        _board_svg,
+        ClusterExplorerWindow,
+    )
 
     app = QApplication.instance() or QApplication([])
     data = make_demo_data(n=30, n_clusters=3, seed=4)
-    win = ClusterExplorerWindow(data, max_select=5, checkpoint=None)
+    win = ClusterExplorerWindow(data, checkpoint=None)
     win.show()
     app.processEvents()
     assert win.isVisible()
+    assert not hasattr(win, "max_spin")
+    assert not hasattr(win, "slice_edit")
+    assert win.light_mode.isChecked() is False
+    assert win.theme.window_bg.lower() == "#121418"
     win._toggle(0)
     win._toggle(1)
     win._toggle(2)
@@ -270,4 +290,24 @@ def test_offscreen_window_pins_cards():
     win.algo_buttons["kmedoids"].click()
     app.processEvents()
     assert win.data.algorithm == "kmedoids"
+    win._clear_selection()
+    app.processEvents()
+    for i in range(6):
+        win._toggle(i)
+    app.processEvents()
+    assert len(win.cards) == 6
+    assert len(win.selection) == 6
+    win.light_mode.setChecked(True)
+    app.processEvents()
+    assert win.theme is LIGHT_THEME
+    assert win.theme.window_bg.lower() == "#ffffff"
+    assert win.theme.text.lower() == "#111111"
+    assert "#ffffff" in win.styleSheet().lower()
+    assert win.plot.backgroundBrush().color().name().lower() == "#ffffff"
+    white_fen = "rnbqkbnr/pppppppp/8/8/8/8/PPPPPPPP/RNBQKBNR w KQkq - 0 1"
+    svg = _board_svg(white_fen).decode("utf-8")
+    assert _BOARD_COLORS_WHITE["margin"] in svg
+    win.light_mode.setChecked(False)
+    app.processEvents()
+    assert win.theme.window_bg.lower() == "#121418"
     win.close()

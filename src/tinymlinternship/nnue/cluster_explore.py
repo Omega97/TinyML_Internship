@@ -160,24 +160,11 @@ class ExplorerData:
     def has_noise(self) -> bool:
         return bool(self.cluster_id.size and int(self.cluster_id.min()) < 0)
 
-    def visible_mask(
-        self,
-        *,
-        clusters: Iterable[int] | None = None,
-        slice_substr: str = "",
-    ) -> np.ndarray:
+    def visible_mask(self, *, clusters: Iterable[int] | None = None) -> np.ndarray:
         mask = np.ones(len(self), dtype=np.bool_)
         if clusters is not None:
             allowed = np.fromiter((int(c) for c in clusters), dtype=np.int16)
             mask &= np.isin(self.cluster_id, allowed)
-        needle = str(slice_substr or "").strip().lower()
-        if needle and self.folders and self.slice_id is not None:
-            names = [p.name.lower() for p in self.folders]
-            hit = np.zeros(len(self), dtype=np.bool_)
-            for sid, name in enumerate(names):
-                if needle in name:
-                    hit |= self.slice_id.astype(np.int64) == sid
-            mask &= hit
         return mask
 
     def row(self, index: int) -> PositionInfo:
@@ -220,21 +207,10 @@ class ExplorerData:
 
 
 class SelectionModel:
-    """FIFO multi-select with toggle-off. ``max_n`` is the pin budget."""
+    """Toggle multi-select. Pin count is unbounded."""
 
-    def __init__(self, max_n: int = 5) -> None:
-        self._max_n = max(1, int(max_n))
+    def __init__(self) -> None:
         self.order: list[int] = []
-
-    @property
-    def max_n(self) -> int:
-        return self._max_n
-
-    @max_n.setter
-    def max_n(self, value: int) -> None:
-        self._max_n = max(1, int(value))
-        while len(self.order) > self._max_n:
-            self.order.pop(0)
 
     def __contains__(self, index: int) -> bool:
         return int(index) in self.order
@@ -242,16 +218,13 @@ class SelectionModel:
     def __len__(self) -> int:
         return len(self.order)
 
-    def toggle(self, index: int) -> tuple[list[int], int | None]:
+    def toggle(self, index: int) -> list[int]:
         idx = int(index)
         if idx in self.order:
             self.order.remove(idx)
-            return list(self.order), None
-        dropped: int | None = None
-        if len(self.order) >= self._max_n:
-            dropped = self.order.pop(0)
-        self.order.append(idx)
-        return list(self.order), dropped
+        else:
+            self.order.append(idx)
+        return list(self.order)
 
     def discard(self, index: int) -> bool:
         idx = int(index)

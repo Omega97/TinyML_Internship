@@ -22,10 +22,12 @@ In the window:
   * **Projection** toggles PCA / t-SNE / UMAP / Isomap / LLE and recomputes
     the 2D layout (cluster colors stay; t-SNE/UMAP/Isomap/LLE can take a bit)
   * the **Clusters** spin box is B for k-Means / k-Medoids (default 4)
-  * left-click a point to pin its chess board (up to 5; oldest drops off)
+  * left-click a point to pin its chess board (no pin cap)
   * click the same point again, or the card ×, to unpin
   * drag to pan, scroll to zoom — the connector lines follow
-  * cluster checkboxes and the slice box filter the scatter
+  * cluster checkboxes filter the scatter
+  * **Light mode** (off by default): pure white plot, black text, light-gray
+    grid — cluster colors and chess pieces stay the same
   * Esc clears the pins
 """
 
