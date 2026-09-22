@@ -394,15 +394,28 @@ def _neuron_dot_radius(n: int, span: float) -> float:
     return float(max(1.6, min(4.8, 0.9 * spacing)))
 
 
+DEFAULT_WEIGHT_LAYERS = (True, True, True)
+
+
+def _normalize_weight_layers(layers: tuple[bool, bool, bool] | None) -> tuple[bool, bool, bool]:
+    if layers is None:
+        return DEFAULT_WEIGHT_LAYERS
+    return (bool(layers[0]), bool(layers[1]), bool(layers[2]))
+
+
 def _render_grad_pixmap(
     grads: NnueWeightGrads,
     size: int,
     *,
     activations: NnueActivations | None = None,
     cmap: str = ACT_CMAP_NAME,
+    weight_layers: tuple[bool, bool, bool] | None = None,
     rail_color: str = "#9aa6b8",
 ) -> QPixmap:
-    """Paint weight edges, then activation dots (matplotlib ``cmap``) on top."""
+    """Paint weight edges, then activation dots (matplotlib ``cmap``) on top.
+
+    ``weight_layers`` is ``(L1, L2, OUT)``; False skips that map's edges.
+    """
     size = max(int(size), 32)
     img = QImage(size, size, QImage.Format.Format_ARGB32_Premultiplied)
     img.fill(QColor(0, 0, 0, 0))
@@ -428,7 +441,10 @@ def _render_grad_pixmap(
                 px, py = to_px(*neuron_xy(layer, i, n))
                 painter.drawEllipse(QPointF(px, py), 2.2, 2.2)
 
+    shown = _normalize_weight_layers(weight_layers)
     for src_layer, weight in enumerate(grads.matrices):
+        if src_layer >= len(shown) or not shown[src_layer]:
+            continue
         src_n = sizes[src_layer]
         dst_n = sizes[src_layer + 1]
         i_s, js, zs = layer_edges(weight)
@@ -475,6 +491,7 @@ class GradNetWidget(QWidget):
         self._acts: NnueActivations | None = None
         self._pixmap: QPixmap | None = None
         self._cmap = str(cmap or ACT_CMAP_NAME)
+        self._weight_layers = DEFAULT_WEIGHT_LAYERS
         self._rail = "#9aa6b8"
         self.setFixedSize(QSize(BOARD_SVG_SIZE, BOARD_SVG_SIZE))
         self._sync_tooltip()
@@ -500,6 +517,14 @@ class GradNetWidget(QWidget):
         self._cmap = name
         self._pixmap = None
         self._sync_tooltip()
+        self.update()
+
+    def set_weight_layers(self, layers: tuple[bool, bool, bool]) -> None:
+        layers = _normalize_weight_layers(layers)
+        if layers == self._weight_layers:
+            return
+        self._weight_layers = layers
+        self._pixmap = None
         self.update()
 
     def set_grads(self, grads: NnueWeightGrads | None) -> None:
@@ -530,6 +555,7 @@ class GradNetWidget(QWidget):
                 self.width(),
                 activations=self._acts,
                 cmap=self._cmap,
+                weight_layers=self._weight_layers,
                 rail_color=self._rail,
             )
         painter.drawPixmap(0, 0, self._pixmap)
@@ -1014,10 +1040,37 @@ class ClusterExplorerWindow(QMainWindow):
         self.wait_spin.valueChanged.connect(self._on_wait_changed)
         layout.addWidget(self.wait_spin)
         layout.addStretch(1)
+        layout.addWidget(QLabel("Weights"))
+        self.weight_l1 = QCheckBox("L1")
+        self.weight_l2 = QCheckBox("L2")
+        self.weight_out = QCheckBox("OUT")
+        self.weight_l1.setToolTip("Show sample-gradient edges for L1 (input → hidden).")
+        self.weight_l2.setToolTip("Show sample-gradient edges for L2 (hidden → hidden).")
+        self.weight_out.setToolTip("Show sample-gradient edges for the WDL head.")
+        for box, on in zip(
+            (self.weight_l1, self.weight_l2, self.weight_out),
+            DEFAULT_WEIGHT_LAYERS,
+        ):
+            box.setChecked(on)
+            box.setCursor(Qt.CursorShape.PointingHandCursor)
+            box.toggled.connect(self._on_weight_layers_changed)
+            layout.addWidget(box)
         return bar
+
+    def _weight_layers(self) -> tuple[bool, bool, bool]:
+        return (
+            self.weight_l1.isChecked(),
+            self.weight_l2.isChecked(),
+            self.weight_out.isChecked(),
+        )
 
     def _on_wait_changed(self, seconds: int) -> None:
         self._timeout_ms = max(1, int(seconds) * 1000)
+
+    def _on_weight_layers_changed(self, _checked: bool = False) -> None:
+        layers = self._weight_layers()
+        for card in self.cards.values():
+            card.grad_view.set_weight_layers(layers)
 
     def _begin_busy(self, message: str) -> None:
         if not self._compute_busy:
@@ -2071,6 +2124,7 @@ class ClusterExplorerWindow(QMainWindow):
         grads = standardize_weight_grads(grads)
         acts = standardize_activations(acts)
         card = BoardCard(info, color, theme=self.theme, grads=grads, activations=acts)
+        card.grad_view.set_weight_layers(self._weight_layers())
         card.closed.connect(self._toggle)
         self.cards[index] = card
         # Keep card order matching selection FIFO.

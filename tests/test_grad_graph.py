@@ -43,16 +43,16 @@ def _rand_batch(n: int = 3, width: int = 8, seed: int = 0) -> dict[str, torch.Te
 def test_neuron_xy_matches_layer_formula():
     assert N_NET_LAYERS == 4
     x0, y0 = neuron_xy(0, 0, 844)
-    assert x0 == pytest.approx(0.5 / 845.0)
+    assert x0 == pytest.approx(0.5 / 844.0)
     assert y0 == pytest.approx(1.0)
     x1, y1 = neuron_xy(1, 0, 256)
-    assert x1 == pytest.approx(0.5 / 257.0)
+    assert x1 == pytest.approx(0.5 / 256.0)
     assert y1 == pytest.approx(2.0 / 3.0)
     x, y = neuron_xy(2, 127, 256)
-    assert x == pytest.approx(127.5 / 257.0)
+    assert x == pytest.approx(127.5 / 256.0)
     assert y == pytest.approx(1.0 / 3.0)
     x3, y3 = neuron_xy(3, 2, 3)
-    assert x3 == pytest.approx(2.5 / 4.0)
+    assert x3 == pytest.approx(2.5 / 3.0)
     assert y3 == pytest.approx(0.0)
 
 

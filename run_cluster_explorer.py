@@ -30,6 +30,8 @@ In the window:
   * drag to pan (2D) or orbit around the origin (3D); scroll to zoom
   * **Wait** (bottom, default 10s): if a compute runs longer, revert to the
     previous setting
+  * **Weights** (bottom): L1 / L2 / OUT checkboxes show or hide each layer's
+    sample-gradient edges (all on by default; uncheck L1 to plot the head only)
   * **Light mode** (off by default): pure white plot, black text, light-gray
     grid — cluster colors and chess pieces stay the same
   * **3D view** (off by default): recomputes the embedding in 3D; drag orbits

@@ -387,6 +387,8 @@ def test_offscreen_window_pins_cards():
     assert win.cards[0].grad_view._acts is not None
     assert win.cards[0].grad_view._acts.sizes == win.cards[0].grad_view._grads.sizes
     assert win.cards[0].grad_view._acts.out.shape == (3,)
+    assert win.weight_l1.isChecked() and win.weight_l2.isChecked() and win.weight_out.isChecked()
+    assert win.cards[0].grad_view._weight_layers == (True, True, True)
     assert DARK_THEME.input_bg.lower() == DARK_THEME.panel_bg.lower()
     assert LIGHT_THEME.input_bg.lower() == LIGHT_THEME.panel_bg.lower()
     assert win.theme.input_bg.lower() == win.theme.panel_bg.lower()
@@ -519,6 +521,53 @@ def test_grad_pixmap_activation_dots_use_cmap():
     assert neg.alpha() > 0 and neg.red() > neg.blue()
     alt = sample(pix_alt.toImage(), 0)
     assert (pos.red(), pos.green(), pos.blue()) != (alt.red(), alt.green(), alt.blue())
+
+
+def test_weight_layer_toggles_hide_l1_edges():
+    os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
+    from PyQt6.QtWidgets import QApplication
+
+    from tinymlinternship.nnue.cluster_explorer_ui import (
+        BOARD_SVG_SIZE,
+        ClusterExplorerWindow,
+        _render_grad_pixmap,
+    )
+    from tinymlinternship.nnue.grad_graph import toy_weight_grads
+
+    app = QApplication.instance() or QApplication([])
+    data = make_demo_data(n=20, n_clusters=3, seed=21)
+    win = ClusterExplorerWindow(data, checkpoint=None, timeout_ms=5000)
+    win.show()
+    app.processEvents()
+    assert win.weight_l1.isChecked()
+    assert win.weight_l2.isChecked()
+    assert win.weight_out.isChecked()
+    win._toggle(0)
+    app.processEvents()
+    assert win.cards[0].grad_view._weight_layers == (True, True, True)
+    win.weight_l1.setChecked(False)
+    app.processEvents()
+    assert win.cards[0].grad_view._weight_layers == (False, True, True)
+    win._toggle(1)
+    app.processEvents()
+    assert win.cards[1].grad_view._weight_layers == (False, True, True)
+
+    grads = toy_weight_grads(1, hidden_dim=8, hidden2_dim=10, feature_dim=16)
+    pix_all = _render_grad_pixmap(grads, BOARD_SVG_SIZE, weight_layers=(True, True, True))
+    pix_head = _render_grad_pixmap(grads, BOARD_SVG_SIZE, weight_layers=(False, True, True))
+    pix_none = _render_grad_pixmap(grads, BOARD_SVG_SIZE, weight_layers=(False, False, False))
+
+    def _png(pix) -> bytes:
+        from PyQt6.QtCore import QBuffer, QIODevice
+
+        buf = QBuffer()
+        buf.open(QIODevice.OpenModeFlag.WriteOnly)
+        pix.save(buf, "PNG")
+        return bytes(buf.data())
+
+    assert _png(pix_all) != _png(pix_head)
+    assert _png(pix_head) != _png(pix_none)
+    win.close()
 
 
 def test_dbscan_replaces_k_with_epsilon():
