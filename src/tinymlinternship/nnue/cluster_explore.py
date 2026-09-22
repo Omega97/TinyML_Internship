@@ -392,7 +392,7 @@ class ModelPredictor:
         except Exception:
             return None
 
-    def weight_grads(
+    def network_maps(
         self,
         folders: Sequence[Path],
         slice_id: int | None,
@@ -401,12 +401,12 @@ class ModelPredictor:
         fen: str | None = None,
         eval_target: float | None = None,
     ):
-        """Analytic 4-layer ``dL/dW`` for a pinned sample, or ``None``."""
+        """Analytic 4-layer ``dL/dW`` plus activations for a pin, or ``None``."""
         model = self._load()
         if model is None:
             return None
         try:
-            from tinymlinternship.nnue.grad_graph import batch_from_fen, sample_weight_grads
+            from tinymlinternship.nnue.grad_graph import batch_from_fen, sample_network_maps
 
             batch = None
             try:
@@ -417,9 +417,30 @@ class ModelPredictor:
                 if not fen:
                     return None
                 batch = batch_from_fen(fen, eval_target=eval_target, device=self.device)
-            return sample_weight_grads(model, batch)
+            return sample_network_maps(model, batch)
         except Exception:
             return None
+
+    def weight_grads(
+        self,
+        folders: Sequence[Path],
+        slice_id: int | None,
+        local_row: int | None,
+        *,
+        fen: str | None = None,
+        eval_target: float | None = None,
+    ):
+        """Analytic 4-layer ``dL/dW`` for a pinned sample, or ``None``."""
+        maps = self.network_maps(
+            folders,
+            slice_id,
+            local_row,
+            fen=fen,
+            eval_target=eval_target,
+        )
+        if maps is None:
+            return None
+        return maps[0]
 
 
 def resolve_position(

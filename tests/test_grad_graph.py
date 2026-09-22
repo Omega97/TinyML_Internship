@@ -3,17 +3,23 @@
 from __future__ import annotations
 
 import numpy as np
+import pytest
 import torch
 
 from tinymlinternship.features import FEATURE_DIM
 from tinymlinternship.nnue.grad_graph import (
+    ACT_CMAP_NAME,
     N_NET_LAYERS,
+    activation_rgba,
     edge_rgba,
     layer_edges,
     neuron_xy,
+    sample_network_maps,
     sample_weight_grads,
     split_head_grad_vector,
+    standardize_activations,
     standardize_weight_grads,
+    toy_activations,
     toy_weight_grads,
     weight_grads_from_head_vector,
 )
@@ -36,18 +42,24 @@ def _rand_batch(n: int = 3, width: int = 8, seed: int = 0) -> dict[str, torch.Te
 
 def test_neuron_xy_matches_layer_formula():
     assert N_NET_LAYERS == 4
-    assert neuron_xy(0, 0, 844) == (0.0, 0.0)
-    assert neuron_xy(1, 0, 256) == (0.0, 1.0 / 3.0)
+    x0, y0 = neuron_xy(0, 0, 844)
+    assert x0 == pytest.approx(0.5 / 845.0)
+    assert y0 == pytest.approx(1.0)
+    x1, y1 = neuron_xy(1, 0, 256)
+    assert x1 == pytest.approx(0.5 / 257.0)
+    assert y1 == pytest.approx(2.0 / 3.0)
     x, y = neuron_xy(2, 127, 256)
-    assert x == 127 / 256
-    assert y == 2.0 / 3.0
-    assert neuron_xy(3, 2, 3) == (2.0 / 3.0, 1.0)
+    assert x == pytest.approx(127.5 / 257.0)
+    assert y == pytest.approx(1.0 / 3.0)
+    x3, y3 = neuron_xy(3, 2, 3)
+    assert x3 == pytest.approx(2.5 / 4.0)
+    assert y3 == pytest.approx(0.0)
 
 
 def test_edge_rgba_red_blue_and_fade():
-    r, g, b, a = edge_rgba(-2.0)
+    r, g, b, a = edge_rgba(-20.0)
     assert r > b and a >= 250
-    r, g, b, a = edge_rgba(2.0)
+    r, g, b, a = edge_rgba(20.0)
     assert b > r and a >= 250
     _r, _g, _b, a0 = edge_rgba(0.0)
     assert a0 == 0
@@ -172,3 +184,74 @@ def test_layer_edges_skip_near_zero_and_keep_sign():
 
 def test_head_parameter_dim_still_matches_layout():
     assert head_parameter_dim(4, 6) == 4 * 2 * 6 + 6 + 3 * 6 + 3
+
+
+def test_activation_rgba_respects_cmap_argument():
+    assert ACT_CMAP_NAME == "managua"
+    assert activation_rgba(-2.0) == activation_rgba(-2.0, cmap="managua")
+    r_neg, g_neg, b_neg, a_neg = activation_rgba(-2.0, cmap="managua")
+    r_zero, g_zero, b_zero, a_zero = activation_rgba(0.0, cmap="managua")
+    r_pos, g_pos, b_pos, a_pos = activation_rgba(2.0, cmap="managua")
+    assert a_neg == a_zero == a_pos == 255
+    assert r_neg > b_neg and g_neg > 140
+    assert b_pos > r_pos
+    assert max(r_zero, g_zero, b_zero) < 140
+
+    r_rd, g_rd, b_rd, a_rd = activation_rgba(-2.0, cmap="RdYlBu")
+    r_yl, g_yl, b_yl, _a = activation_rgba(0.0, cmap="RdYlBu")
+    r_bu, g_bu, b_bu, _a = activation_rgba(2.0, cmap="RdYlBu")
+    assert a_rd == 255
+    assert r_rd > b_rd
+    assert b_bu > r_bu
+    assert r_yl > 180 and g_yl > 180
+    assert (r_neg, g_neg, b_neg) != (r_rd, g_rd, b_rd)
+
+
+def test_toy_activations_match_grad_sizes():
+    g = toy_weight_grads(7, hidden_dim=8, hidden2_dim=10, feature_dim=16)
+    a = toy_activations(7, hidden_dim=8, hidden2_dim=10, feature_dim=16)
+    assert a.sizes == g.sizes
+    assert a.x0.shape == (16,)
+    assert a.h1.shape == (16,)
+    assert a.h2.shape == (10,)
+    assert a.out.shape == (3,)
+
+
+def test_standardize_activations_unit_sigma_per_layer():
+    a = toy_activations(7, hidden_dim=8, hidden2_dim=10, feature_dim=16)
+    z = standardize_activations(a)
+    for layer in z.layers:
+        np.testing.assert_allclose(np.std(layer), 1.0, atol=1e-5)
+
+
+def test_sample_network_maps_activations_match_forward():
+    torch.manual_seed(2)
+    model = DualHiddenNNUE(hidden_dim=4, hidden2_dim=6)
+    model.eval()
+    batch = _rand_batch(1, width=10, seed=3)
+    grads, acts = sample_network_maps(model, batch)
+    assert acts.sizes == grads.sizes
+    with torch.no_grad():
+        h = model.l1_concat(
+            batch["white_idx"],
+            batch["black_idx"],
+            batch["stm_white"],
+            batch["white_mask"],
+            batch["black_mask"],
+        )
+        logits, _pre, h2 = model.head_from_h(h)
+        from tinymlinternship.nnue.grad_graph import _dense_from_sparse
+
+        x_white = _dense_from_sparse(
+            batch["white_idx"], batch["white_mask"], FEATURE_DIM, model.l1.weight.dtype
+        )
+        x_black = _dense_from_sparse(
+            batch["black_idx"], batch["black_mask"], FEATURE_DIM, model.l1.weight.dtype
+        )
+        stm = bool(batch["stm_white"][0].item())
+        x_stm = x_white[0] if stm else x_black[0]
+    np.testing.assert_allclose(acts.h1, h[0].detach().cpu().numpy(), atol=1e-5)
+    np.testing.assert_allclose(acts.h2, h2[0].detach().cpu().numpy(), atol=1e-5)
+    np.testing.assert_allclose(acts.out, logits[0].detach().cpu().numpy(), atol=1e-5)
+    np.testing.assert_allclose(acts.x0, x_stm.detach().cpu().numpy(), atol=1e-5)
+    np.testing.assert_allclose(grads.w12, sample_weight_grads(model, batch).w12, atol=1e-5)

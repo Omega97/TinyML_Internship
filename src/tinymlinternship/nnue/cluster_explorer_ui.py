@@ -63,11 +63,16 @@ from tinymlinternship.nnue.cluster_explore import (
     umap_available,
 )
 from tinymlinternship.nnue.grad_graph import (
+    ACT_CMAP_NAME,
+    NnueActivations,
     NnueWeightGrads,
+    activation_rgba,
     edge_rgba,
     layer_edges,
     neuron_xy,
+    standardize_activations,
     standardize_weight_grads,
+    toy_activations,
     toy_weight_grads,
 )
 
@@ -384,13 +389,20 @@ class LinkOverlay(QWidget):
             painter.drawEllipse(dst, 2.6, 2.6)
 
 
+def _neuron_dot_radius(n: int, span: float) -> float:
+    spacing = float(span) / float(max(int(n), 1) + 1)
+    return float(max(1.6, min(4.8, 0.9 * spacing)))
+
+
 def _render_grad_pixmap(
     grads: NnueWeightGrads,
     size: int,
     *,
+    activations: NnueActivations | None = None,
+    cmap: str = ACT_CMAP_NAME,
     rail_color: str = "#9aa6b8",
 ) -> QPixmap:
-    """Paint standardized weight edges: blue +, red −, fade near 0."""
+    """Paint weight edges, then activation dots (matplotlib ``cmap``) on top."""
     size = max(int(size), 32)
     img = QImage(size, size, QImage.Format.Format_ARGB32_Premultiplied)
     img.fill(QColor(0, 0, 0, 0))
@@ -409,7 +421,7 @@ def _render_grad_pixmap(
         x1, y1 = to_px(*neuron_xy(layer, max(n - 1, 0), n))
         painter.setPen(QPen(rail, 1))
         painter.drawLine(QPointF(x0, y0), QPointF(x1, y1))
-        if n <= 24:
+        if activations is None and n <= 24:
             painter.setPen(Qt.PenStyle.NoPen)
             painter.setBrush(rail)
             for i in range(n):
@@ -428,6 +440,28 @@ def _render_grad_pixmap(
             x0, y0 = to_px(*neuron_xy(src_layer, int(i), src_n))
             x1, y1 = to_px(*neuron_xy(src_layer + 1, int(j), dst_n))
             painter.drawLine(QPointF(x0, y0), QPointF(x1, y1))
+
+    if activations is not None:
+        painter.setRenderHint(QPainter.RenderHint.Antialiasing, True)
+        outline = QColor(20, 24, 32, 140)
+        for layer, values in enumerate(activations.layers):
+            layer_n = sizes[layer] if layer < len(sizes) else int(np.asarray(values).shape[0])
+            vec = np.asarray(values, dtype=np.float32).reshape(-1)
+            n = min(int(layer_n), int(vec.size))
+            if n <= 0:
+                continue
+            radius = _neuron_dot_radius(layer_n, span)
+            order = np.argsort(np.abs(vec[:n]), kind="stable")
+            use_outline = layer_n <= 24
+            for i in order.tolist():
+                r, g, b, a = activation_rgba(float(vec[int(i)]), cmap=cmap)
+                px, py = to_px(*neuron_xy(layer, int(i), layer_n))
+                if use_outline:
+                    painter.setPen(QPen(outline, 0.8))
+                else:
+                    painter.setPen(Qt.PenStyle.NoPen)
+                painter.setBrush(_qcolor(f"#{r:02x}{g:02x}{b:02x}", a / 255.0))
+                painter.drawEllipse(QPointF(px, py), radius, radius)
     painter.end()
     return QPixmap.fromImage(img)
 
@@ -435,15 +469,21 @@ def _render_grad_pixmap(
 class GradNetWidget(QWidget):
     """Square NNUE-shaped sample-gradient graph, same size as the board."""
 
-    def __init__(self, parent: QWidget | None = None) -> None:
+    def __init__(self, parent: QWidget | None = None, *, cmap: str = ACT_CMAP_NAME) -> None:
         super().__init__(parent)
         self._grads: NnueWeightGrads | None = None
+        self._acts: NnueActivations | None = None
         self._pixmap: QPixmap | None = None
+        self._cmap = str(cmap or ACT_CMAP_NAME)
         self._rail = "#9aa6b8"
         self.setFixedSize(QSize(BOARD_SVG_SIZE, BOARD_SVG_SIZE))
+        self._sync_tooltip()
+
+    def _sync_tooltip(self) -> None:
         self.setToolTip(
-            "Per-sample NNUE gradient (σ=1).\n"
-            "Blue = positive, red = negative; more transparent near 0."
+            "Per-sample NNUE gradient (σ=1) and activations.\n"
+            "Edges: blue +, red −; more transparent near 0.\n"
+            f"Dots: matplotlib '{self._cmap}' colormap on activations."
         )
 
     def set_rail_color(self, color: str) -> None:
@@ -453,8 +493,30 @@ class GradNetWidget(QWidget):
         self._pixmap = None
         self.update()
 
+    def set_cmap(self, cmap: str) -> None:
+        name = str(cmap or ACT_CMAP_NAME)
+        if name == self._cmap:
+            return
+        self._cmap = name
+        self._pixmap = None
+        self._sync_tooltip()
+        self.update()
+
     def set_grads(self, grads: NnueWeightGrads | None) -> None:
+        self.set_maps(grads, self._acts)
+
+    def set_maps(
+        self,
+        grads: NnueWeightGrads | None,
+        activations: NnueActivations | None = None,
+        *,
+        cmap: str | None = None,
+    ) -> None:
         self._grads = grads
+        self._acts = activations
+        if cmap is not None:
+            self._cmap = str(cmap or ACT_CMAP_NAME)
+            self._sync_tooltip()
         self._pixmap = None
         self.update()
 
@@ -464,7 +526,11 @@ class GradNetWidget(QWidget):
             return
         if self._pixmap is None or self._pixmap.size() != self.size():
             self._pixmap = _render_grad_pixmap(
-                self._grads, self.width(), rail_color=self._rail
+                self._grads,
+                self.width(),
+                activations=self._acts,
+                cmap=self._cmap,
+                rail_color=self._rail,
             )
         painter.drawPixmap(0, 0, self._pixmap)
 
@@ -480,6 +546,7 @@ class BoardCard(QFrame):
         *,
         theme: ExplorerTheme = DARK_THEME,
         grads: NnueWeightGrads | None = None,
+        activations: NnueActivations | None = None,
     ) -> None:
         super().__init__(parent)
         self.index = int(info.index)
@@ -514,7 +581,7 @@ class BoardCard(QFrame):
         boards.addStretch(1)
         layout.addLayout(boards)
         if grads is not None:
-            self.grad_view.set_grads(grads)
+            self.grad_view.set_maps(grads, activations)
 
         self.detail_text = ""
         self.hover_info = QLabel()
@@ -1987,19 +2054,23 @@ class ClusterExplorerWindow(QMainWindow):
         finally:
             QApplication.restoreOverrideCursor()
         color = cluster_color(info.cluster_id, self.data.n_clusters)
-        grads = None
+        maps = None
         if self.predictor is not None:
-            grads = self.predictor.weight_grads(
+            maps = self.predictor.network_maps(
                 self.data.folders,
                 info.slice_id,
                 info.local_row,
                 fen=info.fen,
                 eval_target=info.eval_target,
             )
-        if grads is None:
+        if maps is None:
             grads = toy_weight_grads(int(info.sample_id))
+            acts = toy_activations(int(info.sample_id))
+        else:
+            grads, acts = maps
         grads = standardize_weight_grads(grads)
-        card = BoardCard(info, color, theme=self.theme, grads=grads)
+        acts = standardize_activations(acts)
+        card = BoardCard(info, color, theme=self.theme, grads=grads, activations=acts)
         card.closed.connect(self._toggle)
         self.cards[index] = card
         # Keep card order matching selection FIFO.

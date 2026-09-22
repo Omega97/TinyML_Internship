@@ -384,6 +384,9 @@ def test_offscreen_window_pins_cards():
     assert win.cards[0].grad_view._grads is not None
     assert win.cards[0].grad_view._grads.sizes[0] >= 3
     assert win.cards[0].grad_view._grads.sizes[-1] == 3
+    assert win.cards[0].grad_view._acts is not None
+    assert win.cards[0].grad_view._acts.sizes == win.cards[0].grad_view._grads.sizes
+    assert win.cards[0].grad_view._acts.out.shape == (3,)
     assert DARK_THEME.input_bg.lower() == DARK_THEME.panel_bg.lower()
     assert LIGHT_THEME.input_bg.lower() == LIGHT_THEME.panel_bg.lower()
     assert win.theme.input_bg.lower() == win.theme.panel_bg.lower()
@@ -466,6 +469,56 @@ def test_offscreen_window_pins_cards():
     _wait_idle(win)
     assert win._view3d is False
     win.close()
+
+
+def test_grad_pixmap_activation_dots_use_cmap():
+    os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
+    from PyQt6.QtWidgets import QApplication
+
+    from tinymlinternship.nnue.cluster_explorer_ui import (
+        BOARD_SVG_SIZE,
+        GRAD_GRAPH_PAD,
+        _render_grad_pixmap,
+    )
+    from tinymlinternship.nnue.grad_graph import (
+        NnueActivations,
+        neuron_xy,
+        toy_activations,
+        toy_weight_grads,
+    )
+
+    app = QApplication.instance() or QApplication([])
+    assert app is not None
+    grads = toy_weight_grads(1, hidden_dim=4, hidden2_dim=6, feature_dim=8)
+    base = toy_activations(1, hidden_dim=4, hidden2_dim=6, feature_dim=8)
+    acts = NnueActivations(
+        x0=np.zeros_like(base.x0),
+        h1=np.zeros_like(base.h1),
+        h2=np.zeros_like(base.h2),
+        out=np.array([2.0, 0.0, -2.0], dtype=np.float32),
+        hidden_dim=base.hidden_dim,
+        hidden2_dim=base.hidden2_dim,
+        feature_dim=base.feature_dim,
+    )
+    pix = _render_grad_pixmap(grads, BOARD_SVG_SIZE, activations=acts, cmap="managua")
+    pix_alt = _render_grad_pixmap(grads, BOARD_SVG_SIZE, activations=acts, cmap="RdYlBu")
+    img = pix.toImage()
+    pad = float(GRAD_GRAPH_PAD)
+    span = float(BOARD_SVG_SIZE) - 2.0 * pad
+    n_out = 3
+
+    def sample(image, index: int):
+        x, y = neuron_xy(3, index, n_out)
+        px = int(round(pad + float(x) * span))
+        py = int(round(pad + float(y) * span))
+        return image.pixelColor(px, py)
+
+    pos = sample(img, 0)
+    neg = sample(img, 2)
+    assert pos.alpha() > 0 and pos.blue() > pos.red()
+    assert neg.alpha() > 0 and neg.red() > neg.blue()
+    alt = sample(pix_alt.toImage(), 0)
+    assert (pos.red(), pos.green(), pos.blue()) != (alt.red(), alt.green(), alt.blue())
 
 
 def test_dbscan_replaces_k_with_epsilon():

@@ -1,4 +1,4 @@
-"""Map a per-sample NNUE gradient back onto the four DualHidden layers.
+"""Map a per-sample NNUE gradient and activations onto the four DualHidden layers.
 
 Stored MoE vectors are a random projection of the *head* gradient
 (``L2`` + output), so this module either unpacks a full head vector or
@@ -10,6 +10,11 @@ Layer sizes are ``(in=844, hidden1=2W, hidden2=H, out=3)``. Shared L1 is
 drawn twice: STM occupies hidden1 ``[0, W)``, opponent ``[W, 2W)``.
 A connection from layer ``l`` neuron ``i`` to layer ``l+1`` neuron ``j``
 sits at ``(i / h_l, l / 3) → (j / h_{l+1}, (l+1) / 3)``.
+
+Activations sit on those neurons: STM input features, CReLU concat ``h``,
+CReLU ``h2``, and the three WDL logits. Colored with a matplotlib colormap
+(default ``managua``); pass ``cmap=`` to ``activation_rgba`` / the painter
+to swap it.
 """
 
 from __future__ import annotations
@@ -27,6 +32,9 @@ GRAD_MAX_EDGES_PER_LAYER = 12_000
 GRAD_SIGMA_SCALE = 10.0
 POS_RGB = (40, 110, 255)
 NEG_RGB = (230, 45, 45)
+ACT_CMAP_NAME = "managua"
+ACT_SIGMA_SCALE = 2.0
+_CMAP_LUTS: dict[str, np.ndarray] = {}
 
 
 @dataclass(frozen=True)
@@ -49,10 +57,35 @@ class NnueWeightGrads:
         return (self.w01, self.w12, self.w23)
 
 
+@dataclass(frozen=True)
+class NnueActivations:
+    """Per-neuron activations aligned with ``NnueWeightGrads.sizes``.
+
+    ``x0`` is the STM 844-d feature vector (the graph has one input rail).
+    ``h1`` is STM-ordered CReLU concat, ``h2`` is CReLU(L2), ``out`` is logits.
+    """
+
+    x0: np.ndarray  # (in,)
+    h1: np.ndarray  # (2W,)
+    h2: np.ndarray  # (H,)
+    out: np.ndarray  # (3,)
+    hidden_dim: int
+    hidden2_dim: int
+    feature_dim: int = FEATURE_DIM
+
+    @property
+    def sizes(self) -> tuple[int, int, int, int]:
+        return (int(self.feature_dim), int(self.hidden_dim) * 2, int(self.hidden2_dim), 3)
+
+    @property
+    def layers(self) -> tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray]:
+        return (self.x0, self.h1, self.h2, self.out)
+
+
 def neuron_xy(layer: int, index: int, n: int) -> tuple[float, float]:
     """Unit-square position of neuron ``index`` on layer ``layer`` in ``0..3``."""
     n = max(int(n), 1)
-    x = (float(index) + 0.5) / (float(n) + 1)
+    x = (float(index) + 0.5) / (float(n))
     y = 1 - float(layer) / 3.0
     return x, y
 
@@ -63,6 +96,41 @@ def edge_rgba(z: float, *, sigma_scale: float = GRAD_SIGMA_SCALE) -> tuple[int, 
     alpha = 0 if mag <= 0.0 else min(1.0, mag / max(float(sigma_scale), 1e-8))
     rgb = POS_RGB if z >= 0.0 else NEG_RGB
     return rgb[0], rgb[1], rgb[2], int(round(255.0 * alpha))
+
+
+def activation_lut(cmap: str = ACT_CMAP_NAME) -> np.ndarray:
+    """256×3 uint8 samples of a matplotlib colormap (``cmap`` is the name)."""
+    name = str(cmap or ACT_CMAP_NAME)
+    lut = _CMAP_LUTS.get(name)
+    if lut is None:
+        import matplotlib.pyplot as plt
+
+        mpl_cmap = plt.get_cmap(name)
+        t = np.linspace(0.0, 1.0, 256)
+        rgb = np.asarray(mpl_cmap(t), dtype=np.float64)[:, :3]
+        lut = np.clip(np.round(rgb * 255.0), 0, 255).astype(np.uint8)
+        _CMAP_LUTS[name] = lut
+    return lut
+
+
+def activation_rgba(
+    z: float,
+    *,
+    cmap: str = ACT_CMAP_NAME,
+    vmax: float = ACT_SIGMA_SCALE,
+) -> tuple[int, int, int, int]:
+    """Map σ=1 activation ``z`` through matplotlib ``cmap``. Opaque.
+
+    ``t = 0.5 + 0.5 clip(z/vmax)`` so 0 sits at the colormap center.
+    Swap palettes with ``cmap='managua'``, ``cmap='RdYlBu'``, …
+    """
+    scale = max(float(vmax), 1e-8)
+    t = 0.5 + 0.5 * float(np.clip(float(z) / scale, -1.0, 1.0))
+    lut = activation_lut(cmap)
+    idx = int(round(t * (len(lut) - 1)))
+    idx = 0 if idx < 0 else (len(lut) - 1 if idx >= len(lut) else idx)
+    r, g, b = (int(lut[idx, 0]), int(lut[idx, 1]), int(lut[idx, 2]))
+    return r, g, b, 255
 
 
 def split_head_grad_vector(
@@ -122,6 +190,25 @@ def standardize_weight_grads(grads: NnueWeightGrads, eps: float = 1e-8) -> NnueW
     )
 
 
+def standardize_activations(acts: NnueActivations, eps: float = 1e-8) -> NnueActivations:
+    """Scale each layer by its own σ so dots use the full colormap range."""
+    scaled: list[np.ndarray] = []
+    for layer in acts.layers:
+        flat = np.asarray(layer, dtype=np.float64).reshape(-1)
+        std = float(np.std(flat))
+        scale = std if std > float(eps) else 1.0
+        scaled.append((flat / scale).astype(np.float32, copy=False))
+    return NnueActivations(
+        x0=scaled[0],
+        h1=scaled[1],
+        h2=scaled[2],
+        out=scaled[3],
+        hidden_dim=acts.hidden_dim,
+        hidden2_dim=acts.hidden2_dim,
+        feature_dim=acts.feature_dim,
+    )
+
+
 def layer_edges(
     weight: np.ndarray,
     *,
@@ -172,6 +259,31 @@ def toy_weight_grads(
     w23 = rng.normal(0.0, 0.5, size=(3, h2)).astype(np.float32)
     return NnueWeightGrads(
         w01=w01, w12=w12, w23=w23, hidden_dim=w, hidden2_dim=h2, feature_dim=inn
+    )
+
+
+def toy_activations(
+    seed: int,
+    *,
+    hidden_dim: int = 128,
+    hidden2_dim: int = 256,
+    feature_dim: int = FEATURE_DIM,
+) -> NnueActivations:
+    """Deterministic stand-in activations matching ``toy_weight_grads`` sizes."""
+    rng = np.random.RandomState(int(seed) + 17)
+    w = int(hidden_dim)
+    h2 = int(hidden2_dim)
+    inn = int(feature_dim)
+    x0 = (rng.random(inn) < 0.04).astype(np.float32)
+    if inn > 0:
+        x0[0] = 1.0
+        if inn > 3:
+            x0[inn // 2] = 1.0
+    h1 = np.clip(rng.normal(8.0, 12.0, size=2 * w), 0.0, 127.0).astype(np.float32)
+    h2v = np.clip(rng.normal(6.0, 10.0, size=h2), 0.0, 127.0).astype(np.float32)
+    out = rng.normal(0.0, 1.2, size=3).astype(np.float32)
+    return NnueActivations(
+        x0=x0, h1=h1, h2=h2v, out=out, hidden_dim=w, hidden2_dim=h2, feature_dim=inn
     )
 
 
@@ -226,11 +338,12 @@ def batch_from_fen(
     }
 
 
-def sample_weight_grads(model, batch: dict) -> NnueWeightGrads:
-    """Analytic per-row ``dL/dW`` for L1 (STM‖opp), L2, and the WDL head.
+def sample_network_maps(model, batch: dict) -> tuple[NnueWeightGrads, NnueActivations]:
+    """Analytic per-row ``dL/dW`` plus the four layer activations.
 
     Takes the first row of ``batch``. Matches ``analytic_head_grad_flat`` on
     L2/head; L1 is the two POV outer products stacked, not the shared sum.
+    Input activations are the STM feature vector (one 844-d rail).
     """
     import torch
 
@@ -260,6 +373,9 @@ def sample_weight_grads(model, batch: dict) -> NnueWeightGrads:
             x_white = _dense_from_sparse(white_idx.to(device), white_mask.to(device), feature_dim, dtype)
             x_black = _dense_from_sparse(black_idx.to(device), black_mask.to(device), feature_dim, dtype)
 
+        stm_bool = stm.to(device=device).unsqueeze(1).bool()
+        x_stm = torch.where(stm_bool, x_white, x_black)[0]
+
         pre_white = model.l1(x_white)
         pre_black = model.l1(x_black)
         h_white = crelu(pre_white, model.crelu_clip)
@@ -279,19 +395,18 @@ def sample_weight_grads(model, batch: dict) -> NnueWeightGrads:
         g_h = g_pre @ model.l2.weight.to(dtype=g_pre.dtype)
         g_h_stm = g_h[:, :w]
         g_h_opp = g_h[:, w:]
-        stm_m = stm.to(device=device).unsqueeze(1).to(dtype=h.dtype)
-        g_h_white = torch.where(stm_m.bool(), g_h_stm, g_h_opp)
-        g_h_black = torch.where(stm_m.bool(), g_h_opp, g_h_stm)
+        g_h_white = torch.where(stm_bool, g_h_stm, g_h_opp)
+        g_h_black = torch.where(stm_bool, g_h_opp, g_h_stm)
         g_pre_white = g_h_white * _crelu_mask(pre_white, model.crelu_clip).to(dtype=g_h_white.dtype)
         g_pre_black = g_h_black * _crelu_mask(pre_black, model.crelu_clip).to(dtype=g_h_black.dtype)
         w_l1_white = g_pre_white.unsqueeze(2) * x_white.unsqueeze(1)
         w_l1_black = g_pre_black.unsqueeze(2) * x_black.unsqueeze(1)
-        stm_m3 = stm_m.unsqueeze(2).bool()
+        stm_m3 = stm_bool.unsqueeze(2)
         w_l1_stm = torch.where(stm_m3, w_l1_white, w_l1_black)
         w_l1_opp = torch.where(stm_m3, w_l1_black, w_l1_white)
         w01 = torch.cat([w_l1_stm, w_l1_opp], dim=1)[0]
 
-    return NnueWeightGrads(
+    grads = NnueWeightGrads(
         w01=np.ascontiguousarray(w01.detach().cpu().numpy(), dtype=np.float32),
         w12=np.ascontiguousarray(w12.detach().cpu().numpy(), dtype=np.float32),
         w23=np.ascontiguousarray(w23.detach().cpu().numpy(), dtype=np.float32),
@@ -299,3 +414,19 @@ def sample_weight_grads(model, batch: dict) -> NnueWeightGrads:
         hidden2_dim=h2,
         feature_dim=feature_dim,
     )
+    acts = NnueActivations(
+        x0=np.ascontiguousarray(x_stm.detach().cpu().numpy(), dtype=np.float32),
+        h1=np.ascontiguousarray(h[0].detach().cpu().numpy(), dtype=np.float32),
+        h2=np.ascontiguousarray(hidden2[0].detach().cpu().numpy(), dtype=np.float32),
+        out=np.ascontiguousarray(logits[0].detach().cpu().numpy(), dtype=np.float32),
+        hidden_dim=w,
+        hidden2_dim=h2,
+        feature_dim=feature_dim,
+    )
+    return grads, acts
+
+
+def sample_weight_grads(model, batch: dict) -> NnueWeightGrads:
+    """Analytic per-row ``dL/dW`` for L1 (STM‖opp), L2, and the WDL head."""
+    grads, _acts = sample_network_maps(model, batch)
+    return grads
