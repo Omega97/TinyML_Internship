@@ -134,10 +134,21 @@ def run_self_test(data) -> int:
     app.processEvents()
     assert len(win.cards) == 1, "toggle-off failed"
     win.k_spin.setValue(6)
+    from PyQt6.QtTest import QTest
+
+    waited = 0
+    while getattr(win, "_compute_busy", False) and waited < 8000:
+        QTest.qWait(20)
+        waited += 20
     app.processEvents()
     assert win.data.n_clusters == 6, f"expected B=6, got {win.data.n_clusters}"
-    assert len(win.cluster_boxes) == 6
+    assert not hasattr(win, "cluster_boxes")
+    assert win.wait_spin.value() == 10
     win.proj_buttons["lle"].click()
+    waited = 0
+    while getattr(win, "_compute_busy", False) and waited < 8000:
+        QTest.qWait(20)
+        waited += 20
     app.processEvents()
     assert win.data.method == "lle", f"expected lle, got {win.data.method}"
     labels_before = win.data.cluster_id.copy()

@@ -15,6 +15,7 @@ from tinymlinternship.nnue.cluster_explore import (
     DEFAULT_POOL_SIZE,
     FenResolver,
     SelectionModel,
+    cluster_cache_key,
     cluster_color,
     cluster_palette,
     default_work_dir,
@@ -194,10 +195,13 @@ def test_recluster_kmedoids_and_dbscan():
     recluster(data, 4, seed=6, algorithm="dbscan")
     assert data.algorithm == "dbscan"
     assert int(data.cluster_id.min()) >= -1
-    assert 3 <= data.n_clusters <= 6
+    assert data.dbscan_epsilon == pytest.approx(0.3)
+    assert data.diagnostics.get("dbscan_percentile") == pytest.approx(30.0)
     bigger = make_demo_data(n=300, n_clusters=4, seed=6)
-    recluster(bigger, 4, seed=6, algorithm="dbscan")
-    assert 3 <= bigger.n_clusters <= 6
+    recluster(bigger, 4, seed=6, algorithm="dbscan", dbscan_epsilon=0.5)
+    assert bigger.algorithm == "dbscan"
+    assert bigger.dbscan_epsilon == pytest.approx(0.5)
+    assert bigger.diagnostics.get("dbscan_percentile") == pytest.approx(50.0)
 
 
 def test_reload_pool_changes_n_not_display_only():
@@ -220,6 +224,61 @@ def test_recluster_changes_k():
     assert data.cluster_id.max() < 6
     assert data.diagnostics["n_clusters"] == 6
     assert len(data.diagnostics["sizes"]) == 6
+
+
+def test_recluster_uses_cache(monkeypatch):
+    data = make_demo_data(n=80, n_clusters=4, seed=5)
+    labels4 = data.cluster_id.copy()
+    assert cluster_cache_key("kmeans", 4) in data.cluster_cache
+    recluster(data, 5, seed=5)
+    labels5 = data.cluster_id.copy()
+    assert not np.array_equal(labels4, labels5)
+    import tinymlinternship.nnue.cluster as cluster_mod
+
+    calls = {"n": 0}
+    real = cluster_mod.fit_minibatch_kmeans
+
+    def wrapped(*args, **kwargs):
+        calls["n"] += 1
+        return real(*args, **kwargs)
+
+    monkeypatch.setattr(cluster_mod, "fit_minibatch_kmeans", wrapped)
+    recluster(data, 4, seed=5)
+    np.testing.assert_array_equal(data.cluster_id, labels4)
+    recluster(data, 5, seed=5)
+    np.testing.assert_array_equal(data.cluster_id, labels5)
+    assert calls["n"] == 0
+
+
+def test_cluster_cache_key_dbscan_ignores_k():
+    assert cluster_cache_key("dbscan", 3) == cluster_cache_key("DBSCAN", 99)
+    assert cluster_cache_key("dbscan", 3) == "dbscan:0.3"
+    assert cluster_cache_key("dbscan", 3, dbscan_epsilon=0.3) != cluster_cache_key(
+        "dbscan", 3, dbscan_epsilon=0.7
+    )
+    assert cluster_cache_key("kmeans", 4) != cluster_cache_key("kmeans", 5)
+
+
+def test_quantize_dbscan_epsilon():
+    from tinymlinternship.nnue.cluster_explore import quantize_dbscan_epsilon
+
+    assert quantize_dbscan_epsilon(None) == pytest.approx(0.3)
+    assert quantize_dbscan_epsilon(0.32) == pytest.approx(0.3)
+    assert quantize_dbscan_epsilon(0.0) == pytest.approx(0.1)
+    assert quantize_dbscan_epsilon(1.0) == pytest.approx(0.9)
+    assert quantize_dbscan_epsilon(0.55) == pytest.approx(0.6)
+
+
+def test_dbscan_epsilon_is_cached():
+    data = make_demo_data(n=80, n_clusters=4, seed=6)
+    recluster(data, 4, seed=6, algorithm="dbscan", dbscan_epsilon=0.3)
+    labels_a = data.cluster_id.copy()
+    recluster(data, 4, seed=6, algorithm="dbscan", dbscan_epsilon=0.7)
+    assert cluster_cache_key("dbscan", 4, dbscan_epsilon=0.3) in data.cluster_cache
+    assert cluster_cache_key("dbscan", 4, dbscan_epsilon=0.7) in data.cluster_cache
+    recluster(data, 4, seed=6, algorithm="dbscan", dbscan_epsilon=0.3)
+    np.testing.assert_array_equal(data.cluster_id, labels_a)
+    assert data.dbscan_epsilon == pytest.approx(0.3)
 
 
 @pytest.mark.skipif(not (SMOKE2 / "gradients.npy").is_file(), reason="moe_smoke2 missing")
@@ -274,9 +333,21 @@ def test_side_to_move_and_board_frame_colors():
     assert "FEN  " in text
 
 
+def _wait_idle(win, timeout_ms: int = 8000) -> None:
+    from PyQt6.QtWidgets import QApplication
+    from PyQt6.QtTest import QTest
+
+    waited = 0
+    while getattr(win, "_compute_busy", False) and waited < timeout_ms:
+        QTest.qWait(20)
+        waited += 20
+    QApplication.processEvents()
+    assert not getattr(win, "_compute_busy", False), win.status.text()
+
+
 def test_offscreen_window_pins_cards():
     os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
-    from PyQt6.QtWidgets import QApplication
+    from PyQt6.QtWidgets import QApplication, QLabel
 
     from tinymlinternship.nnue.cluster_explorer_ui import (
         BOARD_SVG_SIZE,
@@ -293,6 +364,9 @@ def test_offscreen_window_pins_cards():
     win.show()
     app.processEvents()
     assert win.isVisible()
+    label_texts = [w.text() for w in win.findChildren(QLabel)]
+    assert "Side inspector" not in label_texts
+    assert not any("Click a point" in (t or "") for t in label_texts)
     assert not hasattr(win, "max_spin")
     assert not hasattr(win, "slice_edit")
     assert win.light_mode.isChecked() is False
@@ -332,13 +406,20 @@ def test_offscreen_window_pins_cards():
     win._toggle(0)
     app.processEvents()
     win.k_spin.setValue(6)
-    app.processEvents()
+    _wait_idle(win)
     assert win.data.n_clusters == 6
-    assert len(win.cluster_boxes) == 6
+    assert not hasattr(win, "cluster_boxes")
+    from PyQt6.QtWidgets import QAbstractSpinBox
+
+    assert win.k_spin.buttonSymbols() == QAbstractSpinBox.ButtonSymbols.UpDownArrows
+    assert win.k_spin.isVisible()
+    assert not win.eps_spin.isVisible()
+    assert win.wait_spin.value() == 10
+    assert win._timeout_ms == 10_000
     assert 0 in win.cards
     assert "Cluster " in win.cards[0].header_label.text()
     win.proj_buttons["isomap"].click()
-    app.processEvents()
+    _wait_idle(win)
     assert win.data.method == "isomap"
     labels_before = win.data.cluster_id.copy()
     n_before = len(win._shown)
@@ -347,7 +428,7 @@ def test_offscreen_window_pins_cards():
     assert np.array_equal(win.data.cluster_id, labels_before)
     assert len(win._shown) <= n_before
     win.algo_buttons["kmedoids"].click()
-    app.processEvents()
+    _wait_idle(win)
     assert win.data.algorithm == "kmedoids"
     win._clear_selection()
     app.processEvents()
@@ -371,7 +452,7 @@ def test_offscreen_window_pins_cards():
     assert win.theme.window_bg.lower() == "#121418"
     assert win.view3d.isChecked() is False
     win.view3d.setChecked(True)
-    app.processEvents()
+    _wait_idle(win)
     assert win._view3d is True
     assert win.data.coord_z is not None
     assert win.data.coord_z.shape == (len(win.data),)
@@ -382,6 +463,316 @@ def test_offscreen_window_pins_cards():
     app.processEvents()
     assert not np.allclose(win._disp_x, x_before)
     win.view3d.setChecked(False)
-    app.processEvents()
+    _wait_idle(win)
     assert win._view3d is False
+    win.close()
+
+
+def test_dbscan_replaces_k_with_epsilon():
+    os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
+    from PyQt6.QtWidgets import QApplication
+
+    from tinymlinternship.nnue.cluster_explorer_ui import ClusterExplorerWindow
+
+    app = QApplication.instance() or QApplication([])
+    data = make_demo_data(n=40, n_clusters=3, seed=17)
+    win = ClusterExplorerWindow(data, checkpoint=None, timeout_ms=8000)
+    win.show()
+    app.processEvents()
+    assert win.k_spin.isVisible()
+    assert not win.eps_spin.isVisible()
+    assert win.cluster_param_label.text() == "Clusters"
+    k_before = int(win.k_spin.value())
+    win.algo_buttons["dbscan"].click()
+    _wait_idle(win)
+    assert win.data.algorithm == "dbscan"
+    assert not win.k_spin.isVisible()
+    assert win.eps_spin.isVisible()
+    assert win.cluster_param_label.text() == "ε"
+    assert win.eps_spin.value() == pytest.approx(0.3)
+    assert win.eps_spin.minimum() == pytest.approx(0.1)
+    assert win.eps_spin.maximum() == pytest.approx(0.9)
+    assert win.eps_spin.singleStep() == pytest.approx(0.1)
+    win.eps_spin.setValue(0.6)
+    _wait_idle(win)
+    assert win.data.dbscan_epsilon == pytest.approx(0.6)
+    assert win.data.diagnostics.get("dbscan_percentile") == pytest.approx(60.0)
+    win.algo_buttons["kmeans"].click()
+    _wait_idle(win)
+    assert win.data.algorithm == "kmeans"
+    assert win.k_spin.isVisible()
+    assert not win.eps_spin.isVisible()
+    assert win.cluster_param_label.text() == "Clusters"
+    assert int(win.k_spin.value()) == k_before
+    win.close()
+
+
+def test_projection_timeout_reverts_to_previous(monkeypatch):
+    os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
+    import time
+
+    from PyQt6.QtWidgets import QApplication
+
+    from tinymlinternship.nnue import cluster_explorer_ui as ui
+
+    app = QApplication.instance() or QApplication([])
+
+    def slow_proj(gradients, *, method="pca", n_components=2, seed=0):
+        time.sleep(0.35)
+        n = int(np.asarray(gradients).shape[0])
+        k = max(2, int(n_components))
+        rng = np.random.RandomState(int(seed) + 17)
+        return rng.randn(n, k).astype(np.float32)
+
+    monkeypatch.setattr(ui, "project_gradients", slow_proj)
+    data = make_demo_data(n=24, n_clusters=3, seed=8)
+    win = ui.ClusterExplorerWindow(data, checkpoint=None, timeout_ms=60)
+    win.show()
+    app.processEvents()
+    assert win.data.method == "pca"
+    win.proj_buttons["tsne"].click()
+    _wait_idle(win, timeout_ms=2000)
+    assert win.data.method == "pca"
+    assert win.proj_buttons["pca"].isChecked()
+    assert not win.proj_buttons["tsne"].isChecked()
+    assert "timed out" in win.status.text().lower()
+    assert "pca" in win.status.text().lower()
+    win.proj_buttons["pca"].click()
+    app.processEvents()
+    assert win.data.method == "pca"
+    win.close()
+
+
+def test_timeout_does_not_block_pca_or_cached_pool(monkeypatch):
+    os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
+    import time
+
+    from PyQt6.QtWidgets import QApplication
+
+    from tinymlinternship.nnue import cluster_explorer_ui as ui
+
+    app = QApplication.instance() or QApplication([])
+    started = {"n": 0}
+    released = {"n": 0}
+
+    def slow_proj(gradients, *, method="pca", n_components=2, seed=0):
+        started["n"] += 1
+        time.sleep(0.5)
+        released["n"] += 1
+        n = int(np.asarray(gradients).shape[0])
+        k = max(2, int(n_components))
+        rng = np.random.RandomState(int(seed) + 23)
+        return rng.randn(n, k).astype(np.float32)
+
+    monkeypatch.setattr(ui, "project_gradients", slow_proj)
+    data300 = make_demo_data(n=300, n_clusters=3, seed=12)
+    data1000 = make_demo_data(n=1000, n_clusters=3, seed=12)
+    win = ui.ClusterExplorerWindow(data300, checkpoint=None, timeout_ms=80)
+    win._pool_cache[300] = data300
+    win._pool_cache[1000] = data1000
+    win.show()
+    app.processEvents()
+    ids300 = win.data.sample_id.copy()
+    win.pool_buttons[1000].click()
+    app.processEvents()
+    assert len(win.data) == 1000
+    win.proj_buttons["tsne"].click()
+    _wait_idle(win, timeout_ms=2000)
+    assert win.data.method == "pca"
+    assert started["n"] >= 1
+    assert released["n"] == 0
+    win.view3d.setChecked(True)
+    _wait_idle(win, timeout_ms=2000)
+    assert win._view3d is False
+    assert not win.view3d.isChecked()
+    win.proj_buttons["pca"].click()
+    app.processEvents()
+    assert win.data.method == "pca"
+    win.pool_buttons[300].click()
+    app.processEvents()
+    np.testing.assert_array_equal(win.data.sample_id, ids300)
+    assert len(win.data) == 300
+    assert win.data.method == "pca"
+    win.close()
+
+
+def test_fast_projection_still_applies():
+    os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
+    from PyQt6.QtWidgets import QApplication
+
+    from tinymlinternship.nnue.cluster_explorer_ui import ClusterExplorerWindow
+
+    app = QApplication.instance() or QApplication([])
+    data = make_demo_data(n=24, n_clusters=3, seed=9)
+    win = ClusterExplorerWindow(data, checkpoint=None, timeout_ms=5000)
+    win.show()
+    app.processEvents()
+    win.proj_buttons["lle"].click()
+    _wait_idle(win)
+    assert win.data.method == "lle"
+    win.close()
+
+
+def test_window_projection_cache_skips_recompute(monkeypatch):
+    os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
+    from PyQt6.QtWidgets import QApplication
+
+    from tinymlinternship.nnue import cluster_explorer_ui as ui
+
+    app = QApplication.instance() or QApplication([])
+    calls = {"n": 0}
+    real = ui.project_gradients
+
+    def counted(*args, **kwargs):
+        calls["n"] += 1
+        return real(*args, **kwargs)
+
+    monkeypatch.setattr(ui, "project_gradients", counted)
+    data = make_demo_data(n=24, n_clusters=3, seed=10)
+    win = ui.ClusterExplorerWindow(data, checkpoint=None, timeout_ms=5000)
+    win.show()
+    app.processEvents()
+    win.proj_buttons["lle"].click()
+    _wait_idle(win)
+    assert calls["n"] == 1
+    win.proj_buttons["pca"].click()
+    _wait_idle(win)
+    win.proj_buttons["lle"].click()
+    _wait_idle(win)
+    assert win.data.method == "lle"
+    assert calls["n"] == 1
+    win.close()
+
+
+def test_window_pool_cache_restores_sample_ids(monkeypatch):
+    os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
+    from PyQt6.QtWidgets import QApplication
+
+    from tinymlinternship.nnue import cluster_explorer_ui as ui
+
+    app = QApplication.instance() or QApplication([])
+    data = make_demo_data(n=300, n_clusters=3, seed=11)
+    win = ui.ClusterExplorerWindow(data, checkpoint=None, timeout_ms=8000)
+    win.show()
+    app.processEvents()
+    assert len(win.data) == 300
+    ids300 = win.data.sample_id.copy()
+    win.pool_buttons[1000].click()
+    _wait_idle(win)
+    assert len(win.data) == 1000
+    ids1000 = win.data.sample_id.copy()
+    calls = {"n": 0}
+    real = ui.reload_pool
+
+    def counted(*args, **kwargs):
+        calls["n"] += 1
+        return real(*args, **kwargs)
+
+    monkeypatch.setattr(ui, "reload_pool", counted)
+    win.pool_buttons[300].click()
+    _wait_idle(win)
+    np.testing.assert_array_equal(win.data.sample_id, ids300)
+    win.pool_buttons[1000].click()
+    _wait_idle(win)
+    np.testing.assert_array_equal(win.data.sample_id, ids1000)
+    assert calls["n"] == 0
+    win.close()
+
+
+def test_pool_switch_keeps_projection_method():
+    os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
+    from PyQt6.QtWidgets import QApplication
+
+    from tinymlinternship.nnue.cluster_explorer_ui import ClusterExplorerWindow
+
+    app = QApplication.instance() or QApplication([])
+    data = make_demo_data(n=300, n_clusters=3, seed=13)
+    win = ClusterExplorerWindow(data, checkpoint=None, timeout_ms=8000)
+    win.show()
+    app.processEvents()
+    win.proj_buttons["lle"].click()
+    _wait_idle(win)
+    assert win.data.method == "lle"
+    win.pool_buttons[1000].click()
+    _wait_idle(win)
+    assert len(win.data) == 1000
+    assert win.data.method == "lle"
+    assert win.proj_buttons["lle"].isChecked()
+    win.pool_buttons[300].click()
+    _wait_idle(win)
+    assert len(win.data) == 300
+    assert win.data.method == "lle"
+    assert win.proj_buttons["lle"].isChecked()
+    win.close()
+
+
+def test_pool_switch_keeps_clustering():
+    os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
+    from PyQt6.QtWidgets import QApplication
+
+    from tinymlinternship.nnue.cluster_explorer_ui import ClusterExplorerWindow
+
+    app = QApplication.instance() or QApplication([])
+    data = make_demo_data(n=300, n_clusters=3, seed=15)
+    win = ClusterExplorerWindow(data, checkpoint=None, timeout_ms=8000)
+    win.show()
+    app.processEvents()
+    win.algo_buttons["kmedoids"].click()
+    _wait_idle(win)
+    win.k_spin.setValue(6)
+    _wait_idle(win)
+    assert win.data.algorithm == "kmedoids"
+    assert win.data.n_clusters == 6
+    win.pool_buttons[1000].click()
+    _wait_idle(win)
+    assert len(win.data) == 1000
+    assert win.data.algorithm == "kmedoids"
+    assert win.algo_buttons["kmedoids"].isChecked()
+    assert win.k_spin.value() == 6
+    assert win.data.n_clusters == 6
+    win.pool_buttons[300].click()
+    _wait_idle(win)
+    assert len(win.data) == 300
+    assert win.data.algorithm == "kmedoids"
+    assert win.algo_buttons["kmedoids"].isChecked()
+    assert win.k_spin.value() == 6
+    assert win.data.n_clusters == 6
+    win.close()
+
+
+def test_pool_switch_timeout_keeps_clustering(monkeypatch):
+    os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
+    import time
+
+    from PyQt6.QtWidgets import QApplication
+
+    from tinymlinternship.nnue import cluster_explorer_ui as ui
+
+    app = QApplication.instance() or QApplication([])
+    data300 = make_demo_data(n=300, n_clusters=3, seed=16)
+    data1000 = make_demo_data(n=1000, n_clusters=3, seed=16)
+    win = ui.ClusterExplorerWindow(data300, checkpoint=None, timeout_ms=80)
+    win._pool_cache[300] = data300
+    win._pool_cache[1000] = data1000
+    win.show()
+    app.processEvents()
+    win.algo_buttons["kmedoids"].click()
+    _wait_idle(win)
+    assert win.data.algorithm == "kmedoids"
+    assert win.algo_buttons["kmedoids"].isChecked()
+
+    real = ui.compute_cluster_payload
+
+    def slow_cluster(*args, **kwargs):
+        time.sleep(0.4)
+        return real(*args, **kwargs)
+
+    monkeypatch.setattr(ui, "compute_cluster_payload", slow_cluster)
+    win.pool_buttons[1000].click()
+    _wait_idle(win, timeout_ms=2000)
+    assert len(win.data) == 300
+    assert win.pool_buttons[300].isChecked()
+    assert not win.pool_buttons[1000].isChecked()
+    assert win.data.algorithm == "kmedoids"
+    assert win.algo_buttons["kmedoids"].isChecked()
     win.close()

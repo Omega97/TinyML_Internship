@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from pathlib import Path
 from typing import Any, Iterable, Sequence
 
@@ -51,6 +51,25 @@ CLUSTER_ALGO_LABELS: dict[str, str] = {
     "kmedoids": "k-Medoids",
     "dbscan": "DBSCAN",
 }
+DEFAULT_DBSCAN_EPSILON = 0.3
+
+
+def quantize_dbscan_epsilon(value: float | None = None) -> float:
+    """Snap DBSCAN ε to ``{0.1, 0.2, …, 0.9}``."""
+    if value is None:
+        return DEFAULT_DBSCAN_EPSILON
+    try:
+        raw = float(value)
+    except (TypeError, ValueError):
+        return DEFAULT_DBSCAN_EPSILON
+    if not np.isfinite(raw):
+        return DEFAULT_DBSCAN_EPSILON
+    stepped = round(raw * 10.0) / 10.0
+    if stepped < 0.1:
+        return 0.1
+    if stepped > 0.9:
+        return 0.9
+    return stepped
 
 
 def cluster_color(cluster_id: int, n_clusters: int | None = None) -> str:
@@ -118,10 +137,12 @@ class ExplorerData:
     requested_clusters: int = 0
     method: str = "pca"
     algorithm: str = "kmeans"
+    dbscan_epsilon: float = DEFAULT_DBSCAN_EPSILON
     source: str = ""
     n_source_rows: int = 0
     diagnostics: dict[str, Any] = field(default_factory=dict)
     projection_cache: dict[str, np.ndarray] = field(default_factory=dict)
+    cluster_cache: dict[str, tuple[np.ndarray, dict[str, Any]]] = field(default_factory=dict)
 
     def __post_init__(self) -> None:
         n = int(self.sample_id.shape[0])
@@ -140,6 +161,21 @@ class ExplorerData:
             self.n_source_rows = n
         if self.requested_clusters <= 0 and self.cluster_id.size:
             self.requested_clusters = int(self.cluster_id.max()) + 1
+        self.dbscan_epsilon = quantize_dbscan_epsilon(self.dbscan_epsilon)
+        self._seed_cluster_cache()
+
+    def _seed_cluster_cache(self) -> None:
+        if not self.cluster_id.size or self.cluster_cache:
+            return
+        try:
+            algo = normalize_cluster_algorithm(self.algorithm)
+        except ValueError:
+            algo = "kmeans"
+        key = cluster_cache_key(algo, int(self.n_clusters), dbscan_epsilon=self.dbscan_epsilon)
+        self.cluster_cache[key] = (
+            np.ascontiguousarray(self.cluster_id, dtype=np.int16),
+            dict(self.diagnostics),
+        )
 
     def __len__(self) -> int:
         return int(self.sample_id.shape[0])
@@ -439,6 +475,18 @@ def normalize_cluster_algorithm(name: str) -> str:
     return aliases[key]
 
 
+def cluster_cache_key(
+    algorithm: str,
+    n_clusters: int,
+    dbscan_epsilon: float | None = None,
+) -> str:
+    """Cache key for a clustering result. DBSCAN is keyed by ε, not B."""
+    algo = normalize_cluster_algorithm(algorithm)
+    if algo == "dbscan":
+        return f"dbscan:{quantize_dbscan_epsilon(dbscan_epsilon):.1f}"
+    return f"{algo}:{int(n_clusters)}"
+
+
 def _label_diagnostics(labels: np.ndarray, n_clusters: int, *, inertia: float | None = None) -> dict[str, Any]:
     labels = np.asarray(labels)
     noise = int(np.sum(labels < 0))
@@ -500,16 +548,21 @@ def _dbscan_cluster_count(labels: np.ndarray) -> int:
     return int(pos.max()) + 1 if pos.size else 0
 
 
-def _fit_dbscan(x: np.ndarray, seed: int) -> tuple[np.ndarray, dict[str, Any]]:
-    """Tighter ε and larger min_samples than the old 85th-percentile rule.
+def _fit_dbscan(
+    x: np.ndarray,
+    seed: int,
+    epsilon: float = DEFAULT_DBSCAN_EPSILON,
+) -> tuple[np.ndarray, dict[str, Any]]:
+    """DBSCAN with ε as a quantile of 8-NN distances.
 
-    Default ε is the 30th percentile of 8-NN distances (was 85th). min_samples
-    scales with n and is much higher than before. If that does not yield 3–6
-    clusters, ε is searched over lower/higher percentiles.
+    ``epsilon`` is in (0, 1) and the UI steps it by 0.1. sklearn's distance
+    threshold is that percentile of 8-NN distances. ``min_samples`` still
+    scales with n. ``seed`` is unused (sklearn DBSCAN is deterministic here).
     """
     from sklearn.cluster import DBSCAN
     from sklearn.neighbors import NearestNeighbors
 
+    del seed
     x = np.ascontiguousarray(x, dtype=np.float32)
     n = int(x.shape[0])
     n_neighbors = min(8, max(2, n - 1))
@@ -517,52 +570,35 @@ def _fit_dbscan(x: np.ndarray, seed: int) -> tuple[np.ndarray, dict[str, Any]]:
     kth = dists[:, -1]
     min_samples = max(25, min(80, n // 120))
     min_samples = min(min_samples, max(5, n // 8))
-
-    def _run(percentile: float) -> tuple[np.ndarray, int, float]:
-        eps = max(float(np.percentile(kth, percentile)), 1e-5)
-        labels = DBSCAN(eps=eps, min_samples=min_samples, n_jobs=-1).fit_predict(x)
-        return labels.astype(np.int16, copy=False), _dbscan_cluster_count(labels), eps
-
-    def _score(n_clusters: int) -> float:
-        if 3 <= n_clusters <= 6:
-            return 0.0
-        if n_clusters <= 0:
-            return 100.0
-        return abs(n_clusters - 4.5)
-
-    labels, n_clusters, eps = _run(30.0)
-    best = (_score(n_clusters), labels, n_clusters, eps, 30.0)
-    if best[0] != 0.0:
-        for percentile in (12, 16, 20, 24, 28, 32, 36, 42, 48, 55, 65):
-            lab, k, e = _run(float(percentile))
-            scored = (_score(k), lab, k, e, float(percentile))
-            if scored[0] < best[0]:
-                best = scored
-            if scored[0] == 0.0:
-                break
-    _score_v, labels, n_clusters, eps, percentile = best
+    epsilon = quantize_dbscan_epsilon(epsilon)
+    percentile = 100.0 * epsilon
+    eps = max(float(np.percentile(kth, percentile)), 1e-5)
+    labels = DBSCAN(eps=eps, min_samples=min_samples, n_jobs=-1).fit_predict(x)
     meta = {
         "dbscan_eps": float(eps),
+        "dbscan_epsilon": float(epsilon),
         "dbscan_min_samples": int(min_samples),
         "dbscan_percentile": float(percentile),
     }
-    return labels, meta
+    return labels.astype(np.int16, copy=False), meta
 
 
-def recluster(
-    data: ExplorerData,
-    n_clusters: int,
+def compute_cluster_payload(
+    features: np.ndarray,
     *,
-    seed: int | None = None,
-    algorithm: str | None = None,
-) -> ExplorerData:
-    """Fit the chosen algorithm in place. Scatter coordinates are unchanged."""
+    algorithm: str,
+    n_clusters: int,
+    seed: int,
+    dbscan_epsilon: float | None = None,
+) -> tuple[np.ndarray, dict[str, Any], int, str]:
+    """Fit labels without touching ``ExplorerData``. Returns labels, diag, k, algo."""
     from tinymlinternship.nnue.cluster import fit_minibatch_kmeans
 
-    x = clustering_features(data)
-    algo = normalize_cluster_algorithm(algorithm or data.algorithm or "kmeans")
-    rng_seed = int(data.cluster_seed if seed is None else seed)
+    x = np.ascontiguousarray(features, dtype=np.float32)
+    algo = normalize_cluster_algorithm(algorithm)
+    rng_seed = int(seed)
     k = int(n_clusters)
+    epsilon = quantize_dbscan_epsilon(dbscan_epsilon)
     if algo != "dbscan":
         if k < 2:
             raise ValueError(f"n_clusters must be >= 2, got {k}")
@@ -583,20 +619,87 @@ def recluster(
         inertia = float(np.linalg.norm(x - x[medoids[labels]], axis=1).sum())
         diag = _label_diagnostics(labels, k, inertia=inertia)
     else:
-        labels, db_meta = _fit_dbscan(x, rng_seed)
-        pos = labels[labels >= 0]
-        k_found = int(pos.max()) + 1 if pos.size else 0
+        labels, db_meta = _fit_dbscan(x, rng_seed, epsilon=epsilon)
+        k_found = _dbscan_cluster_count(labels)
         diag = _label_diagnostics(labels, k_found)
         diag.update(db_meta)
         k = k_found
+    return labels, diag, int(k), algo
 
-    data.cluster_id = labels
-    data.algorithm = algo
-    data.requested_clusters = int(k)
-    data.cluster_seed = rng_seed
-    data.diagnostics.update(diag)
-    data.diagnostics["algorithm"] = algo
+
+def _apply_cluster(
+    data: ExplorerData,
+    labels: np.ndarray,
+    *,
+    algorithm: str,
+    n_clusters: int,
+    diagnostics: dict[str, Any],
+    seed: int,
+) -> None:
+    data.cluster_id = np.ascontiguousarray(labels, dtype=np.int16)
+    data.algorithm = normalize_cluster_algorithm(algorithm)
+    data.requested_clusters = int(n_clusters)
+    data.cluster_seed = int(seed)
+    data.diagnostics.update(diagnostics)
+    data.diagnostics["algorithm"] = data.algorithm
     data.diagnostics["clustered_on"] = "gradients" if data.features is not None else "projection"
+    if data.algorithm == "dbscan":
+        data.dbscan_epsilon = quantize_dbscan_epsilon(
+            diagnostics.get("dbscan_epsilon", data.dbscan_epsilon)
+        )
+
+
+def recluster(
+    data: ExplorerData,
+    n_clusters: int,
+    *,
+    seed: int | None = None,
+    algorithm: str | None = None,
+    dbscan_epsilon: float | None = None,
+) -> ExplorerData:
+    """Fit the chosen algorithm in place. Scatter coordinates are unchanged."""
+    algo = normalize_cluster_algorithm(algorithm or data.algorithm or "kmeans")
+    rng_seed = int(data.cluster_seed if seed is None else seed)
+    k = int(n_clusters)
+    epsilon = quantize_dbscan_epsilon(
+        data.dbscan_epsilon if dbscan_epsilon is None else dbscan_epsilon
+    )
+    key = cluster_cache_key(algo, k, dbscan_epsilon=epsilon)
+    cached = data.cluster_cache.get(key)
+    if cached is not None:
+        labels, diag = cached
+        labels = np.asarray(labels)
+        if int(labels.shape[0]) == len(data):
+            k_apply = int(diag.get("n_clusters", k)) if algo == "dbscan" else k
+            _apply_cluster(
+                data,
+                labels,
+                algorithm=algo,
+                n_clusters=k_apply,
+                diagnostics=dict(diag),
+                seed=rng_seed,
+            )
+            return data
+
+    labels, diag, k_out, algo = compute_cluster_payload(
+        clustering_features(data),
+        algorithm=algo,
+        n_clusters=k,
+        seed=rng_seed,
+        dbscan_epsilon=epsilon,
+    )
+    data.cluster_cache[key] = (
+        np.ascontiguousarray(labels, dtype=np.int16),
+        dict(diag),
+    )
+    _apply_cluster(
+        data,
+        labels,
+        algorithm=algo,
+        n_clusters=k_out,
+        diagnostics=diag,
+        seed=rng_seed,
+    )
     return data
 
 
@@ -866,6 +969,7 @@ def load_work_dir(
     n_components: int = 2,
     n_clusters: int | None = 4,
     algorithm: str = "kmeans",
+    dbscan_epsilon: float | None = None,
 ) -> ExplorerData:
     import json
 
@@ -940,6 +1044,7 @@ def load_work_dir(
             int(n_clusters),
             seed=int(seed),
             algorithm=algorithm,
+            dbscan_epsilon=dbscan_epsilon,
         )
     return data
 
@@ -1013,12 +1118,16 @@ def reload_pool(
     n_clusters: int | None = None,
     algorithm: str | None = None,
     n_components: int = 2,
+    dbscan_epsilon: float | None = None,
 ) -> ExplorerData:
     """Rebuild the working set to ``n_points`` (reprojects and re-clusters)."""
     method = method or data.method
     algorithm = algorithm or data.algorithm
     seed = int(data.cluster_seed)
     k = int(n_clusters if n_clusters is not None else max(int(data.requested_clusters or 2), 2))
+    epsilon = quantize_dbscan_epsilon(
+        data.dbscan_epsilon if dbscan_epsilon is None else dbscan_epsilon
+    )
     n_points = max(int(n_points), 2)
     n_comp = max(2, int(n_components))
     if str(data.source) == "demo":
@@ -1029,7 +1138,7 @@ def reload_pool(
                 reproject(new, method, seed=seed, n_components=n_comp)
         except ValueError:
             pass
-        recluster(new, k, seed=seed, algorithm=algorithm)
+        recluster(new, k, seed=seed, algorithm=algorithm, dbscan_epsilon=epsilon)
         return new
     path = Path(data.source)
     if (path / "gradients.npy").is_file():
@@ -1041,15 +1150,22 @@ def reload_pool(
             n_clusters=k,
             algorithm=algorithm,
             n_components=n_comp,
+            dbscan_epsilon=epsilon,
         )
     take = min(n_points, len(data))
     if take >= len(data) and take <= n_points:
+        new = replace(
+            data,
+            projection_cache=dict(data.projection_cache),
+            cluster_cache=dict(data.cluster_cache),
+            diagnostics=dict(data.diagnostics),
+        )
         try:
-            reproject(data, method, seed=seed, n_components=n_comp)
+            reproject(new, method, seed=seed, n_components=n_comp)
         except ValueError:
             pass
-        recluster(data, k, seed=seed, algorithm=algorithm)
-        return data
+        recluster(new, k, seed=seed, algorithm=algorithm, dbscan_epsilon=epsilon)
+        return new
     rng = np.random.RandomState(seed)
     idx = np.sort(rng.choice(len(data), size=take, replace=False))
 
@@ -1076,6 +1192,7 @@ def reload_pool(
         requested_clusters=k,
         method=data.method,
         algorithm=data.algorithm,
+        dbscan_epsilon=epsilon,
         source=data.source,
         n_source_rows=data.n_source_rows,
     )
@@ -1084,7 +1201,7 @@ def reload_pool(
         reproject(new, method, seed=seed, n_components=n_comp)
     except ValueError:
         pass
-    recluster(new, k, seed=seed, algorithm=algorithm)
+    recluster(new, k, seed=seed, algorithm=algorithm, dbscan_epsilon=epsilon)
     return new
 
 

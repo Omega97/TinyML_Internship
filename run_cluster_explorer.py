@@ -21,12 +21,14 @@ In the window:
     (the slider only hides points; it does not re-cluster)
   * **Projection** toggles PCA / t-SNE / UMAP / Isomap / LLE and recomputes
     the layout (cluster colors stay; t-SNE/UMAP/Isomap/LLE can take a bit)
-  * the **Clusters** spin box is B for k-Means / k-Medoids (default 4)
+  * the **Clusters** spin box is B for k-Means / k-Medoids (default 4);
+    DBSCAN replaces it with **ε** in (0, 1), step 0.1 (default 0.3)
   * left-click a point to pin its chess board (no pin cap) plus the
     sample's NNUE gradient graph (blue +, red −, fade near 0)
   * click the same point again, or the card ×, to unpin
   * drag to pan (2D) or orbit around the origin (3D); scroll to zoom
-  * cluster checkboxes filter the scatter
+  * **Wait** (bottom, default 10s): if a compute runs longer, revert to the
+    previous setting
   * **Light mode** (off by default): pure white plot, black text, light-gray
     grid — cluster colors and chess pieces stay the same
   * **3D view** (off by default): recomputes the embedding in 3D; drag orbits

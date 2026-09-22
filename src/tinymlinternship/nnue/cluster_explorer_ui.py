@@ -2,19 +2,24 @@
 
 from __future__ import annotations
 
-from dataclasses import dataclass
+import threading
+from collections.abc import Callable
+from dataclasses import dataclass, field
 from math import hypot
 from pathlib import Path
+from typing import Any
 
 import numpy as np
 import pyqtgraph as pg
-from PyQt6.QtCore import QByteArray, QEvent, QPointF, QRect, QSize, Qt, QTimer, pyqtSignal
+from PyQt6.QtCore import QByteArray, QEvent, QObject, QPointF, QRect, QSize, Qt, QTimer, pyqtSignal
 from PyQt6.QtGui import QColor, QFont, QImage, QPainter, QPalette, QPen, QPixmap
 from PyQt6.QtSvgWidgets import QSvgWidget
 from PyQt6.QtWidgets import (
+    QAbstractSpinBox,
     QApplication,
     QButtonGroup,
     QCheckBox,
+    QDoubleSpinBox,
     QFrame,
     QHBoxLayout,
     QLabel,
@@ -40,9 +45,15 @@ from tinymlinternship.nnue.cluster_explore import (
     ModelPredictor,
     PositionInfo,
     SelectionModel,
+    cluster_cache_key,
     cluster_color,
+    clustering_features,
+    compute_cluster_payload,
     normalize_cluster_algorithm,
+    quantize_dbscan_epsilon,
     normalize_projection_method,
+    project_gradients,
+    projection_cache_key,
     projection_label,
     recluster,
     reload_pool,
@@ -70,6 +81,25 @@ GRAD_GRAPH_PAD = 7
 ORBIT_DRAG_PX = 5.0
 ORBIT_DEG_PER_PX = 0.4
 ORBIT_ELEV_MAX = 85.0
+COMPUTE_TIMEOUT_MS = 10_000
+
+
+class _ComputeRelay(QObject):
+    """Move worker results onto the GUI thread."""
+
+    finished = pyqtSignal(int, object)
+    failed = pyqtSignal(int, str)
+
+
+@dataclass
+class _PendingJob:
+    gen: int
+    label: str
+    previous: str
+    stash: Callable[[Any], None]
+    on_ok: Callable[[Any], None]
+    revert: Callable[[], None]
+    timer: QTimer = field(repr=False)
 
 
 @dataclass(frozen=True)
@@ -167,15 +197,47 @@ def _window_stylesheet(theme: ExplorerTheme) -> str:
         QScrollArea {{ border: none; background: {t.panel_bg}; }}
         QLabel, QCheckBox {{ background: transparent; color: {t.text}; }}
         QWidget#chromeHost {{ background: transparent; }}
-        QLineEdit, QSpinBox, QComboBox, QAbstractSpinBox {{
+        QLineEdit, QComboBox, QAbstractSpinBox {{
             background: {t.panel_bg}; color: {t.text}; border: 1px solid {t.border};
             border-radius: 4px; padding: 3px 6px;
+        }}
+        QSpinBox, QDoubleSpinBox {{
+            background: {t.panel_bg}; color: {t.text}; border: 1px solid {t.border};
+            border-radius: 4px; padding: 3px 18px 3px 6px; min-width: 3.2em;
         }}
         QAbstractSpinBox QLineEdit {{
             background: {t.panel_bg}; color: {t.text}; border: none;
         }}
-        QSpinBox::up-button, QSpinBox::down-button {{
-            background: {t.panel_bg}; border: none;
+        QSpinBox::up-button, QSpinBox::down-button,
+        QDoubleSpinBox::up-button, QDoubleSpinBox::down-button {{
+            subcontrol-origin: border;
+            width: 16px;
+            background: {t.button_bg};
+            border-left: 1px solid {t.border};
+        }}
+        QSpinBox::up-button, QDoubleSpinBox::up-button {{
+            subcontrol-position: top right;
+            border-top-right-radius: 3px;
+        }}
+        QSpinBox::down-button, QDoubleSpinBox::down-button {{
+            subcontrol-position: bottom right;
+            border-bottom-right-radius: 3px;
+        }}
+        QSpinBox::up-button:hover, QSpinBox::down-button:hover,
+        QDoubleSpinBox::up-button:hover, QDoubleSpinBox::down-button:hover {{
+            background: {t.button_hover};
+        }}
+        QSpinBox::up-arrow, QDoubleSpinBox::up-arrow {{
+            width: 0; height: 0; background: transparent;
+            border-left: 4px solid transparent;
+            border-right: 4px solid transparent;
+            border-bottom: 5px solid {t.text};
+        }}
+        QSpinBox::down-arrow, QDoubleSpinBox::down-arrow {{
+            width: 0; height: 0; background: transparent;
+            border-left: 4px solid transparent;
+            border-right: 4px solid transparent;
+            border-top: 5px solid {t.text};
         }}
         QPushButton {{
             background: {t.button_bg}; color: {t.text}; border: 1px solid {t.border};
@@ -207,7 +269,7 @@ def _window_stylesheet(theme: ExplorerTheme) -> str:
         QFrame#topBar {{
             background: {t.panel_bg}; border-bottom: 1px solid {t.bar_edge};
         }}
-        QFrame#bottomBar {{
+        QFrame#bottomBar, QFrame#waitBar {{
             background: {t.panel_bg}; border-top: 1px solid {t.bar_edge};
         }}
         QWidget#inspector {{ background: {t.panel_bg}; }}
@@ -574,6 +636,7 @@ class ClusterExplorerWindow(QMainWindow):
         data: ExplorerData,
         *,
         checkpoint: Path | None = None,
+        timeout_ms: int | None = None,
     ) -> None:
         super().__init__()
         self.data = data
@@ -585,6 +648,15 @@ class ClusterExplorerWindow(QMainWindow):
         self.cards: dict[int, BoardCard] = {}
         self._hover_idx: int | None = None
         self._pool_n = min(POOL_SIZES, key=lambda size: abs(size - len(data)))
+        self._pool_cache: dict[int, ExplorerData] = {int(self._pool_n): data}
+        self._timeout_ms = COMPUTE_TIMEOUT_MS if timeout_ms is None else max(1, int(timeout_ms))
+        self._job_gen = 0
+        self._compute_busy = False
+        self._alive = True
+        self._jobs: dict[int, _PendingJob] = {}
+        self._relay = _ComputeRelay(self)
+        self._relay.finished.connect(self._on_compute_finished)
+        self._relay.failed.connect(self._on_compute_failed)
         self._view3d = False
         self._azimuth = 45.0
         self._elevation = 25.0
@@ -639,18 +711,8 @@ class ClusterExplorerWindow(QMainWindow):
         inspector_host.setObjectName("inspector")
         self.inspector_host = inspector_host
         inspector_layout = QVBoxLayout(inspector_host)
-        inspector_layout.setContentsMargins(10, 10, 10, 10)
-        inspector_layout.setSpacing(8)
-        title = QLabel("Side inspector")
-        title.setFont(QFont("Sans Serif", 11, QFont.Weight.DemiBold))
-        inspector_layout.addWidget(title)
-        hint = QLabel(
-            "Click a point to pin a board. Hover the board for FEN and eval. "
-            "The graph is that sample's NNUE gradient (blue +, red −)."
-        )
-        hint.setObjectName("mutedHint")
-        hint.setWordWrap(True)
-        inspector_layout.addWidget(hint)
+        inspector_layout.setContentsMargins(8, 4, 8, 8)
+        inspector_layout.setSpacing(6)
         self.empty_label = QLabel("No positions selected.")
         self.empty_label.setObjectName("emptyLabel")
         inspector_layout.addWidget(self.empty_label)
@@ -676,6 +738,7 @@ class ClusterExplorerWindow(QMainWindow):
         root.addWidget(self._build_top_bar())
         root.addWidget(self.body, 1)
         root.addWidget(self._build_controls())
+        root.addWidget(self._build_wait_bar())
 
         self.overlay = LinkOverlay(self.body, self)
         self.overlay.setGeometry(self.body.rect())
@@ -824,25 +887,33 @@ class ClusterExplorerWindow(QMainWindow):
         self.proj_group.buttonToggled.connect(self._on_projection_toggled)
 
         layout.addSpacing(8)
-        layout.addWidget(QLabel("Clusters"))
+        self.cluster_param_label = QLabel("Clusters")
+        layout.addWidget(self.cluster_param_label)
         self.k_spin = QSpinBox()
         self.k_spin.setRange(2, 32)
         self.k_spin.setValue(max(2, int(self.data.n_clusters) or 4))
         self.k_spin.setAutoFillBackground(True)
+        self.k_spin.setButtonSymbols(QAbstractSpinBox.ButtonSymbols.UpDownArrows)
+        self.k_spin.setFixedWidth(72)
         self.k_spin.setToolTip("Number of clusters (B). Used by k-Means and k-Medoids.")
         self.k_spin.valueChanged.connect(self._on_n_clusters_changed)
         layout.addWidget(self.k_spin)
-
-        self.cluster_box_host = QWidget()
-        self.cluster_box_host.setObjectName("chromeHost")
-        self.cluster_box_host.setAttribute(Qt.WidgetAttribute.WA_StyledBackground, True)
-        self.cluster_box_layout = QHBoxLayout(self.cluster_box_host)
-        self.cluster_box_layout.setContentsMargins(0, 0, 0, 0)
-        self.cluster_box_layout.setSpacing(6)
-        self.cluster_boxes: list[QCheckBox] = []
-        layout.addWidget(self.cluster_box_host)
-        self._rebuild_cluster_boxes()
-        self._sync_k_spin()
+        self.eps_spin = QDoubleSpinBox()
+        self.eps_spin.setRange(0.1, 0.9)
+        self.eps_spin.setSingleStep(0.1)
+        self.eps_spin.setDecimals(1)
+        self.eps_spin.setValue(quantize_dbscan_epsilon(self.data.dbscan_epsilon))
+        self.eps_spin.setAutoFillBackground(True)
+        self.eps_spin.setButtonSymbols(QAbstractSpinBox.ButtonSymbols.UpDownArrows)
+        self.eps_spin.setKeyboardTracking(False)
+        self.eps_spin.setFixedWidth(72)
+        self.eps_spin.setToolTip(
+            "DBSCAN ε in (0, 1), step 0.1. Neighborhood radius as a quantile "
+            "of 8-NN distances. Smaller → tighter clusters."
+        )
+        self.eps_spin.valueChanged.connect(self._on_eps_changed)
+        layout.addWidget(self.eps_spin)
+        self._sync_cluster_param_controls()
 
         layout.addSpacing(8)
         self.clear_btn = QPushButton("Clear")
@@ -855,6 +926,314 @@ class ClusterExplorerWindow(QMainWindow):
         layout.addWidget(self.status)
         return bar
 
+    def _build_wait_bar(self) -> QWidget:
+        bar = QFrame()
+        bar.setObjectName("waitBar")
+        bar.setFixedHeight(40)
+        layout = QHBoxLayout(bar)
+        layout.setContentsMargins(12, 4, 12, 4)
+        layout.setSpacing(8)
+        layout.addWidget(QLabel("Wait"))
+        self.wait_spin = QSpinBox()
+        self.wait_spin.setRange(1, 120)
+        self.wait_spin.setSuffix(" s")
+        self.wait_spin.setButtonSymbols(QAbstractSpinBox.ButtonSymbols.UpDownArrows)
+        self.wait_spin.setFixedWidth(88)
+        self.wait_spin.setAutoFillBackground(True)
+        self.wait_spin.setValue(max(1, int(round(self._timeout_ms / 1000.0))))
+        self.wait_spin.setToolTip(
+            "Seconds before a heavy compute reverts to the previous setting."
+        )
+        self.wait_spin.valueChanged.connect(self._on_wait_changed)
+        layout.addWidget(self.wait_spin)
+        layout.addStretch(1)
+        return bar
+
+    def _on_wait_changed(self, seconds: int) -> None:
+        self._timeout_ms = max(1, int(seconds) * 1000)
+
+    def _begin_busy(self, message: str) -> None:
+        if not self._compute_busy:
+            QApplication.setOverrideCursor(Qt.CursorShape.WaitCursor)
+            self._compute_busy = True
+        self.status.setText(message)
+
+    def _end_busy(self) -> None:
+        if self._compute_busy:
+            QApplication.restoreOverrideCursor()
+            self._compute_busy = False
+
+    def _pool_snapshot(self, pool_n: int | None = None) -> ExplorerData | None:
+        n = int(self._pool_n if pool_n is None else pool_n)
+        if n == int(self._pool_n):
+            self._pool_cache[n] = self.data
+            return self.data
+        return self._pool_cache.get(n)
+
+    def _stash_projection(self, pool_n: int, method: str, n_components: int, coords: np.ndarray) -> None:
+        target = self._pool_snapshot(pool_n)
+        if target is None:
+            return
+        key = projection_cache_key(method, n_components)
+        target.projection_cache[key] = np.ascontiguousarray(coords, dtype=np.float32)
+
+    def _stash_cluster(
+        self,
+        pool_n: int,
+        key: str,
+        labels: np.ndarray,
+        diagnostics: dict[str, Any],
+    ) -> None:
+        target = self._pool_snapshot(pool_n)
+        if target is None:
+            return
+        target.cluster_cache[key] = (
+            np.ascontiguousarray(labels, dtype=np.int16),
+            dict(diagnostics),
+        )
+
+    def _toolbar_method(self) -> str:
+        if hasattr(self, "proj_buttons"):
+            for key, btn in self.proj_buttons.items():
+                if btn.isChecked():
+                    try:
+                        return normalize_projection_method(key)
+                    except ValueError:
+                        break
+        try:
+            return normalize_projection_method(self.data.method)
+        except ValueError:
+            return "pca"
+
+    def _toolbar_n_components(self) -> int:
+        if hasattr(self, "view3d") and self.view3d.isChecked():
+            return 3
+        return 3 if self._view3d else 2
+
+    def _projection_cached(
+        self,
+        method: str,
+        n_components: int,
+        data: ExplorerData | None = None,
+    ) -> bool:
+        target = self.data if data is None else data
+        key = projection_cache_key(method, n_components)
+        cached = target.projection_cache.get(key)
+        if cached is None and int(n_components) == 2:
+            cached = target.projection_cache.get(method)
+        if cached is None:
+            return False
+        arr = np.asarray(cached)
+        return arr.ndim == 2 and int(arr.shape[0]) == len(target) and int(arr.shape[1]) == int(
+            n_components
+        )
+
+    def _toolbar_algorithm(self) -> str:
+        if hasattr(self, "algo_buttons"):
+            for key, btn in self.algo_buttons.items():
+                if btn.isChecked():
+                    try:
+                        return normalize_cluster_algorithm(key)
+                    except ValueError:
+                        break
+        try:
+            return normalize_cluster_algorithm(self.data.algorithm)
+        except ValueError:
+            return "kmeans"
+
+    def _toolbar_k(self) -> int:
+        if hasattr(self, "k_spin"):
+            return max(2, int(self.k_spin.value()))
+        return max(2, int(self.data.n_clusters or 2))
+
+    def _toolbar_eps(self) -> float:
+        if hasattr(self, "eps_spin"):
+            return quantize_dbscan_epsilon(self.eps_spin.value())
+        return quantize_dbscan_epsilon(self.data.dbscan_epsilon)
+
+    def _cluster_cached(
+        self,
+        algorithm: str,
+        n_clusters: int,
+        data: ExplorerData | None = None,
+        dbscan_epsilon: float | None = None,
+    ) -> bool:
+        target = self.data if data is None else data
+        eps = self._toolbar_eps() if dbscan_epsilon is None else dbscan_epsilon
+        key = cluster_cache_key(algorithm, n_clusters, dbscan_epsilon=eps)
+        cached = target.cluster_cache.get(key)
+        if cached is None:
+            return False
+        labels = np.asarray(cached[0])
+        return int(labels.shape[0]) == len(target)
+
+    def _abandon_in_flight(self) -> None:
+        """Drop the current UI job (keep the worker for cache fill)."""
+        job = self._jobs.get(self._job_gen)
+        if job is not None:
+            job.timer.stop()
+            try:
+                job.revert()
+            except Exception:
+                pass
+        self._job_gen += 1
+        self._end_busy()
+
+    def _run_compute(
+        self,
+        fn: Callable[[], Any],
+        *,
+        label: str,
+        previous: str,
+        stash: Callable[[Any], None],
+        on_ok: Callable[[Any], None],
+        revert: Callable[[], None],
+    ) -> None:
+        self._abandon_in_flight()
+        gen = self._job_gen
+        timer = QTimer(self)
+        timer.setSingleShot(True)
+        job = _PendingJob(
+            gen=gen,
+            label=label,
+            previous=previous,
+            stash=stash,
+            on_ok=on_ok,
+            revert=revert,
+            timer=timer,
+        )
+        self._jobs[gen] = job
+        duration = (
+            f"{self._timeout_ms // 1000}s"
+            if self._timeout_ms >= 1000
+            else f"{self._timeout_ms}ms"
+        )
+        self._begin_busy(f"computing {label}…")
+
+        def on_timeout() -> None:
+            if gen != self._job_gen:
+                return
+            self._abandon_in_flight()
+            self.status.setText(f"{label} timed out after {duration}; stayed on {previous}")
+
+        timer.timeout.connect(on_timeout)
+        timer.start(self._timeout_ms)
+
+        def work() -> None:
+            try:
+                result = fn()
+            except Exception as exc:  # noqa: BLE001
+                self._emit_job(gen, err=str(exc))
+                return
+            self._emit_job(gen, result=result)
+
+        threading.Thread(target=work, daemon=True).start()
+
+    def _emit_job(self, gen: int, result: object = None, err: str | None = None) -> None:
+        if not self._alive:
+            return
+        try:
+            if err is not None:
+                self._relay.failed.emit(gen, err)
+            else:
+                self._relay.finished.emit(gen, result)
+        except RuntimeError:
+            return
+
+    def closeEvent(self, event) -> None:  # noqa: ANN001
+        self._alive = False
+        self._job_gen += 1
+        self._end_busy()
+        super().closeEvent(event)
+
+    def _on_compute_finished(self, gen: int, result: object) -> None:
+        job = self._jobs.pop(gen, None)
+        if job is None:
+            return
+        job.timer.stop()
+        try:
+            job.stash(result)
+        except Exception as exc:  # noqa: BLE001
+            if gen == self._job_gen:
+                self._end_busy()
+                job.revert()
+                self.status.setText(f"{job.label} failed: {exc}")
+            return
+        if gen != self._job_gen:
+            return
+        self._end_busy()
+        job.on_ok(result)
+        self.status.setText("")
+
+    def _on_compute_failed(self, gen: int, message: str) -> None:
+        job = self._jobs.pop(gen, None)
+        if job is None:
+            return
+        job.timer.stop()
+        if gen != self._job_gen:
+            return
+        self._end_busy()
+        job.revert()
+        self.status.setText(f"{job.label} failed: {message}")
+
+    def _refresh_after_projection(self) -> None:
+        self._update_display_coords()
+        self._set_axis_labels()
+        self._rebuild_scatter()
+        if self._view3d:
+            self._fit_orbit_view()
+        else:
+            vb = self.plot.getViewBox()
+            vb.setAspectLocked(False)
+            vb.autoRange()
+        self._refresh_pinned_cards()
+        self._set_title()
+        QTimer.singleShot(0, self.overlay.update)
+
+    def _refresh_after_cluster(self) -> None:
+        self._sync_cluster_param_controls()
+        self._refresh_pinned_cards()
+        self._rebuild_scatter()
+        self._set_title()
+        QTimer.singleShot(0, self.overlay.update)
+
+    def _revert_projection(self, method: str) -> None:
+        fallback = method if method in self.proj_buttons else "pca"
+        self.proj_group.blockSignals(True)
+        self.proj_buttons[fallback].setChecked(True)
+        self.proj_group.blockSignals(False)
+
+    def _revert_view3d(self) -> None:
+        self.view3d.blockSignals(True)
+        self.view3d.setChecked(self._view3d)
+        self.view3d.blockSignals(False)
+
+    def _revert_pool(self, n_points: int) -> None:
+        fallback = int(n_points)
+        if fallback not in self.pool_buttons:
+            return
+        self.pool_group.blockSignals(True)
+        self.pool_buttons[fallback].setChecked(True)
+        self.pool_group.blockSignals(False)
+
+    def _revert_algorithm(self, algorithm: str) -> None:
+        fallback = algorithm if algorithm in self.algo_buttons else "kmeans"
+        self.algo_group.blockSignals(True)
+        self.algo_buttons[fallback].setChecked(True)
+        self.algo_group.blockSignals(False)
+
+    def _revert_k(self, k: int) -> None:
+        self.k_spin.blockSignals(True)
+        self.k_spin.setValue(max(2, int(k) or 2))
+        self.k_spin.blockSignals(False)
+
+    def _revert_eps(self, epsilon: float) -> None:
+        if not hasattr(self, "eps_spin"):
+            return
+        self.eps_spin.blockSignals(True)
+        self.eps_spin.setValue(quantize_dbscan_epsilon(epsilon))
+        self.eps_spin.blockSignals(False)
+
     def _on_light_mode(self, checked: bool) -> None:
         self.theme = LIGHT_THEME if checked else DARK_THEME
         self._apply_theme()
@@ -862,14 +1241,20 @@ class ClusterExplorerWindow(QMainWindow):
     def _apply_theme(self) -> None:
         t = self.theme
         self.setStyleSheet(_window_stylesheet(t))
-        if hasattr(self, "k_spin"):
-            pal = self.k_spin.palette()
-            fill = _qcolor(t.panel_bg)
+        fill = _qcolor(t.panel_bg)
+        for spin in (
+            getattr(self, "k_spin", None),
+            getattr(self, "eps_spin", None),
+            getattr(self, "wait_spin", None),
+        ):
+            if spin is None:
+                continue
+            pal = spin.palette()
             pal.setColor(QPalette.ColorRole.Base, fill)
             pal.setColor(QPalette.ColorRole.Button, fill)
             pal.setColor(QPalette.ColorRole.Window, fill)
             pal.setColor(QPalette.ColorRole.Text, _qcolor(t.text))
-            self.k_spin.setPalette(pal)
+            spin.setPalette(pal)
         pg.setConfigOption("background", t.window_bg)
         pg.setConfigOption("foreground", t.text)
         self.plot.setBackground(t.window_bg)
@@ -892,6 +1277,14 @@ class ClusterExplorerWindow(QMainWindow):
     def _n_components(self) -> int:
         return 3 if self._view3d else 2
 
+    def _apply_view3d(self, want: bool) -> None:
+        self._view3d = want
+        if want:
+            self._azimuth = 45.0
+            self._elevation = 25.0
+        self._sync_orbit_mouse()
+        self._refresh_after_projection()
+
     def _on_view3d(self, checked: bool) -> None:
         want = bool(checked)
         if want == self._view3d:
@@ -903,41 +1296,42 @@ class ClusterExplorerWindow(QMainWindow):
             method = "pca"
         label = projection_label(method)
         dim = "3D" if want else "2D"
-        self.status.setText(f"computing {label} {dim}…")
-        QApplication.setOverrideCursor(Qt.CursorShape.WaitCursor)
-        QApplication.processEvents()
-        try:
-            reproject(
-                self.data,
-                method,
-                seed=self.data.cluster_seed,
-                n_components=3 if want else 2,
-            )
-        except Exception as exc:
-            QApplication.restoreOverrideCursor()
-            self.status.setText(f"{label} {dim} failed: {exc}")
-            self.view3d.blockSignals(True)
-            self.view3d.setChecked(self._view3d)
-            self.view3d.blockSignals(False)
+        k = 3 if want else 2
+        previous = "3D" if self._view3d else "2D"
+        if self._projection_cached(method, k):
+            self._abandon_in_flight()
+            reproject(self.data, method, seed=self.data.cluster_seed, n_components=k)
+            self._apply_view3d(want)
             return
-        QApplication.restoreOverrideCursor()
-        self._view3d = want
-        if want:
-            self._azimuth = 45.0
-            self._elevation = 25.0
-        self._sync_orbit_mouse()
-        self._update_display_coords()
-        self._set_axis_labels()
-        self._rebuild_scatter()
-        if want:
-            self._fit_orbit_view()
-        else:
-            vb = self.plot.getViewBox()
-            vb.setAspectLocked(False)
-            vb.autoRange()
-        self._refresh_pinned_cards()
-        self._set_title()
-        QTimer.singleShot(0, self.overlay.update)
+
+        pool_n = int(self._pool_n)
+        data_ref = self.data
+        seed = int(self.data.cluster_seed)
+
+        def fn() -> np.ndarray:
+            return project_gradients(
+                clustering_features(data_ref),
+                method=method,
+                n_components=k,
+                seed=seed,
+            )
+
+        def stash(coords: object) -> None:
+            self._stash_projection(pool_n, method, k, np.asarray(coords))
+
+        def on_ok(coords: object) -> None:
+            if data_ref is self.data:
+                reproject(self.data, method, seed=seed, n_components=k)
+                self._apply_view3d(want)
+
+        self._run_compute(
+            fn,
+            label=f"{label} {dim}",
+            previous=previous,
+            stash=stash,
+            on_ok=on_ok,
+            revert=self._revert_view3d,
+        )
 
     def _sync_orbit_mouse(self) -> None:
         if self._view3d:
@@ -1071,51 +1465,16 @@ class ClusterExplorerWindow(QMainWindow):
     def _on_view_changed(self, *args) -> None:  # noqa: ANN002
         self.overlay.update()
 
-    def _visible_clusters(self) -> list[int]:
-        ids: list[int] = []
-        for box in self.cluster_boxes:
-            if not box.isChecked():
-                continue
-            raw = box.property("cluster_id")
-            ids.append(int(raw) if raw is not None else 0)
-        return ids
-
-    def _rebuild_cluster_boxes(self) -> None:
-        while self.cluster_box_layout.count():
-            item = self.cluster_box_layout.takeAt(0)
-            widget = item.widget()
-            if widget is not None:
-                widget.deleteLater()
-        self.cluster_boxes = []
-        ids = list(range(max(int(self.data.n_clusters), 0)))
-        if self.data.has_noise:
-            ids = [-1, *ids]
-        for cid in ids:
-            color = cluster_color(cid, self.data.n_clusters)
-            box = QCheckBox("noise" if cid < 0 else str(cid))
-            box.setChecked(True)
-            box.setProperty("cluster_id", int(cid))
-            box.setStyleSheet(
-                f"QCheckBox {{ color: {color}; font-weight: 600; }}"
-                f"QCheckBox::indicator {{ width: 13px; height: 13px; }}"
-            )
-            self.cluster_boxes.append(box)
-            self.cluster_box_layout.addWidget(box)
-            box.stateChanged.connect(self._rebuild_scatter)
-
-    def _sync_k_spin(self) -> None:
-        if not hasattr(self, "k_spin"):
-            return
-        algo = "kmeans"
-        try:
-            algo = normalize_cluster_algorithm(self.data.algorithm)
-        except ValueError:
-            pass
-        self.k_spin.setEnabled(algo != "dbscan")
-        if algo != "dbscan" and int(self.data.n_clusters) >= 2:
-            self.k_spin.blockSignals(True)
-            self.k_spin.setValue(int(self.data.n_clusters))
-            self.k_spin.blockSignals(False)
+    def _sync_cluster_param_controls(self) -> None:
+        dbscan = self._toolbar_algorithm() == "dbscan"
+        if hasattr(self, "cluster_param_label"):
+            self.cluster_param_label.setText("ε" if dbscan else "Clusters")
+        if hasattr(self, "k_spin"):
+            self.k_spin.setVisible(not dbscan)
+            self.k_spin.setEnabled(not dbscan)
+        if hasattr(self, "eps_spin"):
+            self.eps_spin.setVisible(dbscan)
+            self.eps_spin.setEnabled(dbscan)
 
     def _on_display_pct(self, value: int) -> None:
         self.display_label.setText(f"{int(value)}%")
@@ -1128,6 +1487,7 @@ class ClusterExplorerWindow(QMainWindow):
             algo = normalize_cluster_algorithm(str(button.property("algo") or ""))
         except ValueError:
             return
+        self._sync_cluster_param_controls()
         current = "kmeans"
         try:
             current = normalize_cluster_algorithm(self.data.algorithm)
@@ -1135,26 +1495,74 @@ class ClusterExplorerWindow(QMainWindow):
             pass
         if algo == current:
             return
-        k = max(2, int(self.k_spin.value()) if hasattr(self, "k_spin") else int(self.data.n_clusters or 2))
-        self.status.setText(f"clustering with {CLUSTER_ALGO_LABELS[algo]}…")
-        QApplication.setOverrideCursor(Qt.CursorShape.WaitCursor)
-        QApplication.processEvents()
-        try:
-            recluster(self.data, k, seed=self.data.cluster_seed, algorithm=algo)
-        except Exception as exc:
-            QApplication.restoreOverrideCursor()
-            self.status.setText(f"{CLUSTER_ALGO_LABELS[algo]} failed: {exc}")
-            self.algo_group.blockSignals(True)
-            self.algo_buttons[current].setChecked(True)
-            self.algo_group.blockSignals(False)
+        k = self._toolbar_k()
+        eps = self._toolbar_eps()
+        label = CLUSTER_ALGO_LABELS[algo]
+        if algo == "dbscan":
+            label = f"DBSCAN ε={eps:.1f}"
+        previous = CLUSTER_ALGO_LABELS.get(current, current)
+        if self._cluster_cached(algo, k, dbscan_epsilon=eps):
+            self._abandon_in_flight()
+            recluster(
+                self.data, k, seed=self.data.cluster_seed, algorithm=algo, dbscan_epsilon=eps
+            )
+            self._refresh_after_cluster()
             return
-        QApplication.restoreOverrideCursor()
-        self._sync_k_spin()
-        self._rebuild_cluster_boxes()
-        self._refresh_pinned_cards()
-        self._rebuild_scatter()
-        self._set_title()
-        QTimer.singleShot(0, self.overlay.update)
+        self._start_cluster_job(algo, k, dbscan_epsilon=eps, label=label, previous=previous)
+
+    def _start_cluster_job(
+        self,
+        algo: str,
+        k: int,
+        *,
+        label: str,
+        previous: str,
+        dbscan_epsilon: float | None = None,
+    ) -> None:
+        pool_n = int(self._pool_n)
+        data_ref = self.data
+        seed = int(self.data.cluster_seed)
+        eps = self._toolbar_eps() if dbscan_epsilon is None else quantize_dbscan_epsilon(dbscan_epsilon)
+        cache_key = cluster_cache_key(algo, k, dbscan_epsilon=eps)
+
+        def fn() -> tuple[np.ndarray, dict[str, Any], int, str]:
+            return compute_cluster_payload(
+                clustering_features(data_ref),
+                algorithm=algo,
+                n_clusters=k,
+                seed=seed,
+                dbscan_epsilon=eps,
+            )
+
+        def stash(payload: object) -> None:
+            labels, diag, _k_out, _algo = payload  # type: ignore[misc]
+            self._stash_cluster(pool_n, cache_key, labels, diag)
+
+        def on_ok(payload: object) -> None:
+            _labels, _diag, _k_out, fitted = payload  # type: ignore[misc]
+            if data_ref is self.data:
+                recluster(self.data, k, seed=seed, algorithm=fitted, dbscan_epsilon=eps)
+                self._refresh_after_cluster()
+
+        def revert() -> None:
+            try:
+                cur = normalize_cluster_algorithm(self.data.algorithm)
+            except ValueError:
+                cur = "kmeans"
+            self._revert_algorithm(cur)
+            if cur != "dbscan" and hasattr(self, "k_spin"):
+                self._revert_k(int(self.data.n_clusters or 2))
+            self._revert_eps(self.data.dbscan_epsilon)
+            self._sync_cluster_param_controls()
+
+        self._run_compute(
+            fn,
+            label=label,
+            previous=previous,
+            stash=stash,
+            on_ok=on_ok,
+            revert=revert,
+        )
 
     def _on_pool_toggled(self, button: QPushButton, checked: bool) -> None:
         if not checked:
@@ -1167,43 +1575,154 @@ class ClusterExplorerWindow(QMainWindow):
             already = n_points == len(self.data)
         else:
             already = len(self.data) == min(n_points, source_n)
+        self._pool_cache[int(self._pool_n)] = self.data
         if already:
             self._pool_n = n_points
+            self._pool_cache[n_points] = self.data
             return
-        self.status.setText(f"loading {n_points:,} points…")
-        QApplication.setOverrideCursor(Qt.CursorShape.WaitCursor)
-        QApplication.processEvents()
-        try:
+        previous_n = int(self._pool_n)
+        previous = f"{previous_n:,} pts"
+        cached = self._pool_cache.get(n_points)
+        if cached is not None and cached is not self.data:
+            self._activate_pool(cached, n_points, previous_n)
+            return
+
+        pool_template = self.data
+        algo = self._toolbar_algorithm()
+        n_clusters = self._toolbar_k()
+        eps = self._toolbar_eps()
+        method = self._toolbar_method()
+        n_comp = self._toolbar_n_components()
+        seed = int(self.data.cluster_seed)
+        label = projection_label(method)
+        dim = "3D" if n_comp >= 3 else "2D"
+
+        def fn() -> ExplorerData:
             new = reload_pool(
-                self.data,
+                pool_template,
                 n_points,
-                method=self.data.method,
-                n_clusters=max(2, int(self.k_spin.value()) if hasattr(self, "k_spin") else 4),
-                algorithm=self.data.algorithm,
-                n_components=self._n_components(),
+                method="pca",
+                n_clusters=n_clusters,
+                algorithm=algo,
+                n_components=2,
+                dbscan_epsilon=eps,
             )
-        except Exception as exc:
-            QApplication.restoreOverrideCursor()
-            self.status.setText(f"reload failed: {exc}")
-            fallback = int(self._pool_n)
-            if fallback in self.pool_buttons:
-                self.pool_group.blockSignals(True)
-                self.pool_buttons[fallback].setChecked(True)
-                self.pool_group.blockSignals(False)
+            if not self._projection_cached(method, n_comp, data=new):
+                coords = project_gradients(
+                    clustering_features(new),
+                    method=method,
+                    n_components=n_comp,
+                    seed=seed,
+                )
+                new.projection_cache[projection_cache_key(method, n_comp)] = np.ascontiguousarray(
+                    coords, dtype=np.float32
+                )
+            reproject(new, method, seed=seed, n_components=n_comp)
+            return new
+
+        def stash(new: object) -> None:
+            if isinstance(new, ExplorerData):
+                self._pool_cache[n_points] = new
+
+        def on_ok(new: object) -> None:
+            if isinstance(new, ExplorerData):
+                self._apply_new_data(new, pool_n=n_points)
+
+        self._run_compute(
+            fn,
+            label=f"{n_points:,} pts {label} {dim}",
+            previous=previous,
+            stash=stash,
+            on_ok=on_ok,
+            revert=lambda: self._revert_pool(previous_n),
+        )
+
+    def _activate_pool(self, new: ExplorerData, n_points: int, previous_n: int) -> None:
+        method = self._toolbar_method()
+        n_comp = self._toolbar_n_components()
+        algo = self._toolbar_algorithm()
+        k = self._toolbar_k()
+        eps = self._toolbar_eps()
+        seed = int(new.cluster_seed)
+        need_proj = not self._projection_cached(method, n_comp, data=new)
+        need_cluster = not self._cluster_cached(algo, k, data=new, dbscan_epsilon=eps)
+        if not need_proj and not need_cluster:
+            self._abandon_in_flight()
+            self._apply_new_data(new, pool_n=n_points)
             return
-        QApplication.restoreOverrideCursor()
-        self._apply_new_data(new, pool_n=n_points)
+        label = projection_label(method)
+        dim = "3D" if n_comp >= 3 else "2D"
+        previous = f"{previous_n:,} pts"
+        proj_key = projection_cache_key(method, n_comp)
+        cluster_key = cluster_cache_key(algo, k, dbscan_epsilon=eps)
+
+        def fn() -> tuple[np.ndarray | None, object | None]:
+            coords: np.ndarray | None = None
+            payload: object | None = None
+            if need_proj:
+                coords = project_gradients(
+                    clustering_features(new),
+                    method=method,
+                    n_components=n_comp,
+                    seed=seed,
+                )
+            if need_cluster:
+                payload = compute_cluster_payload(
+                    clustering_features(new),
+                    algorithm=algo,
+                    n_clusters=k,
+                    seed=seed,
+                    dbscan_epsilon=eps,
+                )
+            return coords, payload
+
+        def stash(result: object) -> None:
+            coords, payload = result  # type: ignore[misc]
+            if coords is not None:
+                arr = np.ascontiguousarray(coords, dtype=np.float32)
+                new.projection_cache[proj_key] = arr
+                self._stash_projection(n_points, method, n_comp, arr)
+            if payload is not None:
+                labels, diag, _k_out, _algo = payload  # type: ignore[misc]
+                self._stash_cluster(n_points, cluster_key, labels, diag)
+
+        def on_ok(result: object) -> None:
+            stash(result)
+            self._apply_new_data(new, pool_n=n_points)
+
+        self._run_compute(
+            fn,
+            label=f"{n_points:,} pts {label} {dim}",
+            previous=previous,
+            stash=stash,
+            on_ok=on_ok,
+            revert=lambda: self._revert_pool(previous_n),
+        )
 
     def _apply_new_data(self, data: ExplorerData, *, pool_n: int) -> None:
+        self._pool_cache[int(self._pool_n)] = self.data
         self._clear_selection()
         self.data = data
         self._pool_n = int(pool_n)
+        self._pool_cache[int(pool_n)] = data
         self.resolver = FenResolver(data.folders)
         self._shuffle_display_perm()
+        method = self._toolbar_method()
+        n_comp = self._toolbar_n_components()
+        if self._projection_cached(method, n_comp):
+            reproject(self.data, method, seed=self.data.cluster_seed, n_components=n_comp)
+        algo = self._toolbar_algorithm()
+        k = self._toolbar_k()
+        eps = self._toolbar_eps()
+        if self._cluster_cached(algo, k, dbscan_epsilon=eps):
+            recluster(
+                self.data, k, seed=self.data.cluster_seed, algorithm=algo, dbscan_epsilon=eps
+            )
+        self._view3d = bool(n_comp >= 3 and self.data.coord_z is not None)
+        self._sync_orbit_mouse()
+        self._sync_cluster_param_controls()
         self._update_display_coords()
         self._set_axis_labels()
-        self._sync_k_spin()
-        self._rebuild_cluster_boxes()
         self._rebuild_scatter()
         if self._view3d:
             self._fit_orbit_view()
@@ -1256,42 +1775,45 @@ class ClusterExplorerWindow(QMainWindow):
         if method == current:
             return
         label = projection_label(method)
-        self.status.setText(f"computing {label}…")
-        QApplication.setOverrideCursor(Qt.CursorShape.WaitCursor)
-        QApplication.processEvents()
-        try:
-            reproject(
-                self.data,
-                method,
-                seed=self.data.cluster_seed,
-                n_components=self._n_components(),
-            )
-        except Exception as exc:
-            QApplication.restoreOverrideCursor()
-            self.status.setText(f"{label} failed: {exc}")
-            fallback = current if current in self.proj_buttons else "pca"
-            self.proj_group.blockSignals(True)
-            self.proj_buttons[fallback].setChecked(True)
-            self.proj_group.blockSignals(False)
+        previous = projection_label(current) if current else "previous"
+        k = self._n_components()
+        if self._projection_cached(method, k):
+            self._abandon_in_flight()
+            reproject(self.data, method, seed=self.data.cluster_seed, n_components=k)
+            self._refresh_after_projection()
             return
-        QApplication.restoreOverrideCursor()
-        self._update_display_coords()
-        self._set_axis_labels()
-        self._rebuild_scatter()
-        if self._view3d:
-            self._fit_orbit_view()
-        else:
-            self.plot.getViewBox().autoRange()
-        self._refresh_pinned_cards()
-        self._set_title()
-        QTimer.singleShot(0, self.overlay.update)
+
+        pool_n = int(self._pool_n)
+        data_ref = self.data
+        seed = int(self.data.cluster_seed)
+
+        def fn() -> np.ndarray:
+            return project_gradients(
+                clustering_features(data_ref),
+                method=method,
+                n_components=k,
+                seed=seed,
+            )
+
+        def stash(coords: object) -> None:
+            self._stash_projection(pool_n, method, k, np.asarray(coords))
+
+        def on_ok(coords: object) -> None:
+            if data_ref is self.data:
+                reproject(self.data, method, seed=seed, n_components=k)
+                self._refresh_after_projection()
+
+        self._run_compute(
+            fn,
+            label=label,
+            previous=previous,
+            stash=stash,
+            on_ok=on_ok,
+            revert=lambda: self._revert_projection(current),
+        )
 
     def _on_n_clusters_changed(self, value: int) -> None:
-        algo = "kmeans"
-        try:
-            algo = normalize_cluster_algorithm(self.data.algorithm)
-        except ValueError:
-            pass
+        algo = self._toolbar_algorithm()
         if algo == "dbscan":
             return
         k = int(value)
@@ -1299,27 +1821,50 @@ class ClusterExplorerWindow(QMainWindow):
             return
         if k < 2 or k > len(self.data):
             return
-        QApplication.setOverrideCursor(Qt.CursorShape.WaitCursor)
-        try:
+        previous_k = max(2, int(self.data.n_clusters) or 2)
+        previous = f"{previous_k} clusters"
+        if self._cluster_cached(algo, k):
+            self._abandon_in_flight()
             recluster(self.data, k, seed=self.data.cluster_seed, algorithm=algo)
-        except Exception as exc:
-            QApplication.restoreOverrideCursor()
-            self.status.setText(f"clustering failed: {exc}")
-            self.k_spin.blockSignals(True)
-            self.k_spin.setValue(max(2, int(self.data.n_clusters) or 2))
-            self.k_spin.blockSignals(False)
+            self._refresh_after_cluster()
             return
-        QApplication.restoreOverrideCursor()
-        self._rebuild_cluster_boxes()
-        self._refresh_pinned_cards()
-        self._rebuild_scatter()
-        self._set_title()
-        QTimer.singleShot(0, self.overlay.update)
+        self._start_cluster_job(
+            algo,
+            k,
+            label=f"{CLUSTER_ALGO_LABELS.get(algo, algo)} k={k}",
+            previous=previous,
+        )
+
+    def _on_eps_changed(self, value: float) -> None:
+        if self._toolbar_algorithm() != "dbscan":
+            return
+        eps = quantize_dbscan_epsilon(value)
+        current = quantize_dbscan_epsilon(self.data.dbscan_epsilon)
+        if self.data.algorithm == "dbscan" and abs(eps - current) < 1e-9:
+            return
+        k = self._toolbar_k()
+        previous = f"ε={current:.1f}"
+        if self._cluster_cached("dbscan", k, dbscan_epsilon=eps):
+            self._abandon_in_flight()
+            recluster(
+                self.data,
+                k,
+                seed=self.data.cluster_seed,
+                algorithm="dbscan",
+                dbscan_epsilon=eps,
+            )
+            self._refresh_after_cluster()
+            return
+        self._start_cluster_job(
+            "dbscan",
+            k,
+            dbscan_epsilon=eps,
+            label=f"DBSCAN ε={eps:.1f}",
+            previous=previous,
+        )
 
     def _rebuild_scatter(self) -> None:
-        mask = self.data.visible_mask(
-            clusters=self._visible_clusters() if self.cluster_boxes else None,
-        )
+        mask = self.data.visible_mask()
         if hasattr(self, "display_slider") and hasattr(self, "_display_perm"):
             pct = int(self.display_slider.value())
             n = len(self.data)
