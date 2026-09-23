@@ -45,12 +45,14 @@ OPTIONAL_TABLE_COLUMNS = (
 NOISE_COLOR = "#9aa6b8"
 POOL_SIZES: tuple[int, ...] = (300, 1_000, 3_000, 10_000, 30_000)
 DEFAULT_POOL_SIZE = 10_000
-CLUSTER_ALGORITHMS: tuple[str, ...] = ("kmeans", "kmedoids", "dbscan")
+CLUSTER_ALGORITHMS: tuple[str, ...] = ("kmeans", "kmedoids", "dbscan", "optics")
 CLUSTER_ALGO_LABELS: dict[str, str] = {
     "kmeans": "Mini-batch k-Means",
     "kmedoids": "k-Medoids",
     "dbscan": "DBSCAN",
+    "optics": "OPTICS",
 }
+DENSITY_ALGORITHMS: frozenset[str] = frozenset({"dbscan", "optics"})
 DEFAULT_DBSCAN_EPSILON = 0.3
 
 
@@ -186,7 +188,7 @@ class ExplorerData:
             return 0
         pos = self.cluster_id[self.cluster_id >= 0]
         inferred = int(pos.max()) + 1 if pos.size else 0
-        if str(self.algorithm) == "dbscan":
+        if uses_epsilon(self.algorithm):
             return inferred
         if self.requested_clusters > 0:
             return int(self.requested_clusters)
@@ -490,10 +492,19 @@ def normalize_cluster_algorithm(name: str) -> str:
         "kmedoids": "kmedoids",
         "medoids": "kmedoids",
         "dbscan": "dbscan",
+        "optics": "optics",
     }
     if key not in aliases:
         raise ValueError(f"unknown clustering algorithm {name!r}")
     return aliases[key]
+
+
+def uses_epsilon(algorithm: str) -> bool:
+    """DBSCAN and OPTICS take ε instead of a cluster count B."""
+    try:
+        return normalize_cluster_algorithm(algorithm) in DENSITY_ALGORITHMS
+    except ValueError:
+        return False
 
 
 def cluster_cache_key(
@@ -501,10 +512,10 @@ def cluster_cache_key(
     n_clusters: int,
     dbscan_epsilon: float | None = None,
 ) -> str:
-    """Cache key for a clustering result. DBSCAN is keyed by ε, not B."""
+    """Cache key for a clustering result. Density methods are keyed by ε, not B."""
     algo = normalize_cluster_algorithm(algorithm)
-    if algo == "dbscan":
-        return f"dbscan:{quantize_dbscan_epsilon(dbscan_epsilon):.1f}"
+    if uses_epsilon(algo):
+        return f"{algo}:{quantize_dbscan_epsilon(dbscan_epsilon):.1f}"
     return f"{algo}:{int(n_clusters)}"
 
 
@@ -569,6 +580,31 @@ def _dbscan_cluster_count(labels: np.ndarray) -> int:
     return int(pos.max()) + 1 if pos.size else 0
 
 
+def _density_neighborhood(
+    x: np.ndarray,
+    epsilon: float = DEFAULT_DBSCAN_EPSILON,
+) -> tuple[np.ndarray, int, float, float, float, float]:
+    """Shared 8-NN quantile and min_samples for DBSCAN / OPTICS.
+
+    Returns ``(x, min_samples, eps, epsilon, percentile, max_eps)``.
+    ``max_eps`` is at least the 90th percentile so OPTICS reachability is finite.
+    """
+    from sklearn.neighbors import NearestNeighbors
+
+    x = np.ascontiguousarray(x, dtype=np.float32)
+    n = int(x.shape[0])
+    n_neighbors = min(8, max(2, n - 1))
+    dists, _ = NearestNeighbors(n_neighbors=n_neighbors).fit(x).kneighbors(x)
+    kth = dists[:, -1]
+    min_samples = max(25, min(80, n // 120))
+    min_samples = min(min_samples, max(5, n // 8))
+    epsilon = quantize_dbscan_epsilon(epsilon)
+    percentile = 100.0 * epsilon
+    eps = max(float(np.percentile(kth, percentile)), 1e-5)
+    max_eps = max(float(np.percentile(kth, 90.0)), eps)
+    return x, int(min_samples), float(eps), float(epsilon), float(percentile), float(max_eps)
+
+
 def _fit_dbscan(
     x: np.ndarray,
     seed: int,
@@ -581,25 +617,48 @@ def _fit_dbscan(
     scales with n. ``seed`` is unused (sklearn DBSCAN is deterministic here).
     """
     from sklearn.cluster import DBSCAN
-    from sklearn.neighbors import NearestNeighbors
 
     del seed
-    x = np.ascontiguousarray(x, dtype=np.float32)
-    n = int(x.shape[0])
-    n_neighbors = min(8, max(2, n - 1))
-    dists, _ = NearestNeighbors(n_neighbors=n_neighbors).fit(x).kneighbors(x)
-    kth = dists[:, -1]
-    min_samples = max(25, min(80, n // 120))
-    min_samples = min(min_samples, max(5, n // 8))
-    epsilon = quantize_dbscan_epsilon(epsilon)
-    percentile = 100.0 * epsilon
-    eps = max(float(np.percentile(kth, percentile)), 1e-5)
+    x, min_samples, eps, epsilon, percentile, _max_eps = _density_neighborhood(x, epsilon)
     labels = DBSCAN(eps=eps, min_samples=min_samples, n_jobs=-1).fit_predict(x)
     meta = {
         "dbscan_eps": float(eps),
         "dbscan_epsilon": float(epsilon),
         "dbscan_min_samples": int(min_samples),
         "dbscan_percentile": float(percentile),
+    }
+    return labels.astype(np.int16, copy=False), meta
+
+
+def _fit_optics(
+    x: np.ndarray,
+    seed: int,
+    epsilon: float = DEFAULT_DBSCAN_EPSILON,
+) -> tuple[np.ndarray, dict[str, Any]]:
+    """OPTICS with the same ε quantile as DBSCAN.
+
+    Reachability is cut with ``cluster_method='dbscan'`` so ε is the same
+    8-NN-percentile neighborhood as DBSCAN. ``seed`` is unused.
+    """
+    from sklearn.cluster import OPTICS
+
+    del seed
+    x, min_samples, eps, epsilon, percentile, max_eps = _density_neighborhood(x, epsilon)
+    labels = OPTICS(
+        min_samples=min_samples,
+        max_eps=max_eps,
+        metric="euclidean",
+        cluster_method="dbscan",
+        eps=eps,
+        n_jobs=-1,
+    ).fit_predict(x)
+    meta = {
+        "dbscan_epsilon": float(epsilon),
+        "optics_max_eps": float(max_eps),
+        "optics_eps": float(eps),
+        "optics_min_samples": int(min_samples),
+        "optics_percentile": float(percentile),
+        "optics_cluster_method": "dbscan",
     }
     return labels.astype(np.int16, copy=False), meta
 
@@ -620,7 +679,7 @@ def compute_cluster_payload(
     rng_seed = int(seed)
     k = int(n_clusters)
     epsilon = quantize_dbscan_epsilon(dbscan_epsilon)
-    if algo != "dbscan":
+    if not uses_epsilon(algo):
         if k < 2:
             raise ValueError(f"n_clusters must be >= 2, got {k}")
         if int(x.shape[0]) < k:
@@ -639,6 +698,12 @@ def compute_cluster_payload(
         labels, medoids = _fit_kmedoids(x, k, rng_seed)
         inertia = float(np.linalg.norm(x - x[medoids[labels]], axis=1).sum())
         diag = _label_diagnostics(labels, k, inertia=inertia)
+    elif algo == "optics":
+        labels, opt_meta = _fit_optics(x, rng_seed, epsilon=epsilon)
+        k_found = _dbscan_cluster_count(labels)
+        diag = _label_diagnostics(labels, k_found)
+        diag.update(opt_meta)
+        k = k_found
     else:
         labels, db_meta = _fit_dbscan(x, rng_seed, epsilon=epsilon)
         k_found = _dbscan_cluster_count(labels)
@@ -664,7 +729,7 @@ def _apply_cluster(
     data.diagnostics.update(diagnostics)
     data.diagnostics["algorithm"] = data.algorithm
     data.diagnostics["clustered_on"] = "gradients" if data.features is not None else "projection"
-    if data.algorithm == "dbscan":
+    if uses_epsilon(data.algorithm):
         data.dbscan_epsilon = quantize_dbscan_epsilon(
             diagnostics.get("dbscan_epsilon", data.dbscan_epsilon)
         )
@@ -691,7 +756,7 @@ def recluster(
         labels, diag = cached
         labels = np.asarray(labels)
         if int(labels.shape[0]) == len(data):
-            k_apply = int(diag.get("n_clusters", k)) if algo == "dbscan" else k
+            k_apply = int(diag.get("n_clusters", k)) if uses_epsilon(algo) else k
             _apply_cluster(
                 data,
                 labels,

@@ -22,7 +22,7 @@ In the window:
   * **Projection** toggles PCA / t-SNE / UMAP / Isomap / LLE and recomputes
     the layout (cluster colors stay; t-SNE/UMAP/Isomap/LLE can take a bit)
   * the **Clusters** spin box is B for k-Means / k-Medoids (default 4);
-    DBSCAN replaces it with **ε** in (0, 1), step 0.1 (default 0.3)
+    DBSCAN and OPTICS replace it with **ε** in (0, 1), step 0.1 (default 0.3)
   * left-click a point to pin its chess board (no pin cap) plus the
     sample's NNUE gradient graph (blue +, red −, fade near 0) with
     managua activation dots on the neurons

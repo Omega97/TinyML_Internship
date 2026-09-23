@@ -4,14 +4,14 @@ from __future__ import annotations
 
 import threading
 from collections.abc import Callable
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from math import hypot
 from pathlib import Path
 from typing import Any
 
 import numpy as np
 import pyqtgraph as pg
-from PyQt6.QtCore import QByteArray, QEvent, QObject, QPointF, QRect, QSize, Qt, QTimer, pyqtSignal
+from PyQt6.QtCore import QByteArray, QEvent, QObject, QPointF, QRect, QRectF, QSize, Qt, QTimer, pyqtSignal
 from PyQt6.QtGui import QColor, QFont, QImage, QPainter, QPalette, QPen, QPixmap
 from PyQt6.QtSvgWidgets import QSvgWidget
 from PyQt6.QtWidgets import (
@@ -51,6 +51,7 @@ from tinymlinternship.nnue.cluster_explore import (
     compute_cluster_payload,
     normalize_cluster_algorithm,
     quantize_dbscan_epsilon,
+    uses_epsilon,
     normalize_projection_method,
     project_gradients,
     projection_cache_key,
@@ -83,6 +84,11 @@ CLICK_RADIUS_PX = 12.0
 INSPECTOR_WIDTH = 400
 BOARD_SVG_SIZE = 165
 GRAD_GRAPH_PAD = 7
+# WDL rectangles above each output neuron.
+WDL_BAR_WIDTH = 14.0
+WDL_BAR_MAX_HEIGHT = 32.0
+WDL_BAR_DX = 0.0
+WDL_BAR_DY = 15.0
 ORBIT_DRAG_PX = 5.0
 ORBIT_DEG_PER_PX = 0.4
 ORBIT_ELEV_MAX = 85.0
@@ -394,6 +400,48 @@ def _neuron_dot_radius(n: int, span: float) -> float:
     return float(max(1.6, min(4.8, 0.9 * spacing)))
 
 
+def _wdl_bar_fills(stm_white: bool) -> tuple[QColor, QColor, QColor]:
+    """Win, draw, loss. White to move is white-grey-black; black to move is the reverse."""
+    white = QColor(255, 255, 255)
+    grey = QColor(128, 128, 128)
+    black = QColor(0, 0, 0)
+    if stm_white:
+        return (white, grey, black)
+    return (black, grey, white)
+
+
+def _wdl_bar_outline(fill: QColor) -> QColor:
+    luma = 0.299 * fill.red() + 0.587 * fill.green() + 0.114 * fill.blue()
+    if luma >= 140.0:
+        return QColor(25, 25, 25)
+    return QColor(220, 220, 220)
+
+
+def _wdl_top_band() -> float:
+    """Pixels kept above the output neurons so a full bar plus ``WDL_BAR_DY`` still fits."""
+    return float(WDL_BAR_MAX_HEIGHT) + max(float(WDL_BAR_DY), 0.0)
+
+
+def _wdl_bar_base_y(neuron_y: float, dot_radius: float) -> float:
+    """Screen y of the shared bar base. Positive ``WDL_BAR_DY`` moves it up."""
+    return float(neuron_y) - float(dot_radius) - float(WDL_BAR_DY)
+
+
+def _wdl_bar_rect(
+    neuron_x: float,
+    neuron_y: float,
+    probability: float,
+    dot_radius: float,
+) -> QRectF | None:
+    """Rectangle standing on the shared base. Height is ``probability`` × max."""
+    height = float(probability) * float(WDL_BAR_MAX_HEIGHT)
+    if height < 0.5:
+        return None
+    base_y = _wdl_bar_base_y(neuron_y, dot_radius)
+    left = float(neuron_x) + float(WDL_BAR_DX) - float(WDL_BAR_WIDTH) / 2.0
+    return QRectF(left, base_y - height, float(WDL_BAR_WIDTH), height)
+
+
 DEFAULT_WEIGHT_LAYERS = (True, True, True)
 
 
@@ -412,9 +460,10 @@ def _render_grad_pixmap(
     weight_layers: tuple[bool, bool, bool] | None = None,
     rail_color: str = "#9aa6b8",
 ) -> QPixmap:
-    """Paint weight edges, then activation dots (matplotlib ``cmap``) on top.
+    """Paint weight edges, activation dots, then WDL bars above the outputs.
 
     ``weight_layers`` is ``(L1, L2, OUT)``; False skips that map's edges.
+    The top band is reserved for the probability rectangles; the net sits below it.
     """
     size = max(int(size), 32)
     img = QImage(size, size, QImage.Format.Format_ARGB32_Premultiplied)
@@ -422,12 +471,14 @@ def _render_grad_pixmap(
     painter = QPainter(img)
     painter.setRenderHint(QPainter.RenderHint.Antialiasing, False)
     pad = float(GRAD_GRAPH_PAD)
-    span = max(float(size) - 2.0 * pad, 1.0)
+    band = _wdl_top_band()
+    span_x = max(float(size) - 2.0 * pad, 1.0)
+    span_y = max(float(size) - 2.0 * pad - band, 1.0)
     sizes = grads.sizes
     rail = _qcolor(rail_color, 0.35)
 
     def to_px(x: float, y: float) -> tuple[float, float]:
-        return pad + float(x) * span, pad + float(y) * span
+        return pad + float(x) * span_x, pad + band + float(y) * span_y
 
     for layer, n in enumerate(sizes):
         x0, y0 = to_px(*neuron_xy(layer, 0, n))
@@ -466,7 +517,7 @@ def _render_grad_pixmap(
             n = min(int(layer_n), int(vec.size))
             if n <= 0:
                 continue
-            radius = _neuron_dot_radius(layer_n, span)
+            radius = _neuron_dot_radius(layer_n, span_x)
             order = np.argsort(np.abs(vec[:n]), kind="stable")
             use_outline = layer_n <= 24
             for i in order.tolist():
@@ -478,6 +529,33 @@ def _render_grad_pixmap(
                     painter.setPen(Qt.PenStyle.NoPen)
                 painter.setBrush(_qcolor(f"#{r:02x}{g:02x}{b:02x}", a / 255.0))
                 painter.drawEllipse(QPointF(px, py), radius, radius)
+
+        out_layer = len(sizes) - 1
+        n_out = int(sizes[out_layer])
+        probs = activations.probabilities()
+        fills = _wdl_bar_fills(bool(activations.stm_white))
+        dot_r = _neuron_dot_radius(n_out, span_x)
+        n_bars = min(3, n_out, int(probs.shape[0]))
+        if n_bars >= 2:
+            x_a, y_a = to_px(*neuron_xy(out_layer, 0, n_out))
+            x_b, _y_b = to_px(*neuron_xy(out_layer, n_bars - 1, n_out))
+            base_y = _wdl_bar_base_y(y_a, dot_r)
+            painter.setRenderHint(QPainter.RenderHint.Antialiasing, False)
+            painter.setPen(QPen(rail, 1))
+            painter.drawLine(
+                QPointF(x_a + float(WDL_BAR_DX), base_y),
+                QPointF(x_b + float(WDL_BAR_DX), base_y),
+            )
+        painter.setRenderHint(QPainter.RenderHint.Antialiasing, True)
+        for i in range(n_bars):
+            nx, ny = to_px(*neuron_xy(out_layer, i, n_out))
+            rect = _wdl_bar_rect(nx, ny, float(probs[i]), dot_r)
+            if rect is None:
+                continue
+            fill = fills[i]
+            painter.setPen(QPen(_wdl_bar_outline(fill), 1))
+            painter.setBrush(fill)
+            painter.drawRect(rect)
     painter.end()
     return QPixmap.fromImage(img)
 
@@ -500,7 +578,8 @@ class GradNetWidget(QWidget):
         self.setToolTip(
             "Per-sample NNUE gradient (σ=1) and activations.\n"
             "Edges: blue +, red −; more transparent near 0.\n"
-            f"Dots: matplotlib '{self._cmap}' colormap on activations."
+            f"Dots: matplotlib '{self._cmap}' colormap on activations.\n"
+            "Bars above the outputs: P(win), P(draw), P(loss)."
         )
 
     def set_rail_color(self, color: str) -> None:
@@ -1001,8 +1080,8 @@ class ClusterExplorerWindow(QMainWindow):
         self.eps_spin.setKeyboardTracking(False)
         self.eps_spin.setFixedWidth(72)
         self.eps_spin.setToolTip(
-            "DBSCAN ε in (0, 1), step 0.1. Neighborhood radius as a quantile "
-            "of 8-NN distances. Smaller → tighter clusters."
+            "Density ε in (0, 1), step 0.1. Neighborhood radius as a quantile "
+            "of 8-NN distances. Used by DBSCAN and OPTICS. Smaller → tighter clusters."
         )
         self.eps_spin.valueChanged.connect(self._on_eps_changed)
         layout.addWidget(self.eps_spin)
@@ -1586,15 +1665,15 @@ class ClusterExplorerWindow(QMainWindow):
         self.overlay.update()
 
     def _sync_cluster_param_controls(self) -> None:
-        dbscan = self._toolbar_algorithm() == "dbscan"
+        density = uses_epsilon(self._toolbar_algorithm())
         if hasattr(self, "cluster_param_label"):
-            self.cluster_param_label.setText("ε" if dbscan else "Clusters")
+            self.cluster_param_label.setText("ε" if density else "Clusters")
         if hasattr(self, "k_spin"):
-            self.k_spin.setVisible(not dbscan)
-            self.k_spin.setEnabled(not dbscan)
+            self.k_spin.setVisible(not density)
+            self.k_spin.setEnabled(not density)
         if hasattr(self, "eps_spin"):
-            self.eps_spin.setVisible(dbscan)
-            self.eps_spin.setEnabled(dbscan)
+            self.eps_spin.setVisible(density)
+            self.eps_spin.setEnabled(density)
 
     def _on_display_pct(self, value: int) -> None:
         self.display_label.setText(f"{int(value)}%")
@@ -1618,8 +1697,8 @@ class ClusterExplorerWindow(QMainWindow):
         k = self._toolbar_k()
         eps = self._toolbar_eps()
         label = CLUSTER_ALGO_LABELS[algo]
-        if algo == "dbscan":
-            label = f"DBSCAN ε={eps:.1f}"
+        if uses_epsilon(algo):
+            label = f"{CLUSTER_ALGO_LABELS[algo]} ε={eps:.1f}"
         previous = CLUSTER_ALGO_LABELS.get(current, current)
         if self._cluster_cached(algo, k, dbscan_epsilon=eps):
             self._abandon_in_flight()
@@ -1670,7 +1749,7 @@ class ClusterExplorerWindow(QMainWindow):
             except ValueError:
                 cur = "kmeans"
             self._revert_algorithm(cur)
-            if cur != "dbscan" and hasattr(self, "k_spin"):
+            if not uses_epsilon(cur) and hasattr(self, "k_spin"):
                 self._revert_k(int(self.data.n_clusters or 2))
             self._revert_eps(self.data.dbscan_epsilon)
             self._sync_cluster_param_controls()
@@ -1934,7 +2013,7 @@ class ClusterExplorerWindow(QMainWindow):
 
     def _on_n_clusters_changed(self, value: int) -> None:
         algo = self._toolbar_algorithm()
-        if algo == "dbscan":
+        if uses_epsilon(algo):
             return
         k = int(value)
         if k == int(self.data.n_clusters) and self.data.diagnostics.get("n_clusters") == k:
@@ -1956,30 +2035,31 @@ class ClusterExplorerWindow(QMainWindow):
         )
 
     def _on_eps_changed(self, value: float) -> None:
-        if self._toolbar_algorithm() != "dbscan":
+        algo = self._toolbar_algorithm()
+        if not uses_epsilon(algo):
             return
         eps = quantize_dbscan_epsilon(value)
         current = quantize_dbscan_epsilon(self.data.dbscan_epsilon)
-        if self.data.algorithm == "dbscan" and abs(eps - current) < 1e-9:
+        if self.data.algorithm == algo and abs(eps - current) < 1e-9:
             return
         k = self._toolbar_k()
         previous = f"ε={current:.1f}"
-        if self._cluster_cached("dbscan", k, dbscan_epsilon=eps):
+        if self._cluster_cached(algo, k, dbscan_epsilon=eps):
             self._abandon_in_flight()
             recluster(
                 self.data,
                 k,
                 seed=self.data.cluster_seed,
-                algorithm="dbscan",
+                algorithm=algo,
                 dbscan_epsilon=eps,
             )
             self._refresh_after_cluster()
             return
         self._start_cluster_job(
-            "dbscan",
+            algo,
             k,
             dbscan_epsilon=eps,
-            label=f"DBSCAN ε={eps:.1f}",
+            label=f"{CLUSTER_ALGO_LABELS.get(algo, algo)} ε={eps:.1f}",
             previous=previous,
         )
 
@@ -2123,6 +2203,11 @@ class ClusterExplorerWindow(QMainWindow):
             grads, acts = maps
         grads = standardize_weight_grads(grads)
         acts = standardize_activations(acts)
+        side = side_to_move_name(info.fen)
+        if side == "White":
+            acts = replace(acts, stm_white=True)
+        elif side == "Black":
+            acts = replace(acts, stm_white=False)
         card = BoardCard(info, color, theme=self.theme, grads=grads, activations=acts)
         card.grad_view.set_weight_layers(self._weight_layers())
         card.closed.connect(self._toggle)

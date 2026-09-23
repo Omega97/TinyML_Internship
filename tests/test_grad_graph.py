@@ -215,6 +215,8 @@ def test_toy_activations_match_grad_sizes():
     assert a.h1.shape == (16,)
     assert a.h2.shape == (10,)
     assert a.out.shape == (3,)
+    assert a.wdl is not None and a.wdl.shape == (3,)
+    np.testing.assert_allclose(float(np.sum(a.wdl)), 1.0, atol=1e-5)
 
 
 def test_standardize_activations_unit_sigma_per_layer():
@@ -222,6 +224,8 @@ def test_standardize_activations_unit_sigma_per_layer():
     z = standardize_activations(a)
     for layer in z.layers:
         np.testing.assert_allclose(np.std(layer), 1.0, atol=1e-5)
+    np.testing.assert_allclose(z.wdl, a.wdl)
+    assert z.stm_white is a.stm_white
 
 
 def test_sample_network_maps_activations_match_forward():
@@ -254,4 +258,7 @@ def test_sample_network_maps_activations_match_forward():
     np.testing.assert_allclose(acts.h2, h2[0].detach().cpu().numpy(), atol=1e-5)
     np.testing.assert_allclose(acts.out, logits[0].detach().cpu().numpy(), atol=1e-5)
     np.testing.assert_allclose(acts.x0, x_stm.detach().cpu().numpy(), atol=1e-5)
+    expected_wdl = torch.softmax(logits.float(), dim=-1)[0]
+    np.testing.assert_allclose(acts.wdl, expected_wdl.detach().cpu().numpy(), atol=1e-5)
+    assert acts.stm_white is stm
     np.testing.assert_allclose(grads.w12, sample_weight_grads(model, batch).w12, atol=1e-5)

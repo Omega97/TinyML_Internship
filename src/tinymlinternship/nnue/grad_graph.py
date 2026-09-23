@@ -63,15 +63,19 @@ class NnueActivations:
 
     ``x0`` is the STM 844-d feature vector (the graph has one input rail).
     ``h1`` is STM-ordered CReLU concat, ``h2`` is CReLU(L2), ``out`` is logits.
+    ``wdl`` is softmax (win, draw, loss) for the side to move. ``stm_white``
+    is that side: bar colors are white-grey-black when it is True.
     """
 
     x0: np.ndarray  # (in,)
     h1: np.ndarray  # (2W,)
     h2: np.ndarray  # (H,)
-    out: np.ndarray  # (3,)
+    out: np.ndarray  # (3,) logits
     hidden_dim: int
     hidden2_dim: int
     feature_dim: int = FEATURE_DIM
+    wdl: np.ndarray | None = None  # (3,) probabilities; None → softmax(out)
+    stm_white: bool = True
 
     @property
     def sizes(self) -> tuple[int, int, int, int]:
@@ -80,6 +84,33 @@ class NnueActivations:
     @property
     def layers(self) -> tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray]:
         return (self.x0, self.h1, self.h2, self.out)
+
+    def probabilities(self) -> np.ndarray:
+        """STM (win, draw, loss), length 3, summing to 1."""
+        if self.wdl is not None:
+            raw = np.asarray(self.wdl, dtype=np.float64).reshape(-1)
+        else:
+            raw = _softmax1d(self.out)
+        out = np.zeros(3, dtype=np.float64)
+        n = min(3, int(raw.size))
+        if n:
+            out[:n] = np.clip(raw[:n], 0.0, None)
+        total = float(out.sum())
+        if total <= 1e-12:
+            return np.full(3, 1.0 / 3.0, dtype=np.float64)
+        return out / total
+
+
+def _softmax1d(logits: np.ndarray) -> np.ndarray:
+    z = np.asarray(logits, dtype=np.float64).reshape(-1)
+    if z.size == 0:
+        return np.zeros(0, dtype=np.float64)
+    z = z - np.max(z)
+    e = np.exp(z)
+    total = float(np.sum(e))
+    if not np.isfinite(total) or total <= 0.0:
+        return np.full(z.shape, 1.0 / float(z.size), dtype=np.float64)
+    return e / total
 
 
 def neuron_xy(layer: int, index: int, n: int) -> tuple[float, float]:
@@ -206,6 +237,8 @@ def standardize_activations(acts: NnueActivations, eps: float = 1e-8) -> NnueAct
         hidden_dim=acts.hidden_dim,
         hidden2_dim=acts.hidden2_dim,
         feature_dim=acts.feature_dim,
+        wdl=acts.wdl,
+        stm_white=acts.stm_white,
     )
 
 
@@ -283,7 +316,14 @@ def toy_activations(
     h2v = np.clip(rng.normal(6.0, 10.0, size=h2), 0.0, 127.0).astype(np.float32)
     out = rng.normal(0.0, 1.2, size=3).astype(np.float32)
     return NnueActivations(
-        x0=x0, h1=h1, h2=h2v, out=out, hidden_dim=w, hidden2_dim=h2, feature_dim=inn
+        x0=x0,
+        h1=h1,
+        h2=h2v,
+        out=out,
+        hidden_dim=w,
+        hidden2_dim=h2,
+        feature_dim=inn,
+        wdl=_softmax1d(out).astype(np.float32),
     )
 
 
@@ -385,6 +425,8 @@ def sample_network_maps(model, batch: dict) -> tuple[NnueWeightGrads, NnueActiva
         hidden2 = crelu(pre_l2, model.crelu_clip)
         logits = model.head(hidden2)
         probs = torch.softmax(logits.float(), dim=-1)
+        stm_white = bool(stm.detach().flatten()[0].item())
+        wdl = np.ascontiguousarray(probs[0].detach().cpu().numpy(), dtype=np.float32)
         g_logits = (probs - target.to(device=device)).to(dtype=h.dtype)
         g_h2 = g_logits @ model.head.weight.to(dtype=g_logits.dtype)
         g_pre = g_h2 * _crelu_mask(pre_l2, model.crelu_clip).to(dtype=g_h2.dtype)
@@ -422,6 +464,8 @@ def sample_network_maps(model, batch: dict) -> tuple[NnueWeightGrads, NnueActiva
         hidden_dim=w,
         hidden2_dim=h2,
         feature_dim=feature_dim,
+        wdl=wdl,
+        stm_white=stm_white,
     )
     return grads, acts
 

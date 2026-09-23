@@ -202,6 +202,12 @@ def test_recluster_kmedoids_and_dbscan():
     assert bigger.algorithm == "dbscan"
     assert bigger.dbscan_epsilon == pytest.approx(0.5)
     assert bigger.diagnostics.get("dbscan_percentile") == pytest.approx(50.0)
+    recluster(bigger, 4, seed=6, algorithm="optics", dbscan_epsilon=0.5)
+    assert bigger.algorithm == "optics"
+    assert int(bigger.cluster_id.min()) >= -1
+    assert bigger.dbscan_epsilon == pytest.approx(0.5)
+    assert bigger.diagnostics.get("optics_percentile") == pytest.approx(50.0)
+    assert bigger.diagnostics.get("optics_cluster_method") == "dbscan"
 
 
 def test_reload_pool_changes_n_not_display_only():
@@ -256,6 +262,13 @@ def test_cluster_cache_key_dbscan_ignores_k():
     assert cluster_cache_key("dbscan", 3, dbscan_epsilon=0.3) != cluster_cache_key(
         "dbscan", 3, dbscan_epsilon=0.7
     )
+    assert cluster_cache_key("optics", 3) == "optics:0.3"
+    assert cluster_cache_key("optics", 3, dbscan_epsilon=0.3) != cluster_cache_key(
+        "optics", 3, dbscan_epsilon=0.7
+    )
+    assert cluster_cache_key("optics", 4, dbscan_epsilon=0.3) != cluster_cache_key(
+        "dbscan", 4, dbscan_epsilon=0.3
+    )
     assert cluster_cache_key("kmeans", 4) != cluster_cache_key("kmeans", 5)
 
 
@@ -278,6 +291,19 @@ def test_dbscan_epsilon_is_cached():
     assert cluster_cache_key("dbscan", 4, dbscan_epsilon=0.7) in data.cluster_cache
     recluster(data, 4, seed=6, algorithm="dbscan", dbscan_epsilon=0.3)
     np.testing.assert_array_equal(data.cluster_id, labels_a)
+    assert data.dbscan_epsilon == pytest.approx(0.3)
+
+
+def test_optics_epsilon_is_cached():
+    data = make_demo_data(n=80, n_clusters=4, seed=6)
+    recluster(data, 4, seed=6, algorithm="optics", dbscan_epsilon=0.3)
+    labels_a = data.cluster_id.copy()
+    recluster(data, 4, seed=6, algorithm="optics", dbscan_epsilon=0.7)
+    assert cluster_cache_key("optics", 4, dbscan_epsilon=0.3) in data.cluster_cache
+    assert cluster_cache_key("optics", 4, dbscan_epsilon=0.7) in data.cluster_cache
+    recluster(data, 4, seed=6, algorithm="optics", dbscan_epsilon=0.3)
+    np.testing.assert_array_equal(data.cluster_id, labels_a)
+    assert data.algorithm == "optics"
     assert data.dbscan_epsilon == pytest.approx(0.3)
 
 
@@ -355,6 +381,7 @@ def test_offscreen_window_pins_cards():
         LIGHT_THEME,
         _BOARD_COLORS_WHITE,
         _board_svg,
+        side_to_move_name,
         ClusterExplorerWindow,
     )
 
@@ -387,6 +414,10 @@ def test_offscreen_window_pins_cards():
     assert win.cards[0].grad_view._acts is not None
     assert win.cards[0].grad_view._acts.sizes == win.cards[0].grad_view._grads.sizes
     assert win.cards[0].grad_view._acts.out.shape == (3,)
+    assert win.cards[0].grad_view._acts.wdl is not None
+    np.testing.assert_allclose(float(np.sum(win.cards[0].grad_view._acts.wdl)), 1.0, atol=1e-4)
+    stm = side_to_move_name(win.data.row(0).fen)
+    assert win.cards[0].grad_view._acts.stm_white is (stm != "Black")
     assert win.weight_l1.isChecked() and win.weight_l2.isChecked() and win.weight_out.isChecked()
     assert win.cards[0].grad_view._weight_layers == (True, True, True)
     assert DARK_THEME.input_bg.lower() == DARK_THEME.panel_bg.lower()
@@ -481,6 +512,7 @@ def test_grad_pixmap_activation_dots_use_cmap():
         BOARD_SVG_SIZE,
         GRAD_GRAPH_PAD,
         _render_grad_pixmap,
+        _wdl_top_band,
     )
     from tinymlinternship.nnue.grad_graph import (
         NnueActivations,
@@ -506,13 +538,15 @@ def test_grad_pixmap_activation_dots_use_cmap():
     pix_alt = _render_grad_pixmap(grads, BOARD_SVG_SIZE, activations=acts, cmap="RdYlBu")
     img = pix.toImage()
     pad = float(GRAD_GRAPH_PAD)
-    span = float(BOARD_SVG_SIZE) - 2.0 * pad
     n_out = 3
 
     def sample(image, index: int):
         x, y = neuron_xy(3, index, n_out)
-        px = int(round(pad + float(x) * span))
-        py = int(round(pad + float(y) * span))
+        band = _wdl_top_band()
+        span_x = float(BOARD_SVG_SIZE) - 2.0 * pad
+        span_y = span_x - band
+        px = int(round(pad + float(x) * span_x))
+        py = int(round(pad + band + float(y) * span_y))
         return image.pixelColor(px, py)
 
     pos = sample(img, 0)
@@ -521,6 +555,100 @@ def test_grad_pixmap_activation_dots_use_cmap():
     assert neg.alpha() > 0 and neg.red() > neg.blue()
     alt = sample(pix_alt.toImage(), 0)
     assert (pos.red(), pos.green(), pos.blue()) != (alt.red(), alt.green(), alt.blue())
+
+
+def test_wdl_bars_follow_probability_and_side():
+    os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
+    from dataclasses import replace
+
+    from PyQt6.QtWidgets import QApplication
+
+    from tinymlinternship.nnue.cluster_explorer_ui import (
+        BOARD_SVG_SIZE,
+        GRAD_GRAPH_PAD,
+        WDL_BAR_DX,
+        WDL_BAR_DY,
+        WDL_BAR_MAX_HEIGHT,
+        WDL_BAR_WIDTH,
+        _neuron_dot_radius,
+        _render_grad_pixmap,
+        _wdl_bar_base_y,
+        _wdl_bar_rect,
+        _wdl_top_band,
+    )
+    from tinymlinternship.nnue.grad_graph import neuron_xy, toy_activations, toy_weight_grads
+
+    app = QApplication.instance() or QApplication([])
+    assert app is not None
+    grads = toy_weight_grads(2, hidden_dim=4, hidden2_dim=6, feature_dim=8)
+    base = toy_activations(2, hidden_dim=4, hidden2_dim=6, feature_dim=8)
+    wdl = np.array([0.50, 0.30, 0.20], dtype=np.float32)
+    pad = float(GRAD_GRAPH_PAD)
+    band = _wdl_top_band()
+    span_x = float(BOARD_SVG_SIZE) - 2.0 * pad
+    span_y = max(span_x - band, 1.0)
+    n_out = 3
+    dot_r = _neuron_dot_radius(n_out, span_x)
+
+    def neuron_px(index: int) -> tuple[float, float]:
+        x, y = neuron_xy(3, index, n_out)
+        return pad + float(x) * span_x, pad + band + float(y) * span_y
+
+    def paint(probs: np.ndarray, stm_white: bool):
+        acts = replace(base, wdl=probs, stm_white=stm_white, out=np.zeros(3, dtype=np.float32))
+        return _render_grad_pixmap(grads, BOARD_SVG_SIZE, activations=acts).toImage()
+
+    def bar_color(image, index: int, prob: float):
+        nx, ny = neuron_px(index)
+        rect = _wdl_bar_rect(nx, ny, prob, dot_r)
+        assert rect is not None
+        return image.pixelColor(int(round(rect.center().x())), int(round(rect.center().y())))
+
+    def is_white(color) -> bool:
+        return color.alpha() > 200 and min(color.red(), color.green(), color.blue()) > 230
+
+    def is_black(color) -> bool:
+        return color.alpha() > 200 and max(color.red(), color.green(), color.blue()) < 40
+
+    def is_grey(color) -> bool:
+        return (
+            color.alpha() > 200
+            and 90 < color.red() < 170
+            and abs(color.red() - color.green()) < 25
+            and abs(color.green() - color.blue()) < 25
+        )
+
+    white_side = paint(wdl, True)
+    black_side = paint(wdl, False)
+    assert is_white(bar_color(white_side, 0, 0.50))
+    assert is_grey(bar_color(white_side, 1, 0.30))
+    assert is_black(bar_color(white_side, 2, 0.20))
+    assert is_black(bar_color(black_side, 0, 0.50))
+    assert is_grey(bar_color(black_side, 1, 0.30))
+    assert is_white(bar_color(black_side, 2, 0.20))
+
+    tall = np.array([0.90, 0.05, 0.05], dtype=np.float32)
+    img = paint(tall, True)
+    nx, ny = neuron_px(0)
+    base_y = _wdl_bar_base_y(ny, dot_r)
+    assert base_y == pytest.approx(ny - dot_r - WDL_BAR_DY)
+    high_y = int(round(base_y - 0.5 * WDL_BAR_MAX_HEIGHT))
+    assert img.pixelColor(int(round(nx + WDL_BAR_DX)), high_y).alpha() > 200
+    nx_loss, _ny_loss = neuron_px(2)
+    assert img.pixelColor(int(round(nx_loss + WDL_BAR_DX)), high_y).alpha() == 0
+    nx_draw, _ny_draw = neuron_px(1)
+    gap_x = int(round((nx + nx_draw) / 2.0 + WDL_BAR_DX))
+    line_y = int(round(base_y))
+    line = img.pixelColor(gap_x, line_y)
+    assert line.alpha() > 20
+    assert abs(line.red() - line.green()) < 40
+    assert abs(line.green() - line.blue()) < 40
+
+    mid_y = int(round(_wdl_bar_rect(nx, ny, 0.90, dot_r).center().y()))
+    opaque = [x for x in range(img.width()) if img.pixelColor(x, mid_y).alpha() > 200]
+    assert opaque
+    assert max(opaque) - min(opaque) + 1 == pytest.approx(WDL_BAR_WIDTH, abs=2)
+    assert (min(opaque) + max(opaque)) / 2.0 == pytest.approx(nx + WDL_BAR_DX, abs=1.5)
 
 
 def test_weight_layer_toggles_hide_l1_edges():
@@ -606,6 +734,38 @@ def test_dbscan_replaces_k_with_epsilon():
     assert not win.eps_spin.isVisible()
     assert win.cluster_param_label.text() == "Clusters"
     assert int(win.k_spin.value()) == k_before
+    win.close()
+
+
+def test_optics_uses_epsilon_like_dbscan():
+    os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
+    from PyQt6.QtWidgets import QApplication
+
+    from tinymlinternship.nnue.cluster_explorer_ui import ClusterExplorerWindow
+
+    app = QApplication.instance() or QApplication([])
+    data = make_demo_data(n=40, n_clusters=3, seed=18)
+    win = ClusterExplorerWindow(data, checkpoint=None, timeout_ms=8000)
+    win.show()
+    app.processEvents()
+    assert "optics" in win.algo_buttons
+    win.algo_buttons["optics"].click()
+    _wait_idle(win)
+    assert win.data.algorithm == "optics"
+    assert not win.k_spin.isVisible()
+    assert win.eps_spin.isVisible()
+    assert win.cluster_param_label.text() == "ε"
+    assert win.eps_spin.value() == pytest.approx(0.3)
+    win.eps_spin.setValue(0.5)
+    _wait_idle(win)
+    assert win.data.algorithm == "optics"
+    assert win.data.dbscan_epsilon == pytest.approx(0.5)
+    assert win.data.diagnostics.get("optics_percentile") == pytest.approx(50.0)
+    win.algo_buttons["dbscan"].click()
+    _wait_idle(win)
+    assert win.data.algorithm == "dbscan"
+    assert win.eps_spin.isVisible()
+    assert not win.k_spin.isVisible()
     win.close()
 
 
