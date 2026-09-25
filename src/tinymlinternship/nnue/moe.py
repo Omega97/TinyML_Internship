@@ -61,6 +61,29 @@ class LinearDispatcher(nn.Module):
         return self.forward(h).argmax(dim=-1)
 
 
+class MLPDispatcher(nn.Module):
+    """Single-hidden MLP ``z = W2 ReLU(W1 h + b1) + b2``. Infer with argmax."""
+
+    def __init__(self, in_dim: int, n_clusters: int, hidden_dim: int = 64) -> None:
+        super().__init__()
+        if int(n_clusters) < 2:
+            raise ValueError(f"n_clusters must be >= 2, got {n_clusters}")
+        self.in_dim = int(in_dim)
+        self.n_clusters = int(n_clusters)
+        self.hidden_dim = int(hidden_dim)
+        self.fc1 = nn.Linear(self.in_dim, self.hidden_dim, bias=True)
+        self.fc2 = nn.Linear(self.hidden_dim, self.n_clusters, bias=True)
+        for layer in (self.fc1, self.fc2):
+            nn.init.kaiming_uniform_(layer.weight, a=5**0.5)
+            nn.init.zeros_(layer.bias)
+
+    def forward(self, h: torch.Tensor) -> torch.Tensor:
+        return self.fc2(F.relu(self.fc1(h)))
+
+    def predict(self, h: torch.Tensor) -> torch.Tensor:
+        return self.forward(h).argmax(dim=-1)
+
+
 class DualHiddenMoE(nn.Module):
     """Shared frozen L1 + linear dispatcher + ``B`` expert (L2, head) blocks."""
 

@@ -1,0 +1,18 @@
+{
+  "name": "W256_H512",
+  "role": "largest DualHidden NNUE",
+  "source": "models/checkpoints/nnue/dual_h256_H512_e200_bpe512_bs10000",
+  "hidden_dim": 256,
+  "hidden2_dim": 512,
+  "parameters": 480515,
+  "configured_epochs": 200,
+  "copied": [
+    "best.pt",
+    "config.json",
+    "history.json",
+    "ce.png"
+  ],
+  "epochs_logged": 200,
+  "last_test_ce": 0.6288900375366211,
+  "best_test_ce": 0.6288900375366211
+}

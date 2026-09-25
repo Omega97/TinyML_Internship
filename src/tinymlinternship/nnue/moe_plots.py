@@ -137,6 +137,7 @@ def plot_cluster_sizes(
     path: Path,
     *,
     title: str = "Bucket sizes",
+    cluster_name: str = "k-means",
 ) -> Path:
     plt = _require_mpl()
     kmeans_sizes = list(kmeans_sizes)
@@ -144,7 +145,12 @@ def plot_cluster_sizes(
     x = np.arange(b)
     fig, ax = plt.subplots(figsize=(7.2, 4.4))
     width = 0.38 if dispatcher_sizes is not None else 0.6
-    ax.bar(x - (width / 2 if dispatcher_sizes is not None else 0), kmeans_sizes, width, label="k-means")
+    ax.bar(
+        x - (width / 2 if dispatcher_sizes is not None else 0),
+        kmeans_sizes,
+        width,
+        label=cluster_name,
+    )
     if dispatcher_sizes is not None:
         ax.bar(x + width / 2, list(dispatcher_sizes), width, label="dispatcher")
     ax.set_xticks(x)
@@ -208,6 +214,7 @@ def plot_confusion(
     path: Path,
     *,
     title: str = "Dispatcher vs k-means",
+    cluster_name: str = "k-means",
 ) -> Path:
     plt = _require_mpl()
     km = np.asarray(kmeans_labels, dtype=np.int64)
@@ -221,7 +228,7 @@ def plot_confusion(
     fig, ax = plt.subplots(figsize=(5.6, 4.8))
     im = ax.imshow(mat, vmin=0.0, vmax=1.0, cmap="Blues")
     ax.set_xlabel("dispatcher")
-    ax.set_ylabel("k-means")
+    ax.set_ylabel(cluster_name)
     ax.set_title(title)
     fig.colorbar(im, ax=ax, label="row fraction")
     fig.tight_layout()
@@ -234,15 +241,17 @@ def plot_expert_ce_by_bucket(
     path: Path,
     *,
     title: str = "Per-bucket CE (holdout)",
+    tick_labels: Sequence[str] | None = None,
 ) -> Path:
     plt = _require_mpl()
     b = len(base_ce)
     x = np.arange(b)
-    fig, ax = plt.subplots(figsize=(7.2, 4.4))
+    fig, ax = plt.subplots(figsize=(max(7.2, 0.55 * b + 3.0), 4.4))
     ax.bar(x - 0.2, list(base_ce), 0.4, label="base")
     ax.bar(x + 0.2, list(expert_ce), 0.4, label="expert")
     ax.set_xticks(x)
-    ax.set_xticklabels([str(i) for i in range(b)])
+    labels = [str(i) for i in range(b)] if tick_labels is None else [str(t) for t in tick_labels]
+    ax.set_xticklabels(labels, rotation=30 if len(labels) > 6 else 0, ha="right" if len(labels) > 6 else "center")
     ax.set_xlabel("bucket")
     ax.set_ylabel("cross-entropy")
     ax.set_title(title)
@@ -280,6 +289,48 @@ def plot_moe_vs_base(
         axes[1].set_title("MAE")
         axes[1].grid(True, axis="y", alpha=0.3)
     fig.suptitle(title)
+    fig.tight_layout()
+    return _save(fig, path)
+
+
+def plot_run_ce_bars(
+    rows: Sequence[dict[str, Any]],
+    path: Path,
+    *,
+    title: str = "Test cross-entropy",
+    series_labels: dict[str, str] | None = None,
+) -> Path:
+    """Grouped bars of base / MoE / oracle CE, one group per finished run."""
+    plt = _require_mpl()
+    rows = list(rows)
+    if not rows:
+        raise ValueError("plot_run_ce_bars needs at least one run")
+    keys = [k for k in ("base_ce", "moe_ce", "oracle_ce") if all(k in row for row in rows)]
+    if not keys:
+        raise ValueError("rows have no base_ce / moe_ce / oracle_ce fields")
+    legend = {"base_ce": "base", "moe_ce": "MoE", "oracle_ce": "oracle"}
+    if series_labels:
+        legend.update(series_labels)
+    colors = {"base_ce": "#4c72b0", "moe_ce": "#dd8452", "oracle_ce": "#55a868"}
+    names = [str(row.get("name", i)) for i, row in enumerate(rows)]
+    x = np.arange(len(rows))
+    width = 0.8 / len(keys)
+    fig, ax = plt.subplots(figsize=(max(6.4, 1.35 * len(rows) + 3.0), 4.6))
+    for i, key in enumerate(keys):
+        offset = (i - (len(keys) - 1) / 2.0) * width
+        ax.bar(
+            x + offset,
+            [float(row[key]) for row in rows],
+            width,
+            label=legend[key],
+            color=colors[key],
+        )
+    ax.set_xticks(x)
+    ax.set_xticklabels(names, rotation=20, ha="right")
+    ax.set_ylabel("cross-entropy")
+    ax.set_title(title)
+    ax.grid(True, axis="y", alpha=0.3)
+    ax.legend()
     fig.tight_layout()
     return _save(fig, path)
 

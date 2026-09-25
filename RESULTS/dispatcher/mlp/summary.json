@@ -1,0 +1,28 @@
+{
+  "source": "/home/omar/jupyterlab/TinyML_Internship/data/processed/board_eval/moe/moe_b3_1m",
+  "checkpoint": "/home/omar/jupyterlab/TinyML_Internship/models/checkpoints/nnue/dual_h128_H256_e200_bpe512_bs10000/best.pt",
+  "n_rows": 1000000,
+  "n_val": 100000,
+  "val_fraction": 0.1,
+  "split_seed": 0,
+  "epochs": 8,
+  "targets": [
+    "l1",
+    "gradient"
+  ],
+  "hidden_sizes": [
+    32,
+    64,
+    128
+  ],
+  "k_values": [
+    2,
+    4,
+    8,
+    16
+  ],
+  "pseudo_ground_truth": {
+    "l1": "mini-batch k-means on 256-d L1 activations",
+    "gradient": "mini-batch k-means on 48-d sample head-gradient projection"
+  }
+}

@@ -13,6 +13,19 @@ BoardLike = Union[str, chess.Board]
 
 NUM_BUCKETS = 8
 
+# GOAL.md §1 piece-count baseline. Disjoint intervals, opening material first.
+# Kings are included, so a legal board is in 2..32 and every count lands in one bucket.
+PIECE_COUNT_BUCKETS: tuple[tuple[int, int, str], ...] = (
+    (32, 32, "32"),
+    (28, 29, "28-29"),
+    (30, 31, "30-31"),
+    (24, 27, "24-27"),
+    (20, 23, "20-23"),
+    (16, 19, "16-19"),
+    (10, 15, "10-15"),
+    (2, 9, "2-9"),
+)
+
 
 def _as_board(board: BoardLike) -> chess.Board:
     if isinstance(board, str):
@@ -53,3 +66,19 @@ def bucket_id(board: BoardLike) -> int:
         return 6 if queen else 5
 
     raise ValueError(f"unexpected piece count for bucket routing: {p}")
+
+
+def piece_count_bucket(count: int) -> int:
+    """Index into ``PIECE_COUNT_BUCKETS`` for a piece count that includes both kings."""
+    value = int(count)
+    for index, (lo, hi, _name) in enumerate(PIECE_COUNT_BUCKETS):
+        if lo <= value <= hi:
+            return index
+    raise ValueError(
+        f"piece count {value} is outside the goal buckets "
+        f"(expected 2..32, got the intervals in PIECE_COUNT_BUCKETS)"
+    )
+
+
+def piece_count_bucket_name(index: int) -> str:
+    return PIECE_COUNT_BUCKETS[int(index)][2]

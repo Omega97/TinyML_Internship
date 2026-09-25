@@ -138,6 +138,17 @@ def test_mmap_resume_does_not_clobber(tmp_path: Path):
     assert np.allclose(again[0], np.arange(4, dtype=np.float16))
 
 
+def _three_blobs(n_per: int = 80, dim: int = 8, scale: float = 0.05):
+    rng = np.random.RandomState(0)
+    shifts = (
+        np.zeros(dim, dtype=np.float32),
+        np.array([5.0] + [0.0] * (dim - 1), dtype=np.float32),
+        np.array([0.0, 5.0] + [0.0] * (dim - 2), dtype=np.float32),
+    )
+    parts = [rng.randn(n_per, dim).astype(np.float32) * scale + shift for shift in shifts]
+    return np.concatenate(parts, axis=0)
+
+
 def test_minibatch_kmeans_recovers_three_blobs():
     rng = np.random.RandomState(0)
     blobs = [
@@ -154,6 +165,82 @@ def test_minibatch_kmeans_recovers_three_blobs():
     assert diag["empty"] == 0
 
 
+def test_dbscan_recovers_blobs_and_assigns_noise():
+    from tinymlinternship.nnue.cluster import fit_dbscan, fit_dbscan_for_b
+
+    blobs = _three_blobs()
+    outlier = np.zeros((1, blobs.shape[1]), dtype=np.float32)
+    outlier[0, 0] = 50.0
+    x = np.concatenate([blobs, outlier], axis=0)
+    labels, _centroids, diag = fit_dbscan(x, epsilon=0.9, seed=0)
+    assert diag["algorithm"] == "dbscan"
+    assert diag["n_clusters"] == 3
+    assert diag["n_noise"] >= 1
+    assert labels.shape == (x.shape[0],)
+    assert int(labels.min()) >= 0
+    nearest_blob = int(np.bincount(labels[80:160].astype(np.int64)).argmax())
+    assert int(labels[-1]) == nearest_blob
+
+    targeted, _c2, diag_b = fit_dbscan_for_b(blobs, n_clusters=3, seed=0)
+    assert targeted.shape == (blobs.shape[0],)
+    assert diag_b["n_clusters"] == 3
+    assert diag_b["dbscan_b_match"] is True
+    assert any(trial["n_clusters"] >= 2 for trial in diag_b["dbscan_trials"])
+
+
+def test_dbscan_fit_cap_labels_every_row():
+    from tinymlinternship.nnue.cluster import fit_dbscan_for_b
+
+    x = _three_blobs()
+    labels, _centroids, diag = fit_dbscan_for_b(x, n_clusters=3, seed=0, fit_cap=60)
+    assert labels.shape == (x.shape[0],)
+    assert int(labels.min()) >= 0
+    assert diag["dbscan_fit_rows"] == 60
+    assert diag["n_rows_full"] == int(x.shape[0])
+
+
+def test_cluster_gradients_dbscan_roundtrip(tmp_path: Path):
+    from tinymlinternship.nnue.moe_pipeline import cluster_gradients
+
+    x = _three_blobs().astype(np.float16)
+    np.save(tmp_path / "gradients.npy", x)
+    diag = cluster_gradients(
+        tmp_path, n_clusters=3, algorithm="dbscan", log=None
+    )
+    labels = np.load(tmp_path / "labels.npy")
+    assert diag["algorithm"] == "dbscan"
+    assert labels.shape == (x.shape[0],)
+    assert int(labels.min()) >= 0
+    assert (tmp_path / "centroids.npy").is_file()
+    assert (tmp_path / "diagnostics.json").is_file()
+
+
+def test_battery_commands_cover_kmeans_and_dbscan():
+    from tinymlinternship.nnue.results_battery import (
+        format_pipeline_command,
+        reference_runs,
+        select_runs,
+    )
+
+    wave1 = select_runs("1")
+    algos = {run.algorithm for run in wave1}
+    assert algos == {"minibatch_kmeans", "dbscan"}
+    assert {run.n_clusters for run in wave1} == {2, 4, 8}
+    assert all(run.reuse_gradients for run in wave1)
+    text = format_pipeline_command(reference_runs()[0], python="python")
+    assert "--algorithm minibatch_kmeans" in text
+    assert "--gradient-cache data/processed/board_eval/moe/moe_b4_2m" in text
+    assert "--n-clusters 2" in text
+    dbscan = next(run for run in wave1 if run.algorithm == "dbscan" and run.n_clusters == 4)
+    dbscan_text = format_pipeline_command(dbscan, python="python")
+    assert "--algorithm dbscan" in dbscan_text
+    assert "RESULTS/moe/W128_H256/dbscan_b4" in dbscan_text
+    probes = select_runs("3")
+    assert probes
+    assert all(run.reuse_gradients is None for run in probes)
+    assert "--gradient-cache" not in format_pipeline_command(probes[0], python="python")
+
+
 def test_dispatcher_loss_drops_on_linear_h():
     torch.manual_seed(0)
     n, dim, b = 256, 16, 3
@@ -162,6 +249,32 @@ def test_dispatcher_loss_drops_on_linear_h():
     for i in range(b):
         h[labels == i, i] += 6.0
     disp = LinearDispatcher(dim, b)
+    opt = torch.optim.Adam(disp.parameters(), lr=0.05)
+    first = last = None
+    for _ in range(40):
+        opt.zero_grad(set_to_none=True)
+        loss = F.cross_entropy(disp(h), labels)
+        if first is None:
+            first = float(loss.item())
+        loss.backward()
+        opt.step()
+        last = float(loss.item())
+    acc = float((disp.predict(h) == labels).float().mean())
+    assert last < first
+    assert acc > 0.7
+
+
+def test_mlp_dispatcher_loss_drops_and_predicts():
+    from tinymlinternship.nnue.moe import MLPDispatcher
+
+    torch.manual_seed(0)
+    n, dim, b = 256, 16, 3
+    h = torch.randn(n, dim)
+    labels = torch.randint(0, b, (n,))
+    for i in range(b):
+        h[labels == i, i] += 6.0
+    disp = MLPDispatcher(dim, b, hidden_dim=64)
+    assert disp.in_dim == dim and disp.hidden_dim == 64 and disp.n_clusters == b
     opt = torch.optim.Adam(disp.parameters(), lr=0.05)
     first = last = None
     for _ in range(40):

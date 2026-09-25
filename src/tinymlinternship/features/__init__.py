@@ -1,6 +1,14 @@
 """844-feature encoder + board metadata helpers."""
 
-from tinymlinternship.features.bucket import NUM_BUCKETS, bucket_id, has_queen, piece_count
+from tinymlinternship.features.bucket import (
+    NUM_BUCKETS,
+    PIECE_COUNT_BUCKETS,
+    bucket_id,
+    has_queen,
+    piece_count,
+    piece_count_bucket,
+    piece_count_bucket_name,
+)
 from tinymlinternship.features.encoder import encode_dual, encode_perspective, validate_features
 from tinymlinternship.features.index_map import (
     BASE_FEATURE_DIM,
@@ -29,6 +37,7 @@ __all__ = [
     "BASE_FEATURE_DIM",
     "FEATURE_DIM",
     "NUM_BUCKETS",
+    "PIECE_COUNT_BUCKETS",
     "TACTICAL_SQUARES",
     "bucket_id",
     "castling_index",
@@ -46,6 +55,8 @@ __all__ = [
     "needs_horizontal_mirror",
     "perspective_board",
     "piece_count",
+    "piece_count_bucket",
+    "piece_count_bucket_name",
     "piece_square_count",
     "piece_square_index",
     "tactical_base",

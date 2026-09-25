@@ -15,7 +15,10 @@ from tinymlinternship.nnue.cluster import (
     assign_to_centroids,
     cluster_diagnostics,
     cluster_size_histogram,
+    fit_dbscan,
+    fit_dbscan_for_b,
     fit_minibatch_kmeans,
+    normalize_train_algorithm,
     save_cluster_run,
 )
 from tinymlinternship.nnue.dataset import FenValueVisitsDataset
@@ -55,6 +58,37 @@ DEFAULT_REDUCE_DIM = 48
 DEFAULT_GRAD_BATCH = 2048
 DEFAULT_CLUSTER_BATCH = 10_000
 EPS = 1e-8
+GRADIENT_CACHE_FILES: tuple[str, ...] = (
+    "gradients.npy",
+    "train_pack.pt",
+    "meta.json",
+    "slice_ids.npy",
+    "local_rows.npy",
+)
+
+
+def missing_gradient_cache(work_dir: Path) -> list[str]:
+    work_dir = Path(work_dir)
+    return [name for name in GRADIENT_CACHE_FILES if not (work_dir / name).is_file()]
+
+
+def link_gradient_cache(src: Path, work: Path) -> None:
+    """Symlink the heavy gradient pack into a run directory."""
+    src = Path(src)
+    work = Path(work)
+    work.mkdir(parents=True, exist_ok=True)
+    for name in GRADIENT_CACHE_FILES:
+        target = (src / name).resolve()
+        if not target.is_file():
+            raise FileNotFoundError(target)
+        dest = work / name
+        if dest.is_symlink():
+            if dest.resolve() == target:
+                continue
+            dest.unlink()
+        elif dest.exists():
+            continue
+        dest.symlink_to(target)
 
 
 def configure_torch(device: torch.device) -> None:
@@ -223,20 +257,53 @@ def cluster_gradients(
     n_clusters: int,
     batch_size: int = DEFAULT_CLUSTER_BATCH,
     seed: int = 0,
+    algorithm: str = "minibatch_kmeans",
+    dbscan_epsilon: float | None = None,
     log: Callable[[str], None] | None = print,
 ) -> dict[str, Any]:
     work_dir = Path(work_dir)
     grads = np.load(work_dir / "gradients.npy", mmap_mode="r")
+    algo = normalize_train_algorithm(algorithm)
+    if algo == "minibatch_kmeans":
+        if log:
+            log(f"mini-batch k-means B={n_clusters} on {grads.shape[0]:,} × {grads.shape[1]}")
+        km = fit_minibatch_kmeans(
+            grads, int(n_clusters), batch_size=int(batch_size), seed=int(seed)
+        )
+        labels = km.predict(np.ascontiguousarray(grads, dtype=np.float32)).astype(np.int16)
+        diag = cluster_diagnostics(labels, km.cluster_centers_, inertia=float(km.inertia_))
+        diag["algorithm"] = "minibatch_kmeans"
+        diag["requested_clusters"] = int(n_clusters)
+        centroids = km.cluster_centers_
+    else:
+        if dbscan_epsilon is None:
+            if log:
+                log(
+                    f"DBSCAN targeting B={n_clusters} on {grads.shape[0]:,} × {grads.shape[1]}"
+                )
+            labels, centroids, diag = fit_dbscan_for_b(
+                grads, int(n_clusters), seed=int(seed)
+            )
+        else:
+            if log:
+                log(
+                    f"DBSCAN ε={dbscan_epsilon} on {grads.shape[0]:,} × {grads.shape[1]}"
+                )
+            labels, centroids, diag = fit_dbscan(
+                grads, float(dbscan_epsilon), seed=int(seed)
+            )
+            diag["requested_clusters"] = int(n_clusters)
+        if log and int(diag["n_clusters"]) != int(n_clusters):
+            log(
+                f"DBSCAN produced B={diag['n_clusters']} "
+                f"(requested {n_clusters}, ε={diag.get('dbscan_epsilon')})"
+            )
+    save_cluster_run(work_dir, labels=labels, centroids=centroids, diagnostics=diag)
     if log:
-        log(f"k-means B={n_clusters} on {grads.shape[0]:,} × {grads.shape[1]}")
-    km = fit_minibatch_kmeans(
-        grads, int(n_clusters), batch_size=int(batch_size), seed=int(seed)
-    )
-    labels = km.predict(np.ascontiguousarray(grads, dtype=np.float32)).astype(np.int16)
-    diag = cluster_diagnostics(labels, km.cluster_centers_, inertia=float(km.inertia_))
-    save_cluster_run(work_dir, labels=labels, centroids=km.cluster_centers_, diagnostics=diag)
-    if log:
-        log(f"cluster sizes {diag['sizes']} | empty={diag['empty']}")
+        log(
+            f"{diag.get('algorithm')} sizes {diag['sizes']} | empty={diag['empty']} "
+            f"| B={diag['n_clusters']}"
+        )
     return diag
 
 
@@ -663,11 +730,20 @@ def write_plots(work_dir: Path, plots_dir: Path) -> list[Path]:
     written: list[Path] = []
     written.append(plot_cluster_pca(grads, km_labels, plots_dir / "cluster_pca.png"))
     written.append(plot_cluster_tsne(grads, km_labels, plots_dir / "cluster_tsne.png"))
+    algo = str(diag.get("algorithm") or "minibatch_kmeans")
+    pretty = {"minibatch_kmeans": "mini-batch k-means", "dbscan": "DBSCAN"}.get(algo, algo)
     km_sizes = cluster_size_histogram(km_labels, int(centroids.shape[0]))
     disp_sizes = (
         cluster_size_histogram(disp_labels, int(centroids.shape[0])) if disp_labels is not None else None
     )
-    written.append(plot_cluster_sizes(km_sizes, disp_sizes, plots_dir / "cluster_sizes.png"))
+    written.append(
+        plot_cluster_sizes(
+            km_sizes,
+            disp_sizes,
+            plots_dir / "cluster_sizes.png",
+            cluster_name=pretty,
+        )
+    )
     written.append(
         plot_centroid_cosine(np.asarray(diag["centroid_cosine"]), plots_dir / "centroid_cosine.png")
     )
@@ -683,6 +759,8 @@ def write_plots(work_dir: Path, plots_dir: Path) -> list[Path]:
                 disp_labels,
                 int(centroids.shape[0]),
                 plots_dir / "dispatcher_confusion.png",
+                cluster_name=pretty,
+                title=f"Dispatcher vs {pretty}",
             )
         )
     expert_path = work_dir / "expert_metrics.json"

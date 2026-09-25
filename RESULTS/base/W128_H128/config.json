@@ -1,0 +1,20 @@
+{
+  "slices_dir": "/home/omar/jupyterlab/TinyML_Internship/data/processed/board_eval/fen_value_visits",
+  "test_fraction": 0.05,
+  "hidden_dim": 128,
+  "hidden2_dim": 128,
+  "epochs": 100,
+  "batch_size": 10000,
+  "batches_per_epoch": 512,
+  "eval_batch_size": 32768,
+  "lr": 0.01,
+  "lr_end": 0.001,
+  "amp_dtype": "bfloat16",
+  "device": "cuda",
+  "data_device": "cpu",
+  "parameters": 141443,
+  "compiled": false,
+  "compile_mode": null,
+  "gpu_resident": false,
+  "gather_workers": 3
+}

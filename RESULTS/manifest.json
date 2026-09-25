@@ -1,0 +1,188 @@
+{
+  "bases": [
+    {
+      "name": "W32_H64",
+      "role": "smallest DualHidden NNUE kept from the size sweep",
+      "source": "models/checkpoints/nnue/dual_h128_H256_e100_bpe512_bs10000",
+      "hidden_dim": 32,
+      "hidden2_dim": 64,
+      "parameters": 31395,
+      "configured_epochs": 100,
+      "copied": [
+        "best.pt",
+        "config.json",
+        "history.json",
+        "ce.png"
+      ],
+      "epochs_logged": 100,
+      "last_test_ce": 0.6555997133255005,
+      "best_test_ce": 0.6555164456367493
+    },
+    {
+      "name": "W64_H128",
+      "role": "small DualHidden NNUE",
+      "source": "models/checkpoints/nnue/dual_h128_H128_512x8198_e1000",
+      "hidden_dim": 64,
+      "hidden2_dim": 128,
+      "parameters": 70979,
+      "configured_epochs": 100,
+      "copied": [
+        "best.pt",
+        "config.json",
+        "history.json",
+        "ce.png"
+      ],
+      "epochs_logged": 100,
+      "last_test_ce": 0.6725772023200989,
+      "best_test_ce": 0.6724568009376526
+    },
+    {
+      "name": "W128_H128",
+      "role": "medium DualHidden NNUE with a narrower head",
+      "source": "models/checkpoints/nnue/dual_h128_H128_e100_bpe512_bs10000",
+      "hidden_dim": 128,
+      "hidden2_dim": 128,
+      "parameters": 141443,
+      "configured_epochs": 100,
+      "copied": [
+        "best.pt",
+        "config.json",
+        "history.json",
+        "ce.png"
+      ],
+      "epochs_logged": 100,
+      "last_test_ce": 0.6386868357658386,
+      "best_test_ce": 0.6386868357658386
+    },
+    {
+      "name": "W128_H256",
+      "role": "reference base; the existing 2M gradient cache was computed from this checkpoint",
+      "source": "models/checkpoints/nnue/dual_h128_H256_e200_bpe512_bs10000",
+      "hidden_dim": 128,
+      "hidden2_dim": 256,
+      "parameters": 174723,
+      "configured_epochs": 100,
+      "copied": [
+        "best.pt",
+        "config.json",
+        "history.json",
+        "ce.png"
+      ],
+      "epochs_logged": 100,
+      "last_test_ce": 0.6315258741378784,
+      "best_test_ce": 0.6315258741378784
+    },
+    {
+      "name": "W256_H512",
+      "role": "largest DualHidden NNUE",
+      "source": "models/checkpoints/nnue/dual_h256_H512_e200_bpe512_bs10000",
+      "hidden_dim": 256,
+      "hidden2_dim": 512,
+      "parameters": 480515,
+      "configured_epochs": 200,
+      "copied": [
+        "best.pt",
+        "config.json",
+        "history.json",
+        "ce.png"
+      ],
+      "epochs_logged": 200,
+      "last_test_ce": 0.6288900375366211,
+      "best_test_ce": 0.6288900375366211
+    }
+  ],
+  "scaling_files": [
+    "nnue_ce_vs_train_size.png",
+    "nnue_ce_vs_train_size.pdf",
+    "variable_dataset_size_ce_256.png",
+    "variable_dataset_size_ce_256.pdf",
+    "variable_dataset_size_ce_256.txt",
+    "variable_dataset_size_ce_64.png",
+    "variable_dataset_size_ce_64.pdf",
+    "variable_dataset_size_ce_64.txt"
+  ],
+  "preliminary_moe": [
+    {
+      "name": "kmeans_b3_1m",
+      "source": "data/processed/board_eval/moe/moe_b3_1m",
+      "plots_source": "plots/MoE/run-001",
+      "copied": [
+        "moe.pt",
+        "dispatcher.pt",
+        "eval.json",
+        "expert_metrics.json",
+        "diagnostics.json",
+        "summary.json",
+        "dispatcher_history.json",
+        "centroids.npy",
+        "labels.npy"
+      ],
+      "plots": [
+        "centroid_cosine.png",
+        "cluster_pca.png",
+        "cluster_sizes.png",
+        "cluster_tsne.png",
+        "dispatcher_acc.png",
+        "dispatcher_confusion.png",
+        "expert_ce_by_bucket.png",
+        "moe_vs_base_ce.png"
+      ],
+      "n_clusters": 3,
+      "max_rows": 1000000,
+      "algorithm": "minibatch_kmeans",
+      "expert_labels": "dispatcher",
+      "checkpoint": "/home/omar/jupyterlab/TinyML_Internship/models/checkpoints/nnue/dual_h128_H256_e200_bpe512_bs10000/best.pt",
+      "metrics": {
+        "n_test": 50000.0,
+        "base_ce": 0.6301878094673157,
+        "base_mae": 0.13252051174640656,
+        "moe_ce": 0.6304054856300354,
+        "moe_mae": 0.13294778764247894,
+        "oracle_ce": 0.6283050179481506,
+        "oracle_mae": 0.12878070771694183
+      }
+    },
+    {
+      "name": "kmeans_b4_2m",
+      "source": "data/processed/board_eval/moe/moe_b4_2m",
+      "plots_source": "plots/MoE",
+      "copied": [
+        "moe.pt",
+        "dispatcher.pt",
+        "eval.json",
+        "expert_metrics.json",
+        "diagnostics.json",
+        "summary.json",
+        "dispatcher_history.json",
+        "centroids.npy",
+        "labels.npy"
+      ],
+      "plots": [
+        "centroid_cosine.png",
+        "cluster_pca.png",
+        "cluster_sizes.png",
+        "cluster_tsne.png",
+        "dispatcher_acc.png",
+        "dispatcher_confusion.png",
+        "expert_ce_by_bucket.png",
+        "moe_vs_base_ce.png"
+      ],
+      "n_clusters": 4,
+      "max_rows": 2000000,
+      "algorithm": "minibatch_kmeans",
+      "expert_labels": "dispatcher",
+      "checkpoint": "/home/omar/jupyterlab/TinyML_Internship/models/checkpoints/nnue/dual_h128_H256_e200_bpe512_bs10000/best.pt",
+      "metrics": {
+        "n_test": 50000.0,
+        "base_ce": 0.6301878094673157,
+        "base_mae": 0.13252051174640656,
+        "moe_ce": 0.6302916407585144,
+        "moe_mae": 0.13255199790000916,
+        "oracle_ce": 0.6284329891204834,
+        "oracle_mae": 0.12870681285858154
+      }
+    }
+  ],
+  "reference_checkpoint": "models/checkpoints/nnue/dual_h128_H256_e200_bpe512_bs10000/best.pt",
+  "reference_gradient_cache": "data/processed/board_eval/moe/moe_b4_2m"
+}

@@ -1,0 +1,18 @@
+{
+  "name": "W32_H64",
+  "role": "smallest DualHidden NNUE kept from the size sweep",
+  "source": "models/checkpoints/nnue/dual_h128_H256_e100_bpe512_bs10000",
+  "hidden_dim": 32,
+  "hidden2_dim": 64,
+  "parameters": 31395,
+  "configured_epochs": 100,
+  "copied": [
+    "best.pt",
+    "config.json",
+    "history.json",
+    "ce.png"
+  ],
+  "epochs_logged": 100,
+  "last_test_ce": 0.6555997133255005,
+  "best_test_ce": 0.6555164456367493
+}

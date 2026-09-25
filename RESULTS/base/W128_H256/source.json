@@ -1,0 +1,18 @@
+{
+  "name": "W128_H256",
+  "role": "reference base; the existing 2M gradient cache was computed from this checkpoint",
+  "source": "models/checkpoints/nnue/dual_h128_H256_e200_bpe512_bs10000",
+  "hidden_dim": 128,
+  "hidden2_dim": 256,
+  "parameters": 174723,
+  "configured_epochs": 100,
+  "copied": [
+    "best.pt",
+    "config.json",
+    "history.json",
+    "ce.png"
+  ],
+  "epochs_logged": 100,
+  "last_test_ce": 0.6315258741378784,
+  "best_test_ce": 0.6315258741378784
+}

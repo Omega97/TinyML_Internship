@@ -1,0 +1,18 @@
+{
+  "name": "W64_H128",
+  "role": "small DualHidden NNUE",
+  "source": "models/checkpoints/nnue/dual_h128_H128_512x8198_e1000",
+  "hidden_dim": 64,
+  "hidden2_dim": 128,
+  "parameters": 70979,
+  "configured_epochs": 100,
+  "copied": [
+    "best.pt",
+    "config.json",
+    "history.json",
+    "ce.png"
+  ],
+  "epochs_logged": 100,
+  "last_test_ce": 0.6725772023200989,
+  "best_test_ce": 0.6724568009376526
+}

@@ -1,0 +1,18 @@
+{
+  "name": "W128_H128",
+  "role": "medium DualHidden NNUE with a narrower head",
+  "source": "models/checkpoints/nnue/dual_h128_H128_e100_bpe512_bs10000",
+  "hidden_dim": 128,
+  "hidden2_dim": 128,
+  "parameters": 141443,
+  "configured_epochs": 100,
+  "copied": [
+    "best.pt",
+    "config.json",
+    "history.json",
+    "ce.png"
+  ],
+  "epochs_logged": 100,
+  "last_test_ce": 0.6386868357658386,
+  "best_test_ce": 0.6386868357658386
+}

@@ -1,0 +1,28 @@
+{
+  "n_clusters": 2,
+  "n_rows": 2000000,
+  "sizes": [
+    1116677,
+    883323
+  ],
+  "empty": 0,
+  "min_size": 883323,
+  "max_size": 1116677,
+  "inertia": 1392381.25,
+  "centroid_cosine_mean_offdiag": -0.938258732785798,
+  "centroid_cosine_min_offdiag": -0.938258732785798,
+  "centroid_cosine": [
+    [
+      1.0,
+      -0.938258732785798
+    ],
+    [
+      -0.938258732785798,
+      1.0
+    ]
+  ],
+  "algorithm": "minibatch_kmeans",
+  "requested_clusters": 2,
+  "silhouette": 0.24950310587882996,
+  "silhouette_sample_size": 10000
+}

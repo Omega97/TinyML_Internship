@@ -1,0 +1,17 @@
+{
+  "source": "/home/omar/jupyterlab/TinyML_Internship/data/processed/board_eval/moe/moe_b3_1m",
+  "checkpoint": "/home/omar/jupyterlab/TinyML_Internship/models/checkpoints/nnue/dual_h128_H256_e200_bpe512_bs10000/best.pt",
+  "n_rows": 1000000,
+  "representations": [
+    "board",
+    "l1"
+  ],
+  "k_values": [
+    2,
+    4,
+    8,
+    16
+  ],
+  "routing": "argmin cosine similarity",
+  "pseudo_ground_truth": "mini-batch k-means (Euclidean) labels"
+}

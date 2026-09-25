@@ -1,0 +1,37 @@
+{
+  "source": "/home/omar/jupyterlab/TinyML_Internship/data/processed/board_eval/moe/moe_b3_1m",
+  "checkpoint": "/home/omar/jupyterlab/TinyML_Internship/models/checkpoints/nnue/dual_h128_H256_e200_bpe512_bs10000/best.pt",
+  "n_rows": 1000000,
+  "n_buckets": 8,
+  "bucket_names": [
+    "32",
+    "28-29",
+    "30-31",
+    "24-27",
+    "20-23",
+    "16-19",
+    "10-15",
+    "2-9"
+  ],
+  "sizes": [
+    88313,
+    105341,
+    112065,
+    187486,
+    163086,
+    134855,
+    139422,
+    69432
+  ],
+  "proportions": [
+    0.088313,
+    0.105341,
+    0.112065,
+    0.187486,
+    0.163086,
+    0.134855,
+    0.139422,
+    0.069432
+  ],
+  "note": "Fixed piece-count router (8 disjoint intervals). No training; evaluated by ARI/NMI alignment with L1 and gradient k-means clusters."
+}
