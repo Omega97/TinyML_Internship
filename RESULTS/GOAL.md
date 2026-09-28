@@ -22,7 +22,7 @@ This document serves as both the exhaustive specification of project deliverable
 
 `[RESULTS/clustering/]`
 
-Clustering is performed across three representations: **Board State (Raw Features)**, **L1 Activations**, and **Sample-Wise Head Gradients** ($\nabla_W \mathcal{L}_i$). An additional baseline handles rule-based bucketing **by piece count**. Clustering is evaluated on a representative subset of $1\times 10^6$ positions sampled from the $120\times 10^6$ master dataset. Only summary metrics and projections are persisted, not the full cluster assignments.
+Clustering is performed across three representations: **Board State (Raw Features)**, **L1 Activations**, and **Sample-Wise Head Gradients** ($\nabla_W \mathcal{L}_i$). An additional baseline handles rule-based bucketing **by piece count**. Clustering is evaluated on a representative subset of $1\times 10^6$ positions sampled from the $150.8\times 10^6$ master dataset. Only summary metrics and projections are persisted, not the full cluster assignments.
 
 #### Metrics
 - **Cluster Balance**: Sizes and relative proportions per cluster

@@ -1,296 +1,61 @@
-# Thesis results battery
+# ai-feed — Discrepancies: RESULTS/ vs `THESIS/markdown/5 - Results.md` (§5.1–5.3)
 
-The method in `thesis-draft.md` chapter 3 is five steps on one frozen NNUE.
+Scope: only the already-written sections — 5.1 Experimental Setup, 5.2 Clustering, 5.3 Dispatcher. `RESULTS/GOAL.md` is treated as the authoritative description of the current results. Every number below was checked against the actual artifacts (`RESULTS/clustering/*.csv/.json`, `RESULTS/dispatcher/**/stats.csv`, `RESULTS/base/*/source.json`, `RESULTS/manifest.json`).
 
-1. Train a base DualHidden NNUE on the full Lc0 WDL set (soft cross-entropy).
-2. Compute L2-normalised per-sample gradients of that loss w.r.t. the head (L2 + output), and store a 48-d projection.
-3. Cluster those gradients. Fixed B uses mini-batch k-means. Density uses DBSCAN.
-4. Train a linear dispatcher from the frozen L1 activations (2W) to the bucket id.
-5. Fine-tune one head per bucket, initialised from the base head, with L1 frozen.
+Legend: 🔴 factual error / must fix · 🟠 methodological or comparability problem · 🟡 minor / cosmetic.
 
-Inference is one L1 pass, one dispatcher argmax, and one expert head. Elo and nodes-per-second stay out of this battery.
+---
 
-Run everything from `/home/omar/jupyterlab/TinyML_Internship` with `/home/omar/jupyterlab/venv/bin/python`.
+## 5.1 Experimental Setup
 
-## What is already in the repo
+Resolved — all items below are now fixed and marked verified for later review.
 
-| Step | Where | State |
-| --- | --- | --- |
-| Base training | `scripts/train_nnue-gpu.py`, checkpoints under `models/checkpoints/nnue/` | Several widths are trained. Copies are in `RESULTS/base/`. |
-| Sample gradients | `src/tinymlinternship/nnue/sample_gradients.py`, `moe_pipeline.compute_gradients` | Analytic head gradients, L2-normalised, projected to 48-d float16. A 2,000,000-row cache for the reference net is `data/processed/board_eval/moe/moe_b4_2m/`. |
-| Mini-batch k-means | `nnue/cluster.py` `fit_minibatch_kmeans` | Used by the training pipeline. |
-| DBSCAN | `nnue/cluster.py` `fit_dbscan` / `fit_dbscan_for_b` | Training path. ε is a quantile of 8-NN distances on the same 0.1 grid as the explorer. The fit uses at most 100,000 rows; every training row is then assigned to the nearest core centroid. Noise is counted, then assigned the same way. |
-| Dispatcher | `nnue/moe.py` `LinearDispatcher`, `moe_pipeline.train_dispatcher` | Adam, lr 1e-2 → 1e-3, 8 epochs, 10% validation, best checkpoint restored. |
-| Expert heads | `moe_pipeline.fine_tune_experts` | L1 frozen, head copied from the base, soft CE, default 2 epochs, 10% bucket holdout. `--expert-labels dispatcher` or `kmeans`. |
-| Scores and plots | `evaluate_moe`, `moe_plots.py` | Global test CE and MAE for the base, the dispatched MoE, and an oracle that routes with the gradient centroid. Per-bucket bar of base-head CE vs expert CE on that bucket's holdout. Cluster size, centroid cosine, PCA, t-SNE, dispatcher accuracy, confusion. |
-| Explorer | `cluster_explorer_ui.py` | Visual only. Mini-batch k-means, k-medoids, DBSCAN, OPTICS. It does not train experts. |
+- [x] ✅ **§5.1.4 "dual-hidden FFNN … not yet trained"** — FIXED. Added the three `FFNN2_H{64,128,256}` rows to Table 5.1 (112,451 / 233,091 / 498,947 params; CE 0.656 / 0.645 / 0.632) and reworded the paragraph so only the capacity-matched dense baseline (H=512) remains "not yet trained".
+- [x] ✅ **Dataset-size inconsistency across sources** — FIXED. §5.1.2's 150,815,697 is confirmed correct (matches the slice-meta sum and `GOAL.md` Run 1 corpus count). Stale values corrected: `GOAL.md` §1 now reads $150.8\times 10^6$ (was $120\times 10^6$) and `_ai-info_.md` `[dataset_size]` now 150.8M (was 105M; `[dataset_size_unique]` left as a recompute TODO).
+- [x] ✅ **§5.1.6 typo "lassification"** — FIXED → "classification".
+- [x] ✅ **§5.1.6 stray whitespace "WDL   distribution"** — FIXED → single space.
+- [x] ✅ **§5.1.4 incomplete sentence** — FIXED. Now names the dual-hidden FFNN among the dense baselines.
 
-Two finished MoE runs already exist, both on the reference net `W128_H256` (`models/checkpoints/nnue/dual_h128_H256_e200_bpe512_bs10000/best.pt`, which is 100 epochs in `config.json`). Copies, including `moe.pt` and the plots, are under `RESULTS/moe/preliminary/`.
+✅ **Verified correct (unchanged):** hardware (DGX Spark / GB10 / 128 GB / CUDA 13.0 / PyTorch 2.12 / Python 3.12 / bf16 + TF32), 429 slices, 844-d = 716 + 128, test_fraction 1% → 1,507,940 test positions, training protocol (Adam 1e-2→1e-3, 100 epochs, 512×10,000), and the 7×10⁶-per-expert budget all match the repo.
 
-| Run | Rows | B | Test CE base | Test CE MoE | Test CE oracle | Dispatcher val acc | Mean bucket-holdout base → expert |
-| --- | --- | --- | --- | --- | --- | --- | --- |
-| `kmeans_b3_1m` | 1,000,000 | 3 | 0.63019 | 0.63041 | 0.62831 | 0.600 | 0.63152 → 0.63172 |
-| `kmeans_b4_2m` | 2,000,000 | 4 | 0.63019 | 0.63029 | 0.62843 | 0.556 | 0.63075 → 0.63087 |
+---
 
-On the B=4 run the four bucket holdouts fall into two pairs: experts 0 and 2 sit near CE 0.35, experts 1 and 3 near CE 0.94. The partition separates positions the base already fits from positions it does not. Two epochs of fine-tuning leave the expert within 0.001 of the base head on every bucket (expert 3 is the only one slightly lower: 0.94083 vs 0.94100). The oracle, which routes with the true gradient cluster, is about 0.002 CE better than the base on the 50,000-row test split. The learned dispatcher gives that gain back.
+## 5.2 Clustering
 
-Full-precision rows are `RESULTS/tables/ce.csv`.
+Resolved — all items below are now fixed and marked verified.
 
-## Features for the battery
+- [x] ✅ **"Targeting eight clusters" wording** — FIXED. §5.2.1 now reads "DBSCAN is applied with `min_samples` fixed at $80$ and $\varepsilon$ selected on a quantile grid to recover a small number of clusters (at most eight)", matching `requested_k=8` and no longer implying a hard target.
+- [x] ✅ **DBSCAN fit in different spaces** — FIXED (per-representation presentation). §5.2.3 and the Table 5.3 caption now state that board/L1 DBSCAN is fit in a 48-d PCA while gradients are in the native 48-d, and that the rows are "not directly comparable across representations".
+- [x] ✅ **"Stability" centroid-cosine numbers** — VERIFIED CORRECT. Re-computed from `clustering/b{2,4,8}/centroids.npy`: mean off-diagonal centroid cosine is −0.938 / −0.307 / −0.128, matching the thesis exactly. The earlier "null in diagnostics.json" concern was a red herring — the values are stored in `centroids.npy`, not `diagnostics.json`.
+- [x] ✅ **B=4 centroid separation glossed over** — FIXED. The stability paragraph now states explicitly that the B=4 centroids drift from −0.229 (1M) to −0.307 (2M) while B=2 and B=8 are essentially unchanged, instead of "in line with".
+- [x] ✅ **Mixes two experiments (provenance)** — FIXED. The stability paragraph already states "fitted on two million positions" vs the "one-million-position" tables; the DBSCAN and k-means captions now also state their sample sizes explicitly.
+- [x] ✅ **Table numbering** — FIXED. Renumbered sequentially 5.1–5.8 (clustering 5.2–5.4, dispatcher 5.5–5.8); all in-text references and captions updated, and the top-of-chapter DeepSeek todo marked resolved.
 
-Done, and used by the commands below:
+- [x] ✅ **Silhouette subsample mismatch** — FIXED. Changed `run_clustering_battery.py` to use a 10,000-point subsample for every representation and re-ran the battery (`--skip-embeddings`); board/L1 silhouettes are now on 10k points, matching gradients/DBSCAN/piece-count. New values (vs the old 2k ones): board 0.110 / 0.073 / 0.040 / 0.016 (was 0.112 / 0.075 / 0.041 / 0.019); L1 0.153 / 0.109 / 0.003 / −0.007 (was 0.154 / 0.106 / 0.005 / −0.005). Table 5.2 and its caption updated; the "2,000-point vs 10,000-point" disclosure removed.
 
-- `--algorithm minibatch_kmeans|dbscan` and `--dbscan-epsilon` on `scripts/run_moe_pipeline.py` and `scripts/cluster_gradients.py`. When ε is omitted, DBSCAN searches `{0.1 … 0.9}` for the count closest to `--n-clusters`. The chosen ε, the trial table, and whether B matched are written to `diagnostics.json`.
-- `--gradient-cache` symlinks an existing `gradients.npy` / `train_pack.pt` / `meta.json` / `slice_ids.npy` / `local_rows.npy` into the run directory so B and the algorithm can change without a second gradient pass.
-- `scripts/stage_thesis_results.py` copies base checkpoints and the two finished MoE runs into `RESULTS/`.
-- `scripts/run_thesis_battery.py` prints or runs the grid and rebuilds `RESULTS/tables/ce.csv`, `RESULTS/plots/test_ce.png`, `RESULTS/plots/bucket_holdout_ce.png`, and `RESULTS/plots/bucket_ce_bars.png`.
+✅ **Verified correct (unchanged):** Table 5.2 (all 22 k-means rows: silhouettes, cosine distances, min/max shares), Table 5.3 (DBSCAN clusters 3/2/5, bucket shares, noise 39.6%/57.2%/75.2%, silhouettes), and Table 5.4 (all six ARI/NMI agreement pairs at B=8) match `clustering/stats.csv` / `summary.json` / `overlap.csv` exactly.
 
-Still to build. None of these block wave 1. They are the follow-ups once the grid exists.
+---
 
-- Silhouette on a subsample of the projected gradients, stored next to inertia and centroid cosine in `diagnostics.json`. Section 3.5.5 asks for it. Inertia per run is already a column in `ce.csv`; a single elbow chart across B is a short plot on top of that column.
-- Per-bucket CE on the global test split. The bar the battery writes today (`expert_ce_by_bucket.png`) is the 10% holdout inside each expert's training bucket, which is that expert's own data. `moe_vs_base_ce.png` is one number for the whole 50,000-row test set. A third figure would split that test set by the dispatcher bucket and score the base head and the expert on each slice.
-- Density-peak clustering (Rodriguez & Laio), which section 3.5.3 discusses. This battery uses mini-batch k-means and DBSCAN.
-- OPTICS in the training pipeline. It remains an explorer option.
-- A full-data gradient pass. The reference cache is 2,000,000 rows. The W128/H256 scaling curve in `RESULTS/base/scaling/` was trained out to about 90,000,000 positions. Raise `--max-rows` only after the 2M grid shows the MoE moving CE.
-- Quantization, Cfish nodes-per-second, and Elo. Separate from this CE battery.
+## 5.3 Dispatcher
 
-## Schedule
+Resolved — text-level issues are fixed and marked verified; the plot-regeneration items remain open.
 
-Wave 0 is done. Base nets and the two preliminary MoE runs are in `RESULTS/`, with the comparison bars in `RESULTS/plots/`.
+- [x] ✅ **Centroid routers scored against the wrong labels** — FIXED (disclosed). §5.3.3 now states that argmin-cosine routing scored against Euclidean k-means labels is a lower bound on recoverability, and that scoring against spherical (cosine) k-means would raise it. (Re-scoring against spherical k-means is deferred — requires re-running the centroid dispatcher.)
+- [x] ✅ **Transductive leakage in dispatcher training** — FIXED (disclosed). §5.3.1 now notes the k-means labels are computed on the full 1M subsample before the 90/10 split, so the reported validation accuracy is transductive rather than a fully independent estimate.
+- [x] ✅ **Gradient-target routing reported twice** — FIXED. §5.3.3 now surfaces Run 2's linear gradient dispatcher (2M rows, val acc 0.60/0.56/0.48) in the prose and states it is a separate setup from the 1M MLP sweep (Table 5.7). DeepSeek todo marked resolved.
+- [x] ✅ **Routing-error severity metric never computed** — FIXED (removed). The §5.3.2 paragraph and its DeepSeek todo are deleted, since no artifact computes the diagnostic.
+- [x] ✅ **§5.3.3 gradient-target range overstated** — FIXED. "0.48–0.49" → "0.47–0.49" (the h=32 B=16 row is 0.475).
+- [x] ✅ **§5.3.3 error-structure claim unverified** — FIXED. The unverifiable "diffuse, not adjacent" confusion-matrix claim is removed; the paragraph now keeps only the verified macro-F1 vs top-1 observation. DeepSeek todo removed.
 
-Wave 1, next, on the reference net only. Six cells, shared 2M gradient cache, dispatcher labels, two expert epochs: mini-batch k-means at B = 2, 4, 8 and DBSCAN targeted at the same three B values. The existing 2M dispatcher epochs took about 10 seconds each. The new cost per cell is clustering, eight dispatcher epochs, and two expert epochs. DBSCAN repeats a 100k-row ε search in each of its three cells. Plan on an afternoon, then read `RESULTS/plots/bucket_ce_bars.png` and `RESULTS/tables/ce.csv`.
+- [ ] 🟡 **Plot regeneration todos still open** — line 220 ("legend covers bars") and line 253 ("colorbar covers confusion matrix"). Requires fixing the plotting code and re-running the dispatcher scripts; not done.
 
-Wave 2, after wave 1, still on the reference cache. For k-means B = 2, 4, 8: one repeat that fine-tunes experts on the cluster labels (`--expert-labels kmeans`), and one repeat with eight expert epochs. Run the B values where wave 1 is flat or where the oracle beats the base. The question is whether the flat holdout is the two-epoch budget or the dispatcher relabeling.
+✅ **Verified correct (unchanged):** Table 5.5 (centroid), Table 5.6 (linear/MLP/tree/XGBoost → L1), Table 5.7 (MLP gradient sweep, all h×B), and Table 5.8 (piece-count ARI/NMI) all match their CSVs exactly, including the dummy (0.727→0.172 L1; 0.560→0.134 gradient) and chance baselines, and the §5.3.1 overhead arithmetic (2W·B+B = 2,056 at B=8; <40k params for h=128).
 
-Wave 3, after the reference grid has a direction. One k-means B=4 probe on each other width, each with its own 2M gradient pass: `W32_H64`, `W64_H128`, `W128_H128`, `W256_H512`. If a width moves test CE, clone the wave 1 commands onto that checkpoint and drop `--gradient-cache`.
+---
 
-Elo after the CE table is stable.
+## Cross-cutting
 
-## Commands
+🟡 The figure-path-resolution `#todo DeepSeek` note at the top of the chapter is still unresolved (the table-renumbering note was resolved during the §5.2 fix).
 
-Refresh the staged copies and the summary plots:
-
-```bash
-cd /home/omar/jupyterlab/TinyML_Internship
-/home/omar/jupyterlab/venv/bin/python scripts/stage_thesis_results.py
-/home/omar/jupyterlab/venv/bin/python scripts/run_thesis_battery.py --summary
-```
-
-Print the grid again after any edit to `results_battery.py`:
-
-```bash
-/home/omar/jupyterlab/venv/bin/python scripts/run_thesis_battery.py --print
-```
-
-Run a wave as one process. Wave 1 is the default of `--run`. The script links the gradient cache, then trains.
-
-```bash
-/home/omar/jupyterlab/venv/bin/python scripts/run_thesis_battery.py --run --wave 1
-/home/omar/jupyterlab/venv/bin/python scripts/run_thesis_battery.py --run --wave 2
-/home/omar/jupyterlab/venv/bin/python scripts/run_thesis_battery.py --run --wave 3
-```
-
-The same cells one at a time. Each command writes `moe.pt`, `dispatcher.pt`, `eval.json`, `expert_metrics.json`, `diagnostics.json`, and `plots/` under its `--work-dir`.
-
-### Wave 1 — reference net, B = 2, 4, 8
-
-```bash
-/home/omar/jupyterlab/venv/bin/python scripts/run_moe_pipeline.py \
-  --checkpoint models/checkpoints/nnue/dual_h128_H256_e200_bpe512_bs10000/best.pt \
-  --work-dir RESULTS/moe/W128_H256/kmeans_b2 \
-  --plots-dir RESULTS/moe/W128_H256/kmeans_b2/plots \
-  --run-name kmeans_b2 --max-rows 2000000 --max-test 50000 \
-  --n-clusters 2 --algorithm minibatch_kmeans \
-  --expert-labels dispatcher --expert-epochs 2 --dispatcher-epochs 8 \
-  --gradient-cache data/processed/board_eval/moe/moe_b4_2m
-
-/home/omar/jupyterlab/venv/bin/python scripts/run_moe_pipeline.py \
-  --checkpoint models/checkpoints/nnue/dual_h128_H256_e200_bpe512_bs10000/best.pt \
-  --work-dir RESULTS/moe/W128_H256/kmeans_b4 \
-  --plots-dir RESULTS/moe/W128_H256/kmeans_b4/plots \
-  --run-name kmeans_b4 --max-rows 2000000 --max-test 50000 \
-  --n-clusters 4 --algorithm minibatch_kmeans \
-  --expert-labels dispatcher --expert-epochs 2 --dispatcher-epochs 8 \
-  --gradient-cache data/processed/board_eval/moe/moe_b4_2m
-
-/home/omar/jupyterlab/venv/bin/python scripts/run_moe_pipeline.py \
-  --checkpoint models/checkpoints/nnue/dual_h128_H256_e200_bpe512_bs10000/best.pt \
-  --work-dir RESULTS/moe/W128_H256/kmeans_b8 \
-  --plots-dir RESULTS/moe/W128_H256/kmeans_b8/plots \
-  --run-name kmeans_b8 --max-rows 2000000 --max-test 50000 \
-  --n-clusters 8 --algorithm minibatch_kmeans \
-  --expert-labels dispatcher --expert-epochs 2 --dispatcher-epochs 8 \
-  --gradient-cache data/processed/board_eval/moe/moe_b4_2m
-
-/home/omar/jupyterlab/venv/bin/python scripts/run_moe_pipeline.py \
-  --checkpoint models/checkpoints/nnue/dual_h128_H256_e200_bpe512_bs10000/best.pt \
-  --work-dir RESULTS/moe/W128_H256/dbscan_b2 \
-  --plots-dir RESULTS/moe/W128_H256/dbscan_b2/plots \
-  --run-name dbscan_b2 --max-rows 2000000 --max-test 50000 \
-  --n-clusters 2 --algorithm dbscan \
-  --expert-labels dispatcher --expert-epochs 2 --dispatcher-epochs 8 \
-  --gradient-cache data/processed/board_eval/moe/moe_b4_2m
-
-/home/omar/jupyterlab/venv/bin/python scripts/run_moe_pipeline.py \
-  --checkpoint models/checkpoints/nnue/dual_h128_H256_e200_bpe512_bs10000/best.pt \
-  --work-dir RESULTS/moe/W128_H256/dbscan_b4 \
-  --plots-dir RESULTS/moe/W128_H256/dbscan_b4/plots \
-  --run-name dbscan_b4 --max-rows 2000000 --max-test 50000 \
-  --n-clusters 4 --algorithm dbscan \
-  --expert-labels dispatcher --expert-epochs 2 --dispatcher-epochs 8 \
-  --gradient-cache data/processed/board_eval/moe/moe_b4_2m
-
-/home/omar/jupyterlab/venv/bin/python scripts/run_moe_pipeline.py \
-  --checkpoint models/checkpoints/nnue/dual_h128_H256_e200_bpe512_bs10000/best.pt \
-  --work-dir RESULTS/moe/W128_H256/dbscan_b8 \
-  --plots-dir RESULTS/moe/W128_H256/dbscan_b8/plots \
-  --run-name dbscan_b8 --max-rows 2000000 --max-test 50000 \
-  --n-clusters 8 --algorithm dbscan \
-  --expert-labels dispatcher --expert-epochs 2 --dispatcher-epochs 8 \
-  --gradient-cache data/processed/board_eval/moe/moe_b4_2m
-```
-
-To pin DBSCAN to one ε quantile instead of searching for B, add `--dbscan-epsilon 0.3` (values 0.1 through 0.9). The resulting B is whatever that density produces, and the dispatcher is sized to it.
-
-### Wave 2 — label source, then a longer fine-tune
-
-```bash
-/home/omar/jupyterlab/venv/bin/python scripts/run_moe_pipeline.py \
-  --checkpoint models/checkpoints/nnue/dual_h128_H256_e200_bpe512_bs10000/best.pt \
-  --work-dir RESULTS/moe/W128_H256/kmeans_b2_clusterlabels \
-  --plots-dir RESULTS/moe/W128_H256/kmeans_b2_clusterlabels/plots \
-  --run-name kmeans_b2_clusterlabels --max-rows 2000000 --max-test 50000 \
-  --n-clusters 2 --algorithm minibatch_kmeans \
-  --expert-labels kmeans --expert-epochs 2 --dispatcher-epochs 8 \
-  --gradient-cache data/processed/board_eval/moe/moe_b4_2m
-
-/home/omar/jupyterlab/venv/bin/python scripts/run_moe_pipeline.py \
-  --checkpoint models/checkpoints/nnue/dual_h128_H256_e200_bpe512_bs10000/best.pt \
-  --work-dir RESULTS/moe/W128_H256/kmeans_b4_clusterlabels \
-  --plots-dir RESULTS/moe/W128_H256/kmeans_b4_clusterlabels/plots \
-  --run-name kmeans_b4_clusterlabels --max-rows 2000000 --max-test 50000 \
-  --n-clusters 4 --algorithm minibatch_kmeans \
-  --expert-labels kmeans --expert-epochs 2 --dispatcher-epochs 8 \
-  --gradient-cache data/processed/board_eval/moe/moe_b4_2m
-
-/home/omar/jupyterlab/venv/bin/python scripts/run_moe_pipeline.py \
-  --checkpoint models/checkpoints/nnue/dual_h128_H256_e200_bpe512_bs10000/best.pt \
-  --work-dir RESULTS/moe/W128_H256/kmeans_b8_clusterlabels \
-  --plots-dir RESULTS/moe/W128_H256/kmeans_b8_clusterlabels/plots \
-  --run-name kmeans_b8_clusterlabels --max-rows 2000000 --max-test 50000 \
-  --n-clusters 8 --algorithm minibatch_kmeans \
-  --expert-labels kmeans --expert-epochs 2 --dispatcher-epochs 8 \
-  --gradient-cache data/processed/board_eval/moe/moe_b4_2m
-
-/home/omar/jupyterlab/venv/bin/python scripts/run_moe_pipeline.py \
-  --checkpoint models/checkpoints/nnue/dual_h128_H256_e200_bpe512_bs10000/best.pt \
-  --work-dir RESULTS/moe/W128_H256/kmeans_b2_e8 \
-  --plots-dir RESULTS/moe/W128_H256/kmeans_b2_e8/plots \
-  --run-name kmeans_b2_e8 --max-rows 2000000 --max-test 50000 \
-  --n-clusters 2 --algorithm minibatch_kmeans \
-  --expert-labels dispatcher --expert-epochs 8 --dispatcher-epochs 8 \
-  --gradient-cache data/processed/board_eval/moe/moe_b4_2m
-
-/home/omar/jupyterlab/venv/bin/python scripts/run_moe_pipeline.py \
-  --checkpoint models/checkpoints/nnue/dual_h128_H256_e200_bpe512_bs10000/best.pt \
-  --work-dir RESULTS/moe/W128_H256/kmeans_b4_e8 \
-  --plots-dir RESULTS/moe/W128_H256/kmeans_b4_e8/plots \
-  --run-name kmeans_b4_e8 --max-rows 2000000 --max-test 50000 \
-  --n-clusters 4 --algorithm minibatch_kmeans \
-  --expert-labels dispatcher --expert-epochs 8 --dispatcher-epochs 8 \
-  --gradient-cache data/processed/board_eval/moe/moe_b4_2m
-
-/home/omar/jupyterlab/venv/bin/python scripts/run_moe_pipeline.py \
-  --checkpoint models/checkpoints/nnue/dual_h128_H256_e200_bpe512_bs10000/best.pt \
-  --work-dir RESULTS/moe/W128_H256/kmeans_b8_e8 \
-  --plots-dir RESULTS/moe/W128_H256/kmeans_b8_e8/plots \
-  --run-name kmeans_b8_e8 --max-rows 2000000 --max-test 50000 \
-  --n-clusters 8 --algorithm minibatch_kmeans \
-  --expert-labels dispatcher --expert-epochs 8 --dispatcher-epochs 8 \
-  --gradient-cache data/processed/board_eval/moe/moe_b4_2m
-```
-
-### Wave 3 — one B=4 probe per other width
-
-These compute a fresh gradient pack. There is no `--gradient-cache`.
-
-```bash
-/home/omar/jupyterlab/venv/bin/python scripts/run_moe_pipeline.py \
-  --checkpoint models/checkpoints/nnue/dual_h128_H256_e100_bpe512_bs10000/best.pt \
-  --work-dir RESULTS/moe/W32_H64/kmeans_b4 \
-  --plots-dir RESULTS/moe/W32_H64/kmeans_b4/plots \
-  --run-name kmeans_b4 --max-rows 2000000 --max-test 50000 \
-  --n-clusters 4 --algorithm minibatch_kmeans \
-  --expert-labels dispatcher --expert-epochs 2 --dispatcher-epochs 8
-
-/home/omar/jupyterlab/venv/bin/python scripts/run_moe_pipeline.py \
-  --checkpoint models/checkpoints/nnue/dual_h128_H128_512x8198_e1000/best.pt \
-  --work-dir RESULTS/moe/W64_H128/kmeans_b4 \
-  --plots-dir RESULTS/moe/W64_H128/kmeans_b4/plots \
-  --run-name kmeans_b4 --max-rows 2000000 --max-test 50000 \
-  --n-clusters 4 --algorithm minibatch_kmeans \
-  --expert-labels dispatcher --expert-epochs 2 --dispatcher-epochs 8
-
-/home/omar/jupyterlab/venv/bin/python scripts/run_moe_pipeline.py \
-  --checkpoint models/checkpoints/nnue/dual_h128_H128_e100_bpe512_bs10000/best.pt \
-  --work-dir RESULTS/moe/W128_H128/kmeans_b4 \
-  --plots-dir RESULTS/moe/W128_H128/kmeans_b4/plots \
-  --run-name kmeans_b4 --max-rows 2000000 --max-test 50000 \
-  --n-clusters 4 --algorithm minibatch_kmeans \
-  --expert-labels dispatcher --expert-epochs 2 --dispatcher-epochs 8
-
-/home/omar/jupyterlab/venv/bin/python scripts/run_moe_pipeline.py \
-  --checkpoint models/checkpoints/nnue/dual_h256_H512_e200_bpe512_bs10000/best.pt \
-  --work-dir RESULTS/moe/W256_H512/kmeans_b4 \
-  --plots-dir RESULTS/moe/W256_H512/kmeans_b4/plots \
-  --run-name kmeans_b4 --max-rows 2000000 --max-test 50000 \
-  --n-clusters 4 --algorithm minibatch_kmeans \
-  --expert-labels dispatcher --expert-epochs 2 --dispatcher-epochs 8
-```
-
-After any cell:
-
-```bash
-/home/omar/jupyterlab/venv/bin/python scripts/run_thesis_battery.py --summary
-```
-
-## Results produced
-
-Checkpoint directory names and the real widths disagree. The names below are the widths in `config.json`. Each copy is `best.pt`, `config.json`, `history.json`, `ce.png`, and `source.json`.
-
-| RESULTS path | Source folder | W | H | Params | Epochs | Best test CE |
-| --- | --- | --- | --- | --- | --- | --- |
-| `RESULTS/base/W32_H64/` | `dual_h128_H256_e100_bpe512_bs10000` | 32 | 64 | 31,395 | 100 | 0.6555 |
-| `RESULTS/base/W64_H128/` | `dual_h128_H128_512x8198_e1000` | 64 | 128 | 70,979 | 100 | 0.6725 |
-| `RESULTS/base/W128_H128/` | `dual_h128_H128_e100_bpe512_bs10000` | 128 | 128 | 141,443 | 100 | 0.6387 |
-| `RESULTS/base/W128_H256/` | `dual_h128_H256_e200_bpe512_bs10000` | 128 | 256 | 174,723 | 100 | 0.6315 |
-| `RESULTS/base/W256_H512/` | `dual_h256_H512_e200_bpe512_bs10000` | 256 | 512 | 480,515 | 200 | 0.6289 |
-
-`W64_H128` used a different batch schedule (`512 × 8198`, test fraction 0.05), so its higher CE is not a pure width comparison. The other four share batches-per-epoch 512 and batch size 10,000. `W256_H512` ran 200 epochs and a 5% test split.
-
-Scaling curves for the reference width, already trained, are in `RESULTS/base/scaling/` (`variable_dataset_size_ce_256.txt` reaches test CE 0.6307 at about 90,000,000 positions, which matches the reference checkpoint).
-
-Preliminary MoE, mini-batch k-means, dispatcher labels, two expert epochs:
-
-- `RESULTS/moe/preliminary/kmeans_b3_1m/` — `moe.pt`, dispatcher, metrics, and the eight plots (PCA, t-SNE, sizes, centroid cosine, dispatcher accuracy, confusion, per-bucket CE, base vs MoE vs oracle).
-- `RESULTS/moe/preliminary/kmeans_b4_2m/` — the same files on the 2,000,000-row cache.
-- `RESULTS/plots/test_ce.png` — test CE, base vs MoE vs oracle, both runs.
-- `RESULTS/plots/bucket_holdout_ce.png` — mean holdout CE, base head vs expert.
-- `RESULTS/plots/bucket_ce_bars.png` — one pair of bars per bucket (the per-dataset comparison).
-- `RESULTS/tables/ce.csv` and `RESULTS/manifest.json`.
-
-Gradient tensors stay in `data/processed/board_eval/moe/`. They are not duplicated into `RESULTS/`.
-
-## Results still to produce
-
-Each future cell gets the same bundle as the preliminary runs: `moe.pt`, `dispatcher.pt`, `eval.json`, `expert_metrics.json`, `diagnostics.json`, `summary.json`, and `plots/expert_ce_by_bucket.png` plus `plots/moe_vs_base_ce.png`. `--summary` folds them into `ce.csv` and the three comparison figures.
-
-| Directory | What it answers |
-| --- | --- |
-| `RESULTS/moe/W128_H256/kmeans_b{2,4,8}/` | Does fixed-B k-means at the thesis grid beat the base, on the test set and on each bucket? |
-| `RESULTS/moe/W128_H256/dbscan_b{2,4,8}/` | Same question for DBSCAN. `diagnostics.json` records the ε that was selected and the B it actually found. |
-| `RESULTS/moe/W128_H256/kmeans_b{2,4,8}_clusterlabels/` | Experts trained on the k-means ids rather than the dispatcher ids. |
-| `RESULTS/moe/W128_H256/kmeans_b{2,4,8}_e8/` | Same partition, eight expert epochs. |
-| `RESULTS/moe/W32_H64/kmeans_b4/` and the matching dirs for `W64_H128`, `W128_H128`, `W256_H512` | Whether a single B=4 MoE moves CE at other widths. |
-| Later, same folders with a larger `--max-rows` | Whether the 2M subsample was the limit. |
-| Elo, left out of this folder until the CE table is in | Playing strength of the base net against the chosen MoE. |
+🟡 §5.1.7 and §5.2.1 agree that the gradient representation is 48-d (66,563-d head gradient, Gaussian-projected to 48-d — confirmed by `sample_gradients.py`), but double-check that "head parameters (W=128, H=256)" uses the same definition as Chapter 4 (`P_head = 2W·H + H + H·3 + 3 = 66,563`).

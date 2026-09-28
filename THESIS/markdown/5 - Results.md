@@ -2,7 +2,7 @@
 
 #todo DeepSeek: "Figures use repo-root-relative paths (e.g. RESULTS/clustering/..., RESULTS/dispatcher/...); confirm the build resolves them the same way as in Section 5.2."
 
-#todo DeepSeek: "Tables are numbered 5.4–5.7 for the Dispatcher; renumber if tables are later added or removed."
+#todo DeepSeek (resolved): tables are now numbered sequentially 5.1–5.8 (base 5.1; clustering 5.2–5.4; dispatcher 5.5–5.8).
 
 ## 5.1 Experimental Setup
 
@@ -26,7 +26,7 @@ The clustering and dispatcher experiments operate on a representative **1,000,00
 
 ### 5.1.4 Models and Baselines
 
-<span style="color: #808080;">[Models and Baselines]</span> The base models define the reference point against which every MoE variant is judged. They are listed in Table 5.1, together with their parameter counts. The five NNUE models are dual-POV two-hidden architectures of increasing width; the linear and single-hidden FFNN models are dense baselines over the concatenated `[STM || opp]` features that isolate the contribution of the NNUE inductive bias. Two further baselines — a dual-hidden FFNN and a capacity-matched dense single head with $H{=}512$ (to compare against a $B{=}4,\ H{=}256$ MoE at equal parameter count) — are planned but not yet trained; they will be added to Table 5.1 when available.
+<span style="color: #808080;">[Models and Baselines]</span> The base models define the reference point against which every MoE variant is judged. They are listed in Table 5.1, together with their parameter counts. The five NNUE models are dual-POV two-hidden architectures of increasing width; the linear, single-hidden FFNN, and dual-hidden FFNN models are dense baselines over the concatenated `[STM || opp]` features that isolate the contribution of the NNUE inductive bias. One further baseline — a capacity-matched dense single head with $H{=}512$ (to compare against a $B{=}4,\ H{=}256$ MoE at equal parameter count) — is planned but not yet trained; it will be added to Table 5.1 when available.
 
 | Model | Architecture | $W$ / $H$ | Parameters | Test CE |
 |---|---|---|---|---|
@@ -34,6 +34,9 @@ The clustering and dispatcher experiments operate on a representative **1,000,00
 | FFNN H64 | single hidden | 64 | 108,291 | 0.669 |
 | FFNN H128 | single hidden | 128 | 216,579 | 0.654 |
 | FFNN H256 | single hidden | 256 | 433,155 | 0.643 |
+| FFNN2 H64 | dual hidden | 64 | 112,451 | 0.656 |
+| FFNN2 H128 | dual hidden | 128 | 233,091 | 0.645 |
+| FFNN2 H256 | dual hidden | 256 | 498,947 | 0.632 |
 | NNUE W32 H64 | dual-POV two-hidden | 32 / 64 | 31,395 | 0.656 |
 | NNUE W64 H128 | dual-POV two-hidden | 64 / 128 | 70,979 | 0.672 |
 | NNUE W128 H128 | dual-POV two-hidden | 128 / 128 | 141,443 | 0.639 |
@@ -52,7 +55,7 @@ The Mixture-of-Experts models evaluated in Section 5.5 share the frozen L1 accum
 
 <span style="color: #808080;">[Evaluation Metrics]</span> Accuracy is measured on the held-out test set with four complementary metrics:
 
-- **Cross-entropy (CE)** — the soft cross-entropy between the model's WDL   distribution and the Lc0 teacher distribution, the primary loss and accuracy metric.
+- **Cross-entropy (CE)** — the soft cross-entropy between the model's WDL distribution and the Lc0 teacher distribution, the primary loss and accuracy metric.
 - **Mean Absolute Error (MAE)** — $|v(s) - \hat{v}(s)|$ where $v(s) = p_W - p_L$ is the scalar expected-reward summary of the predicted
   distribution; MAE is the quantity the search actually consumes.
 - **Mean Squared Error (MSE)** and **coefficient of determination ($R^2$)** — the squared-error analogue and the fraction of target variance explained, reported to characterise the residual distribution of the scalar value.
@@ -60,7 +63,7 @@ The Mixture-of-Experts models evaluated in Section 5.5 share the frozen L1 accum
 
 	#todo MAE not really necessary?
 
-Routing quality (for the dispatchers and the MoE models) is reported with Top-1/Top-2 lassification accuracy, macro/weighted F1, and the Adjusted Rand Index (ARI) and Normalized Mutual Information (NMI) against the clustering pseudo-labels. End-to-end playing strength (Elo / ACPL) and on-device search throughput are out of scope for this chapter and are deferred to the deployment evaluation, as they require the full engine integration described in Chapter 4.
+Routing quality (for the dispatchers and the MoE models) is reported with Top-1/Top-2 classification accuracy, macro/weighted F1, and the Adjusted Rand Index (ARI) and Normalized Mutual Information (NMI) against the clustering pseudo-labels. End-to-end playing strength (Elo / ACPL) and on-device search throughput are out of scope for this chapter and are deferred to the deployment evaluation, as they require the full engine integration described in Chapter 4.
 
 ### 5.1.7 Experiment Pipeline Overview
 
@@ -77,7 +80,7 @@ training** to map L1 activations (or the board) to bucket IDs, spanning paramete
 
 <span style="color: #808080;">[Representations]</span> Three candidate representations are clustered in parallel, each evaluated for a range of cluster counts $B$. The first is the raw board encoding, the side-to-move-ordered concatenation of the two 844-dimensional binary views, giving a 1688-dimensional vector. The second is the L1 activation space, the concatenation of the two 128-dimensional accumulator vectors after the side-to-move reorder, giving a 256-dimensional vector. The third is the proposed signal, the sample gradients. Because the flattened head gradient is very high-dimensional, it is projected to a 48-dimensional space through a fixed random (Gaussian) projection before clustering. The board and L1 representations serve as the activation-based references, while the gradients constitute the signal under test.
 
-<span style="color: #808080;">[Algorithms]</span> The primary algorithm is Mini-Batch K-Means with $k$-means++ initialisation, a mini-batch size of $10\,000$, and a fixed random seed, run for $B \in \{2, 4, 8, 16\}$. As a density-based alternative that does not require $B$, DBSCAN is applied targeting eight clusters; on the board and L1 representations it is run in a 48-dimensional PCA of the data because the nearest-neighbour density estimates in the native width are not usable. A handcrafted reference partition of eight bins is obtained by bucketing on the scalar piece count, mirroring the conventional NNUE bucketing. The final gradient-based partitions used for the mixture-of-experts are fitted on two million positions for $B \in \{2, 4, 8\}$.
+<span style="color: #808080;">[Algorithms]</span> The primary algorithm is Mini-Batch K-Means with $k$-means++ initialisation, a mini-batch size of $10\,000$, and a fixed random seed, run for $B \in \{2, 4, 8, 16\}$. As a density-based alternative that does not require $B$, DBSCAN is applied with `min_samples` fixed at $80$ and $\varepsilon$ selected on a quantile grid to recover a small number of clusters (at most eight). Because the nearest-neighbour density estimates in the native widths are not usable, the board and L1 representations are clustered in a 48-dimensional PCA of the data, whereas the gradient representation is clustered in its native 48-dimensional space. A handcrafted reference partition of eight bins is obtained by bucketing on the scalar piece count, mirroring the conventional NNUE bucketing. The final gradient-based partitions used for the mixture-of-experts are fitted on two million positions for $B \in \{2, 4, 8\}$.
 
 ### 5.2.2 Clustering Metrics
 
@@ -87,29 +90,29 @@ training** to map L1 activations (or the board) to bucket IDs, spanning paramete
 
 ### 5.2.3 Clustering Results
 
-<span style="color: #808080;">[Comparison of representations]</span> Table 5.2.3 reports the mini-batch K-Means diagnostics across the three representations and the piece-count reference. Two findings stand out. First, the gradient-based partitions are markedly better separated than the activation-based ones: for $B=2$ the two gradient centroids are nearly antipodal, with a cosine distance of $1.94$ (a cosine similarity of $-0.94$), and even at $B=16$ the mean cosine distance remains above $1.0$. In contrast, the board and L1 centroids remain close to one another at every value of $B$, with cosine distances well below $0.3$. Second, the gradient partitions achieve the highest silhouette scores of any learned representation at every value of $B$, whereas the L1 silhouette collapses to near zero, and eventually negative, as $B$ grows.
+<span style="color: #808080;">[Comparison of representations]</span> Table 5.2 reports the mini-batch K-Means diagnostics across the three representations and the piece-count reference. Two findings stand out. First, the gradient-based partitions are markedly better separated than the activation-based ones: for $B=2$ the two gradient centroids are nearly antipodal, with a cosine distance of $1.94$ (a cosine similarity of $-0.94$), and even at $B=16$ the mean cosine distance remains above $1.0$. In contrast, the board and L1 centroids remain close to one another at every value of $B$, with cosine distances well below $0.3$. Second, the gradient partitions achieve the highest silhouette scores of any learned representation at every value of $B$, whereas the L1 silhouette collapses to near zero, and eventually negative, as $B$ grows.
 
 | Representation | $B$ | Silhouette | Cosine dist. (mean) | Cosine dist. (min) | Min. share | Max. share |
 | :--- | :-: | :-: | :-: | :-: | :-: | :-: |
-| board | 2 | 0.112 | 0.235 | 0.235 | 0.313 | 0.687 |
-| board | 4 | 0.075 | 0.221 | 0.120 | 0.074 | 0.431 |
-| board | 8 | 0.041 | 0.257 | 0.043 | 0.062 | 0.285 |
-| board | 16 | 0.019 | 0.288 | 0.061 | 0.017 | 0.159 |
-| L1 | 2 | 0.154 | 0.174 | 0.174 | 0.275 | 0.725 |
-| L1 | 4 | 0.106 | 0.208 | 0.115 | 0.104 | 0.541 |
-| L1 | 8 | 0.005 | 0.203 | 0.069 | 0.044 | 0.249 |
-| L1 | 16 | −0.005 | 0.244 | 0.057 | 0.015 | 0.173 |
+| board | 2 | 0.110 | 0.235 | 0.235 | 0.313 | 0.687 |
+| board | 4 | 0.073 | 0.221 | 0.120 | 0.074 | 0.431 |
+| board | 8 | 0.040 | 0.257 | 0.043 | 0.062 | 0.285 |
+| board | 16 | 0.016 | 0.288 | 0.061 | 0.017 | 0.159 |
+| L1 | 2 | 0.153 | 0.174 | 0.174 | 0.275 | 0.725 |
+| L1 | 4 | 0.109 | 0.208 | 0.115 | 0.104 | 0.541 |
+| L1 | 8 | 0.003 | 0.203 | 0.069 | 0.044 | 0.249 |
+| L1 | 16 | −0.007 | 0.244 | 0.057 | 0.015 | 0.173 |
 | gradients | 2 | 0.250 | 1.938 | 1.938 | 0.441 | 0.559 |
 | gradients | 4 | 0.196 | 1.229 | 0.607 | 0.151 | 0.361 |
 | gradients | 8 | 0.191 | 1.126 | 0.367 | 0.086 | 0.182 |
 | gradients | 16 | 0.134 | 1.049 | 0.123 | 0.034 | 0.131 |
 | piece count | 8 | 0.606 | 0.000 | 0.000 | 0.069 | 0.187 |
 
-*Table 5.2.3 — Mini-Batch K-Means clustering diagnostics for the three representations and the piece-count reference, on one million training positions. Silhouette is estimated on a $10\,000$-point subsample for the gradient runs and a $2\,000$-point subsample for the board and L1 runs; the share columns give the smallest and largest bucket as a fraction of the sample.*
+*Table 5.2 — Mini-Batch K-Means clustering diagnostics for the three representations and the piece-count reference, on one million training positions. Silhouette is estimated on a $10\,000$-point subsample; the share columns give the smallest and largest bucket as a fraction of the sample.*
 
 <span style="color: #808080;">[Piece-count reference]</span> The piece-count reference attains the highest silhouette score ($0.61$), but this is an artefact of its one-dimensional nature: contiguous, well-separated bins along a single scalar are trivial to recover. Its centroid cosine distance is identically zero, since all bucket means are positive one-dimensional numbers that point in the same direction. The piece-count partition therefore looks compact by silhouette but conveys nothing about the learning signal, and it should not be read as a well-formed candidate for expert specialisation.
 
-<span style="color: #808080;">[DBSCAN]</span> The density-based alternative is summarised in Table 5.2. DBSCAN recovers very few clusters from each representation — three from the board encoding, two from the L1 activations, and five from the gradients — despite targeting eight, and it flags a very large fraction of the fit sample as noise: $39.6\%$ for the board encoding, $57.2\%$ for the L1 activations, and $75.2\%$ for the gradients. The recovered clusters are heavily imbalanced, each dominated by a single large core with one or more small satellites, and their silhouette scores, while superficially higher than those of K-Means on the board and L1 data, reflect that dominant core rather than a meaningful multimodal structure. This is consistent with the expectation set out in Section 3.5.3 that density-based clustering is unreliable in a high-dimensional gradient space, and it motivates the use of a fixed $B$ for the mixture-of-experts.
+<span style="color: #808080;">[DBSCAN]</span> The density-based alternative is summarised in Table 5.3. Since the three representations are clustered in different spaces — the board and L1 encodings in a 48-dimensional PCA of the data and the gradients in the native 48 dimensions — the three rows are reported per-representation and should not be compared directly. DBSCAN recovers very few clusters from each representation — three from the board encoding, two from the L1 activations, and five from the gradients — and it flags a very large fraction of the fit sample as noise: $39.6\%$ for the board encoding, $57.2\%$ for the L1 activations, and $75.2\%$ for the gradients. The recovered clusters are heavily imbalanced, each dominated by a single large core with one or more small satellites, and their silhouette scores, while superficially higher than those of K-Means on the board and L1 data, reflect that dominant core rather than a meaningful multimodal structure. This is consistent with the expectation set out in Section 3.5.3 that density-based clustering is unreliable in a high-dimensional gradient space, and it motivates the use of a fixed $B$ for the mixture-of-experts.
 
 | Representation | Clusters | Bucket sizes | Noise (fit subset) | Silhouette |
 | :--- | :-: | :--- | :-: | :-: |
@@ -117,9 +120,9 @@ training** to map L1 activations (or the board) to bucket IDs, spanning paramete
 | L1 | 2 | 85.6% / 14.4% | 57.2% | 0.217 |
 | gradients | 5 | 21.1% / 23.1% / 7.8% / 40.2% / 7.7% | 75.2% | 0.152 |
 
-*Table 5.2 — DBSCAN results targeting eight clusters, fitted on a $100\,000$-point subsample with `min_samples`$=80$. Bucket sizes are the cluster shares of the full one-million-position assignment; the noise column gives the fraction of the $100\,000$-point fit flagged as noise.*
+*Table 5.3 — DBSCAN results, fitted on a $100\,000$-point subsample with `min_samples`$=80$ and $\varepsilon$ selected on a quantile grid. The board and L1 runs are fit in a 48-dimensional PCA of the data, the gradient run in the native 48 dimensions, so the rows are not directly comparable across representations. Bucket sizes are the cluster shares of the full one-million-position assignment; the noise column gives the fraction of the $100\,000$-point fit flagged as noise.*
 
-<span style="color: #808080;">[Partition agreement]</span> Table 5.3 reports the agreement between the partitions at $B=8$. The board and L1 partitions agree only moderately with each other (NMI $0.24$) and agree weakly with the piece-count reference, suggesting that even activation-based partitions capture structure beyond the game phase. The gradient partition, by contrast, is nearly orthogonal to every other partition: its agreement with the board and L1 assignments is at the level of chance (ARI $0.06$–$0.08$), and its agreement with the piece-count bucketing is essentially zero (ARI $0.04$, NMI $0.09$). This is precisely the behaviour the method is designed to induce: clustering the learning signal recovers a partition that does not simply reproduce the board geometry, the internal representation, or the conventional game-phase bucketing.
+<span style="color: #808080;">[Partition agreement]</span> Table 5.4 reports the agreement between the partitions at $B=8$. The board and L1 partitions agree only moderately with each other (NMI $0.24$) and agree weakly with the piece-count reference, suggesting that even activation-based partitions capture structure beyond the game phase. The gradient partition, by contrast, is nearly orthogonal to every other partition: its agreement with the board and L1 assignments is at the level of chance (ARI $0.06$–$0.08$), and its agreement with the piece-count bucketing is essentially zero (ARI $0.04$, NMI $0.09$). This is precisely the behaviour the method is designed to induce: clustering the learning signal recovers a partition that does not simply reproduce the board geometry, the internal representation, or the conventional game-phase bucketing.
 
 | Pair | ARI | NMI |
 | :--- | :-: | :-: |
@@ -130,9 +133,9 @@ training** to map L1 activations (or the board) to bucket IDs, spanning paramete
 | L1 vs. piece count | 0.147 | 0.290 |
 | gradients vs. piece count | 0.042 | 0.088 |
 
-*Table 5.3 — Agreement (adjusted Rand index and normalised mutual information) between partitions at $B=8$, computed on one million positions. Higher values indicate closer agreement; the chance baseline is $0$.*
+*Table 5.4 — Agreement (adjusted Rand index and normalised mutual information) between partitions at $B=8$, computed on one million positions. Higher values indicate closer agreement; the chance baseline is $0$.*
 
-<span style="color: #808080;">[Stability]</span> The final gradient-based clustering, fitted on two million positions for $B \in \{2, 4, 8\}$, reproduces the structure observed on one million positions. The silhouette scores are $0.250$, $0.215$, and $0.179$ for $B=2$, $4$, and $8$ respectively, within $0.02$ of the one-million-position estimates ($0.250$, $0.196$, and $0.191$), and the mean centroid separation is preserved: the mean off-diagonal centroid cosine is $-0.938$, $-0.307$, and $-0.128$, in line with the $-0.938$, $-0.229$, and $-0.126$ observed on the smaller sample. The buckets remain well balanced at each value of $B$, ranging from $55.8\%/44.2\%$ at $B=2$ to between $10.8\%$ and $16.0\%$ at $B=8$. The partition is therefore stable with respect to the sample size. As $B$ grows the centroids spread out and their mean pairwise similarity approaches zero: at $B=2$ they are nearly antipodal, while at $B=8$ the pairwise centroid cosines range from strongly negative (near $-0.95$) to moderately aligned (near $+0.72$), consistent with a partition that tiles a single dense gradient manifold rather than isolating well-separated modes.
+<span style="color: #808080;">[Stability]</span> The final gradient-based clustering, fitted on two million positions for $B \in \{2, 4, 8\}$, reproduces the structure observed on one million positions. The silhouette scores are $0.250$, $0.215$, and $0.179$ for $B=2$, $4$, and $8$ respectively, within $0.02$ of the one-million-position estimates ($0.250$, $0.196$, and $0.191$), and the centroid geometry is preserved, though less tightly at $B=4$: the mean off-diagonal centroid cosine is $-0.938$, $-0.307$, and $-0.128$, against $-0.938$, $-0.229$, and $-0.126$ on the smaller sample — the $B=2$ and $B=8$ centroids are essentially unchanged, while the $B=4$ centroids drift from $-0.229$ to $-0.307$. The buckets remain well balanced at each value of $B$, ranging from $55.8\%/44.2\%$ at $B=2$ to between $10.8\%$ and $16.0\%$ at $B=8$. The partition is therefore stable with respect to the sample size. As $B$ grows the centroids spread out and their mean pairwise similarity approaches zero: at $B=2$ they are nearly antipodal, while at $B=8$ the pairwise centroid cosines range from strongly negative (near $-0.95$) to moderately aligned (near $+0.72$), consistent with a partition that tiles a single dense gradient manifold rather than isolating well-separated modes.
 
 <div align="center">
     <img src="RESULTS/clustering/plots/previous_gradient_2m/silhouette.png" width="600">
@@ -158,7 +161,7 @@ training** to map L1 activations (or the board) to bucket IDs, spanning paramete
 
 <span style="color: #808080;">[Model]</span> The dispatcher is a lightweight classifier that maps a position to a bucket index. Its input is the concatenated L1 activation vector, the side-to-move-ordered pair of two $128$-dimensional accumulator views ($256$ dimensions), computed once by the frozen base model and cached for the entire dataset. The primary dispatcher is a single linear layer that produces $B$ logits from the $2W$-dimensional input, with $2W \times B + B$ parameters ($2056$ parameters for $B = 8$) and the softmax used during training is discarded at inference, where the predicted bucket is simply the argmax of the logits. Three alternatives are evaluated to test whether additional capacity is warranted: a single-hidden MLP with $h \in \{32, 64, 128\}$ hidden units, a decision tree (max-depth $12$), and *XGBoost* ($50$ trees of depth $6$). A parameter-free centroid router is evaluated as an additional reference: each position is assigned to the bucket whose $k$-means centroid is nearest in cosine similarity, using either the $1688$-dimensional board-state centroids or the $256$-dimensional L1 centroids.
 
-<span style="color: #808080;">[Why a learned dispatcher]</span> The distinction between the offline clustering and the dispatcher is central to the method. The partition is defined in sample-gradient space, which is unavailable at inference time — computing a gradient would require the teacher evaluation of the position — so the partition cannot be applied directly to an unseen position. The dispatcher instead predicts the bucket from L1 activations, a feature that is already produced by the incremental accumulator update during the normal forward pass. The centroid routers serve as the geometric upper bound of what the partition allows to be recovered from the representation alone: they reproduce the partition exactly as far as the representation's geometry permits, without any learned non-linearity. The learned dispatcher is trained to approximate the partition with cross-entropy against the $k$-means labels, using Adam with a learning rate of $10^{-2}$ decayed to $10^{-3}$, a batch size of $1024$, eight epochs, and a $90/10$ train/validation split on one million positions. Because the L1 activations are cached, each router trains in a few seconds to a minute on a GPU.
+<span style="color: #808080;">[Why a learned dispatcher]</span> The distinction between the offline clustering and the dispatcher is central to the method. The partition is defined in sample-gradient space, which is unavailable at inference time — computing a gradient would require the teacher evaluation of the position — so the partition cannot be applied directly to an unseen position. The dispatcher instead predicts the bucket from L1 activations, a feature that is already produced by the incremental accumulator update during the normal forward pass. The centroid routers serve as the geometric upper bound of what the partition allows to be recovered from the representation alone: they reproduce the partition exactly as far as the representation's geometry permits, without any learned non-linearity. The learned dispatcher is trained to approximate the partition with cross-entropy against the $k$-means labels, using Adam with a learning rate of $10^{-2}$ decayed to $10^{-3}$, a batch size of $1024$, eight epochs, and a $90/10$ train/validation split on one million positions. Note that the $k$-means labels are computed on the full one-million-position subsample before the split, so the validation accuracy reported below is transductive rather than a fully independent estimate. Because the L1 activations are cached, each router trains in a few seconds to a minute on a GPU.
 
 ### 5.3.2 Dispatcher Metrics
 
@@ -166,13 +169,9 @@ training** to map L1 activations (or the board) to bucket IDs, spanning paramete
 
 <span style="color: #808080;">[Baselines]</span> Two trivial baselines are reported alongside every learned router. The *chance* baseline predicts uniformly at random, achieving $1/B$; the *dummy* baseline always predicts the majority cluster. Because the buckets are imbalanced, the dummy baseline is the more demanding reference, ranging from $0.727$ at $B=2$ to $0.172$ at $B=16$ for the L1 partitions, and from $0.560$ to $0.134$ for the gradient partitions. The piece-count rule-based router is evaluated separately by its ARI/NMI alignment with the learned partitions, since it defines its own eight buckets rather than predicting an existing partition.
 
-<span style="color: #808080;">[Routing-error severity]</span> Beyond the agreement metrics, the severity of a routing error matters for the downstream mixture-of-experts: a position misassigned to a bucket whose centroid points in a similar gradient direction is less damaging than one sent to an antipodal bucket. This is assessed by comparing the cosine similarity between a sample's gradient and the centroid of the predicted cluster against its similarity to the centroid of its reference cluster. <span style="color: #808080;">[TODO: this diagnostic has not yet been computed — see the note on Section 5.3.3.]</span>
-
-#todo DeepSeek: "Routing-error severity metric missing: no CSV/JSON in RESULTS/dispatcher computes the gradient-to-predicted-centroid cosine similarity described in 5.3.2; run that diagnostic and fill it in, or delete the paragraph."
-
 ### 5.3.3 Dispatcher Results
 
-<span style="color: #808080;">[Centroid routers]</span> Table 5.4 reports the two parameter-free centroid routers. Both reproduce the Euclidean $k$-means partition well above chance, but the L1 centroids do so markedly better than the board-state centroids: the L1 router attains a top-1 accuracy of $0.979$ at $B=2$, falling only to $0.940$ at $B=16$, while the board router falls from $0.946$ to $0.817$ over the same range. The corresponding ARI values track the same ordering ($0.916 \to 0.892$ for L1 versus $0.791 \to 0.620$ for the board), and the NMI values show the L1 agreement actually *increasing* with $B$ ($0.846 \to 0.884$) while the board agreement peaks near $B=8$ and declines. The L1 partition is therefore recoverable almost entirely through a cosine-nearest-centroid rule, confirming that the activation-based buckets are geometrically well separated, whereas the board-state partition is only partially expressible from its centroid geometry.
+<span style="color: #808080;">[Centroid routers]</span> Table 5.5 reports the two parameter-free centroid routers. Both reproduce the Euclidean $k$-means partition well above chance, but the L1 centroids do so markedly better than the board-state centroids: the L1 router attains a top-1 accuracy of $0.979$ at $B=2$, falling only to $0.940$ at $B=16$, while the board router falls from $0.946$ to $0.817$ over the same range. The corresponding ARI values track the same ordering ($0.916 \to 0.892$ for L1 versus $0.791 \to 0.620$ for the board), and the NMI values show the L1 agreement actually *increasing* with $B$ ($0.846 \to 0.884$) while the board agreement peaks near $B=8$ and declines. The L1 partition is therefore recoverable almost entirely through a cosine-nearest-centroid rule, confirming that the activation-based buckets are geometrically well separated, whereas the board-state partition is only partially expressible from its centroid geometry. Because the routers assign points by cosine proximity but are scored against the Euclidean $k$-means labels, these figures are a lower bound on recoverability: scoring against a spherical (cosine) $k$-means, which matches the routing rule, would raise the agreement further.
 
 | Representation | $B$ | Top-1 | ARI | NMI |
 | :--- | :-: | :-: | :-: | :-: |
@@ -185,13 +184,13 @@ training** to map L1 activations (or the board) to bucket IDs, spanning paramete
 | L1 | 8 | 0.948 | 0.893 | 0.872 |
 | L1 | 16 | 0.940 | 0.892 | 0.884 |
 
-*Table 5.4 — Parameter-free centroid routers (`argmin` cosine similarity to the $k$-means centroids), scored against the Euclidean Mini-Batch $k$-Means labels on one million positions. Chance is $1/B$; the majority dummy ranges from $0.727$ ($B=2$) to $0.172$ ($B=16$) for the L1 labels.*
+*Table 5.5 — Parameter-free centroid routers (`argmin` cosine similarity to the $k$-means centroids), scored against the Euclidean Mini-Batch $k$-Means labels on one million positions. Chance is $1/B$; the majority dummy ranges from $0.727$ ($B=2$) to $0.172$ ($B=16$) for the L1 labels.*
 
 <div align="center">
     <img src="RESULTS/dispatcher/centroid/plots/accuracy.png" width="600">
 </div>
 
-<span style="color: #808080;">[Learned L1 dispatchers]</span> Table 5.5 reports the learned routers trained to predict the L1 $k$-means buckets from L1 activations. Recovery of the L1 partition is essentially trivial for the neural routers: the linear dispatcher reaches $0.993$ at $B=2$ and $0.967$ at $B=16$, and the single-hidden MLP is statistically indistinguishable from it ($0.994 \to 0.971$). XGBoost approaches the neural routers ($0.986 \to 0.891$), while the single decision tree is the weakest of the four ($0.959 \to 0.704$), although even it clears the dummy baseline by a wide margin. The ARI values confirm the same ranking, with the linear and MLP routers preserving more than $0.94$ of the partition structure up to $B=16$, XGBoost $0.80$, and the decision tree $0.51$. Since the buckets are imbalanced, the macro-F1 (not shown) sits slightly below the weighted-F1 at every $B$, but the ordering across routers is unchanged.
+<span style="color: #808080;">[Learned L1 dispatchers]</span> Table 5.6 reports the learned routers trained to predict the L1 $k$-means buckets from L1 activations. Recovery of the L1 partition is essentially trivial for the neural routers: the linear dispatcher reaches $0.993$ at $B=2$ and $0.967$ at $B=16$, and the single-hidden MLP is statistically indistinguishable from it ($0.994 \to 0.971$). XGBoost approaches the neural routers ($0.986 \to 0.891$), while the single decision tree is the weakest of the four ($0.959 \to 0.704$), although even it clears the dummy baseline by a wide margin. The ARI values confirm the same ranking, with the linear and MLP routers preserving more than $0.94$ of the partition structure up to $B=16$, XGBoost $0.80$, and the decision tree $0.51$. Since the buckets are imbalanced, the macro-F1 (not shown) sits slightly below the weighted-F1 at every $B$, but the ordering across routers is unchanged.
 
 | Router | $B$ | Top-1 | ARI |
 | :--- | :-: | :-: | :-: |
@@ -212,7 +211,7 @@ training** to map L1 activations (or the board) to bucket IDs, spanning paramete
 | XGBoost | 8 | 0.930 | 0.850 |
 | XGBoost | 16 | 0.891 | 0.799 |
 
-*Table 5.5 — Learned L1-to-L1 dispatchers on one million positions ($90/10$ split), scored against the L1 Mini-Batch $k$-Means labels. Chance is $1/B$; the majority dummy is $0.727$, $0.542$, $0.248$, and $0.172$ for $B=2,4,8,16$ respectively.*
+*Table 5.6 — Learned L1-to-L1 dispatchers on one million positions ($90/10$ split), scored against the L1 Mini-Batch $k$-Means labels. Chance is $1/B$; the majority dummy is $0.727$, $0.542$, $0.248$, and $0.172$ for $B=2,4,8,16$ respectively.*
 
 <div align="center">
     <img src="RESULTS/dispatcher/l1/plots/accuracy.png" width="600">
@@ -222,9 +221,9 @@ training** to map L1 activations (or the board) to bucket IDs, spanning paramete
 
 <span style="color: #808080;">[Hidden-width sweep]</span> Varying the hidden width of the MLP router between $32$, $64$, and $128$ units makes essentially no difference on the L1 target: at every value of $B$ the three widths agree within $0.003$ in top-1 accuracy (for instance $0.993$–$0.994$ at $B=2$ and $0.970$–$0.973$ at $B=16$), and the ARI values are likewise indistinguishable. The L1 partition is linearly recoverable to begin with, so additional non-linear capacity has nothing to exploit.
 
-<span style="color: #808080;">[Gradient target]</span> The picture reverses when the routers are trained to predict the *gradient* $k$-means buckets from L1 activations, as shown in Table 5.6. Here recovery is much harder: top-1 accuracy falls from $0.63$–$0.64$ at $B=2$ to $0.48$–$0.49$ at $B=16$, and the ARI remains at or below $0.37$ throughout. The routers do exceed the dummy baseline — substantially so at the larger values of $B$ (for instance $0.48$–$0.49$ against a dummy of $0.134$ at $B=16$) — but at $B=2$ the MLP routers barely clear the $0.560$ majority label, and their ARI of $0.07$–$0.08$ indicates agreement only marginally above chance. Hidden width again matters little: the three widths are within $0.01$ of one another at every $B$. This is the central negative result of the dispatcher study: **L1 activations are a weak proxy for gradient direction**, and no amount of learned non-linearity of the size tested here recovers the gradient partition. The gradient clustering therefore carries routing information that is not present in the activation representation, which is precisely the motivation for gradient-based routing in the first place — but it also means that the deployable L1 dispatcher cannot faithfully reproduce that partition, a limitation quantified further in Section 5.5.
+<span style="color: #808080;">[Gradient target]</span> The picture reverses when the routers are trained to predict the *gradient* $k$-means buckets from L1 activations, as shown in Table 5.7. Here recovery is much harder: top-1 accuracy falls from $0.63$–$0.64$ at $B=2$ to $0.47$–$0.49$ at $B=16$, and the ARI remains at or below $0.37$ throughout. The routers do exceed the dummy baseline — substantially so at the larger values of $B$ (for instance $0.47$–$0.49$ against a dummy of $0.134$ at $B=16$) — but at $B=2$ the MLP routers barely clear the $0.560$ majority label, and their ARI of $0.07$–$0.08$ indicates agreement only marginally above chance. Hidden width again matters little: the three widths are within $0.01$ of one another at every $B$. A separate linear gradient dispatcher, trained earlier on the two-million-position gradient cache at $B \in \{2,4,8\}$, reaches validation accuracy $0.60$, $0.56$, and $0.48$; it is omitted from Table 5.7 because it is trained on a different subsample than the MLP sweep reported here. This is the central negative result of the dispatcher study: **L1 activations are a weak proxy for gradient direction**, and no amount of learned non-linearity of the size tested here recovers the gradient partition. The gradient clustering therefore carries routing information that is not present in the activation representation, which is precisely the motivation for gradient-based routing in the first place — but it also means that the deployable L1 dispatcher cannot faithfully reproduce that partition, a limitation quantified further in Section 5.5.
 
-#todo DeepSeek: "Run 2 (linear gradient dispatcher on 2M rows, dispatcher/stats.csv, val acc 0.60/0.556/0.483) is not surfaced in the tables; decide whether to add it or keep only the MLP sweep (Run 2d)."
+#todo DeepSeek (resolved): Run 2's linear gradient dispatcher (2M rows) is now noted in the prose as a separate setup from the MLP sweep.
 
 | Target | $h$ | $B$ | Top-1 | ARI |
 | :--- | :-: | :-: | :-: | :-: |
@@ -241,7 +240,7 @@ training** to map L1 activations (or the board) to bucket IDs, spanning paramete
 | gradient | 64 | 16 | 0.483 | 0.368 |
 | gradient | 128 | 16 | 0.490 | 0.369 |
 
-*Table 5.6 — MLP dispatchers (hidden width $h$) trained to predict the gradient $k$-means buckets from L1 activations, on one million positions ($90/10$ split). Chance is $1/B$; the majority dummy is $0.560$, $0.361$, $0.184$, and $0.134$ for $B=2,4,8,16$ respectively.*
+*Table 5.7 — MLP dispatchers (hidden width $h$) trained to predict the gradient $k$-means buckets from L1 activations, on one million positions ($90/10$ split). Chance is $1/B$; the majority dummy is $0.560$, $0.361$, $0.184$, and $0.134$ for $B=2,4,8,16$ respectively.*
 
 <div align="center">
     <img src="RESULTS/dispatcher/mlp/plots/accuracy_gradient.png" width="600">
@@ -253,11 +252,9 @@ training** to map L1 activations (or the board) to bucket IDs, spanning paramete
 
 #todo colorbar covers confusion matrix - regenerate plot
 
-<span style="color: #808080;">[Error structure]</span> The normalised confusion matrices for the gradient target show that the residual agreement is not concentrated along a few systematic confusions: the off-diagonal mass is diffuse across the buckets rather than confined to adjacent ones, and the macro-F1 consistently lags the top-1 accuracy by a growing margin as $B$ increases (for instance $0.40$–$0.42$ against $0.48$–$0.49$ at $B=16$), indicating that the smaller buckets are disproportionately misclassified. The learned routers are therefore a poor *point* approximation of the gradient partition, although — as the ARI of $0.37$ at $B=16$ shows — they retain a coarse, non-trivial signal that exceeds the majority and chance baselines at every value of $B$.
+<span style="color: #808080;">[Error structure]</span> The macro-F1 consistently lags the top-1 accuracy by a growing margin as $B$ increases (for instance $0.40$–$0.42$ against $0.47$–$0.49$ at $B=16$), indicating that the smaller buckets are disproportionately misclassified: the majority buckets dominate the top-1 accuracy, while the per-bucket precision and recall are dragged down by the rare buckets. The learned routers are therefore a poor *point* approximation of the gradient partition, although — as the ARI of $0.37$ at $B=16$ shows — they retain a coarse, non-trivial signal that exceeds the majority and chance baselines at every value of $B$.
 
-#todo DeepSeek: "Verify the error-structure claim against the confusion matrices (confusion_gradient.png etc.); the 'diffuse, not adjacent' wording could not be confirmed from the plots (images not inspectable)."
-
-<span style="color: #808080;">[Piece-count router]</span> The fixed eight-interval piece-count router is evaluated purely by its alignment with the learned partitions, since it predicts its own bucket definitions. Table 5.7 shows that it aligns weakly with the L1 partitions (ARI $0.11$–$0.17$) and essentially not at all with the gradient partitions (ARI $0.01$–$0.05$). The piece-count buckets themselves are reasonably balanced, with the eight intervals covering between $6.9\%$ and $18.7\%$ of the sample. This mirrors the clustering findings of Section 5.2.3: piece count is a one-dimensional game-phase signal that shares little structure with either activation- or gradient-based buckets, and it cannot serve as a substitute for the learned routing.
+<span style="color: #808080;">[Piece-count router]</span> The fixed eight-interval piece-count router is evaluated purely by its alignment with the learned partitions, since it predicts its own bucket definitions. Table 5.8 shows that it aligns weakly with the L1 partitions (ARI $0.11$–$0.17$) and essentially not at all with the gradient partitions (ARI $0.01$–$0.05$). The piece-count buckets themselves are reasonably balanced, with the eight intervals covering between $6.9\%$ and $18.7\%$ of the sample. This mirrors the clustering findings of Section 5.2.3: piece count is a one-dimensional game-phase signal that shares little structure with either activation- or gradient-based buckets, and it cannot serve as a substitute for the learned routing.
 
 | Target | $B$ | ARI | NMI |
 | :--- | :-: | :-: | :-: |
@@ -270,7 +267,7 @@ training** to map L1 activations (or the board) to bucket IDs, spanning paramete
 | gradient | 8 | 0.042 | 0.088 |
 | gradient | 16 | 0.045 | 0.120 |
 
-*Table 5.7 — Alignment (ARI/NMI) between the fixed eight-bucket piece-count router and the L1 and gradient $k$-means partitions at each $B$, computed on one million positions.*
+*Table 5.8 — Alignment (ARI/NMI) between the fixed eight-bucket piece-count router and the L1 and gradient $k$-means partitions at each $B$, computed on one million positions.*
 
 <div align="center">
     <img src="RESULTS/dispatcher/piececount/plots/alignment.png" width="600">

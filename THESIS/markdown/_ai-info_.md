@@ -28,8 +28,8 @@
 
 | Placeholder             | Meaning                                                       | Current value                                       |
 | :---------------------- | :------------------------------------------------------------ | :-------------------------------------------------- |
-| `[dataset_size]`        | Dataset size (FEN positions, with duplicates)                 | 105M                                                |
-| `[dataset_size_unique]` | Dataset size (unique FEN positions)                           | 104M                                                |
+| `[dataset_size]`        | Dataset size (FEN positions, with duplicates)                 | 150.8M                                              |
+| `[dataset_size_unique]` | Dataset size (unique FEN positions)                           | #todo recompute                                  |
 | `[test_fraction]`       | Percentage of the dataset held out as test set                | 1%                                                  |
 | `[batch_size]`          | Training batch size                                           | 10k                                                 |
 | `[lr_start]`            | Initial learning rate                                         | $10^{-2}$                                           |

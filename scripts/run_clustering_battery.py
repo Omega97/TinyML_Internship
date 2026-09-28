@@ -186,9 +186,9 @@ def run_kmeans(name: str, x: np.ndarray) -> tuple[list[dict], dict[tuple, np.nda
         started = time.perf_counter()
         model = fit_minibatch_kmeans(x, k, seed=SEED)
         lab = np.asarray(model.labels_, dtype=np.int16)
-        # Native 1688-d / 256-d pairwise distances at 10k points dominate the run.
-        # 2k is enough for a stable average and stays in the space k-means used.
-        sil_n = SILHOUETTE_SAMPLES if int(x.shape[1]) <= 64 else 2_000
+        # Use the same 10k subsample for every representation so silhouettes are
+        # comparable across board (1688-d), L1 (256-d), and gradients (48-d).
+        sil_n = SILHOUETTE_SAMPLES
         summary = summarize_partition(
             x,
             lab,
