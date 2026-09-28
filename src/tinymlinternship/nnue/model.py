@@ -307,3 +307,62 @@ class MediumWDLNNUE(nn.Module):
 
     def count_parameters(self) -> int:
         return sum(p.numel() for p in self.parameters() if p.requires_grad)
+
+
+class DualHiddenFFNN(nn.Module):
+    """Two hidden layers: concat ``[STM ‖ opp]`` ``2×844 → H1 → H2 → 3`` logits, CReLU, softmax STM WDL."""
+
+    architecture = "ffnn_dual_hidden_wdl"
+    n_outputs = 3
+
+    def __init__(
+        self,
+        feature_dim: int = FEATURE_DIM,
+        hidden1_dim: int = 64,
+        hidden2_dim: int = 64,
+        crelu_clip: float = 127.0,
+    ) -> None:
+        super().__init__()
+        self.feature_dim = feature_dim
+        self.hidden1_dim = hidden1_dim
+        self.hidden2_dim = hidden2_dim
+        self.crelu_clip = crelu_clip
+        self.l1 = nn.Linear(feature_dim * 2, hidden1_dim, bias=True)
+        self.l2 = nn.Linear(hidden1_dim, hidden2_dim, bias=True)
+        self.head = nn.Linear(hidden2_dim, 3, bias=True)
+        self.softmax = nn.Softmax(dim=-1)
+        for layer in (self.l1, self.l2, self.head):
+            nn.init.kaiming_uniform_(layer.weight, a=5**0.5)
+            nn.init.zeros_(layer.bias)
+
+    def _stm_opp(
+        self,
+        white: torch.Tensor,
+        black: torch.Tensor,
+        stm_white: torch.Tensor,
+    ) -> tuple[torch.Tensor, torch.Tensor]:
+        mask = stm_white.unsqueeze(1)
+        stm = torch.where(mask, white, black)
+        opp = torch.where(mask, black, white)
+        return stm, opp
+
+    def forward(
+        self,
+        white_features: torch.Tensor,
+        black_features: torch.Tensor,
+        stm_white: torch.Tensor,
+    ) -> torch.Tensor:
+        stm, opp = self._stm_opp(white_features, black_features, stm_white)
+        h1 = crelu(self.l1(torch.cat([stm, opp], dim=1)), self.crelu_clip)
+        h2 = crelu(self.l2(h1), self.crelu_clip)
+        return self.head(h2)
+
+    def probabilities(self, logits: torch.Tensor) -> torch.Tensor:
+        return self.softmax(logits)
+
+    def stm_value(self, logits: torch.Tensor) -> torch.Tensor:
+        probs = self.probabilities(logits)
+        return probs[..., 0] - probs[..., 2]
+
+    def count_parameters(self) -> int:
+        return sum(p.numel() for p in self.parameters() if p.requires_grad)
