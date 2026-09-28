@@ -104,25 +104,24 @@ Dense baseline models trained end-to-end on the full dataset without any cluster
 - Prediction Error / Residual Distribution histograms
 
 #### Algorithms & Experiments
-- [ ] 🔴 Linear Model Baseline
-- [ ] 🔴 FFNN Single-Hidden Layer ($h \in \{64, 128, 256\}$)
-- [ ] 🔴 FFNN Dual-Hidden Layer ($h=H \in \{64, 128, 256\}$)
+- [x] 🟢📋📊 Linear Model Baseline
+- [x] 🟢📋📊 FFNN Single-Hidden Layer ($h \in \{64, 128, 256\}$)
+- [x] 🟢📋📊 FFNN Dual-Hidden Layer ($h=H \in \{64, 128, 256\}$)
 - [x] 🟢📋📊 Standard NNUE Architecture (Accumulator $h$, Hidden $H \in \{2h=H=64, 2h=H=128, 2h=H=256\}$) — 5 widths staged: $(h,H) \in \{(32,64),(64,128),(128,128),(128,256),(256,512)\}$, plus a CE-vs-train-size scaling sweep
 - [ ] 🔴 *Optional*: Deep NNUE Architecture (Accumulator $h$, Dual-Hidden $H_1, H_2$)
-- [ ] 🔴 Linear Model Baseline 
-- [ ] 🔴 FFNN Single-Hidden Layer ($h \in \{64, 128, 256\}$) 
-- [ ] 🔴 FFNN Dual-Hidden Layer ($h=H \in \{64, 128, 256\}$) 
-- [ ] 🔴 Capacity-Matched Dense Baseline (e.g., $H=512$ single head to compare against $B=4, H=256$ MoE)
+- [ ] 🔴 *Optional*: Capacity-Matched Dense Baseline (e.g., $H=512$ single head to compare against $B=4, H=256$ MoE)
 
 #### Results Summary
 - Five two-hidden NNUE models staged; test CE reaches 0.629 for the largest (W256_H512). Scaling sweeps show CE keeps improving with training data up to ~90M rows.
-- Linear / FFNN / capacity-matched dense baselines not yet run.
+- Linear baseline (5,067 params) reaches test CE 0.766 / MAE 0.258 / R² 0.716; the single-hidden FFNN improves with width (H=64: CE 0.669, H=128: CE 0.654, H=256: CE 0.643 / R² 0.880) but a flat FFNN over concatenated features still underperforms the dual-POV NNUE at equal or smaller parameter count (e.g. FFNN_H256 = 433k params vs W128_H256 = 175k params at CE 0.632) — evidence of the NNUE inductive bias.
+- The dual-hidden FFNN (H1=H2 ∈ {64,128,256}) adds a second CReLU layer: CE 0.656 / 0.645 / 0.632 at 112k/233k/499k params. At H=256 (499k params) it roughly matches the single-hidden FFNN and approaches the two-hidden NNUE at equal parameter count (W256_H512, 480k params, CE 0.629) — the extra depth recovers most of the flat-vs-accumulator gap, but the NNUE still edges it out at comparable size.
+- Capacity-matched dense baseline not yet run.
 
 ---
 
 ### 4. Mixture of Experts (MoE) 👨‍🔬
 
-`[RESULTS/MoE/]`
+`[RESULTS/moe/]`
 
 MoE models combine a trained dispatcher (or soft gating network) with $K$ specialized expert heads. Each expert head must be trained on a minimum of $7\times 10^6$ routed samples for $H=256$ models to prevent underfitting.
 
@@ -137,16 +136,12 @@ MoE models combine a trained dispatcher (or soft gating network) with $K$ specia
 - Confusion / Routing Matrix across game stages
 
 #### Algorithms & Experiments
-- [ ] 🔴 **Piece-Count Routed MoE**: Fixed Piece-Count Dispatcher + NNUE Expert Heads ($K=7$)
-- [ ] 🔴 **$L1$-Clustered Hard MoE**: $L1$ MLP Dispatcher + NNUE Expert Heads ($K \in \{2, 4, 8, 16\}$)
+- [ ] 🔴 **Piece-Count Routed MoE**: Fixed Piece-Count Dispatcher + NNUE Expert Heads ($K \in \{7, 8\}$)
+- [ ] 🔴 **$L1$-Clustered Hard MoE (Frozen vs. Unfrozen $L1$)**: $L1$ MLP Dispatcher + NNUE Expert Heads ($K \in \{2, 4, 8, 16\}$)
 - [ ] 🟠📋📊 **Gradient-Clustered Hard MoE**: Gradient MLP Dispatcher + NNUE Expert Heads ($K \in \{2, 4, 8, 16\}$) — *preliminary*: linear (not MLP) dispatcher, $K \in \{3, 4\}$, 1–2M rows, 2-epoch expert fine-tune
 - [ ] 🔴 **End-to-End Soft-Gated MoE**: Top-1 / Top-2 Softmax Gating Network + NNUE Experts (Trained joint end-to-end with load balancing loss)
-- [ ] 🔴  [[End-to-End Sparse Top-1 MoE]] - the most elegant approach for a Mixture of Experts; it forces the network to discover its own optimal clustering strategy purely based on minimizing the valuation error.
-- [ ] 🔴 **Oracle Upper-Bound MoE**: Perfect assignment ($\arg\min_k \mathcal{L}_k$) to measure routing headroom 
-- [ ] 🔴 **Piece-Count Routed MoE**: Fixed Piece-Count Dispatcher + NNUE Experts ($K=8$) 
-- [ ] 🔴 **$L1$-Clustered Hard MoE (Frozen vs. Unfrozen $L1$)**: $L1$ MLP Router + Experts ($K \in \{2, 4, 8, 16\}$) 
-- [ ] 🔴 **End-to-End Sparse Top-1 MoE**: Switch-style joint training with load balancing loss ($\alpha \in \{0.001, 0.01, 0.05\}$) 
-- [ ] 🔴 **End-to-End Top-2 Soft-Gated MoE**: Blended top-2 expert baseline (Performance upper bound vs. Top-1)
+- [ ] 🔴 **End-to-End Sparse Top-1 MoE (Switch)**: Switch-style joint training with load-balancing loss ($\alpha \in \{0.001, 0.01, 0.05\}$) — forces the network to discover its own optimal clustering purely by minimizing valuation error.
+- [ ] 🔴 **Oracle Upper-Bound MoE**: Perfect assignment ($\arg\min_k \mathcal{L}_k$) to measure routing headroom
 
 #### Results Summary (preliminary)
 - Hard gradient-clustered MoE (K=3,4) matches but does not yet beat the base (MoE CE 0.630 vs base 0.630); the oracle router (CE 0.628) leaves modest headroom.
@@ -173,6 +168,8 @@ MoE models combine a trained dispatcher (or soft gating network) with $K$ specia
 **Run 2f — Piece-count rule-based dispatcher:** 🟢 2026-09-25, `scripts/run_piececount_dispatcher.py`. Fixed 8-interval piece-count router (Board → Bucket ID) on the 1M-row `moe_b3_1m` subsample; no training. Tables: `dispatcher/piececount/sizes.csv` (bucket sizes/proportions) and `dispatcher/piececount/alignment.csv` (ARI/NMI vs. L1 and gradient k-means). Plots in `dispatcher/piececount/plots/` (size bars, ARI vs. $B$). The piece-count partition aligns weakly with L1 clusters (ARI ≈ 0.11–0.17) and essentially not at all with gradient clusters (ARI ≈ 0.01–0.05).
 
 **Run 3 — Base NNUE models + scaling:** 🟢 2026-09-08 (staged via `scripts/stage_thesis_results.py`), `scripts/train_nnue-gpu.py`. Five dual-POV two-hidden NNUE checkpoints staged into `base/`: $(h,H) \in \{(32,64),(64,128),(128,128),(128,256),(256,512)\}$. CE-vs-train-size scaling sweeps for $H \in \{64, 256\}$ in `base/scaling/`. Manifest: `manifest.json`.
+
+**Run 3b — Dense base baselines (linear + single/double-hidden FFNN):** 🟢 2026-09-28, `scripts/run_base_baselines.py`. GPU compact-path training mirroring `train_nnue-gpu.py` (test_fraction 0.01, 100 epochs, 512×10,000 steps/epoch, Adam 1e-2→1e-3). Seven runs staged into `base/` via `scripts/stage_base_baselines.py`: `Linear` (5,067 params); single-hidden `FFNN_H64/H128/H256` (108k/217k/433k params); dual-hidden `FFNN2_H64/H128/H256` (112k/233k/499k params, `DualHiddenFFNN`). Each run exports `config.json`, `history.json`, `ce.png`, `best.pt`, plus `metrics.json` (CE, MAE, MSE, R², train/inference NPS). Test CE: Linear 0.766 / FFNN 0.669·0.654·0.643 / FFNN2 0.656·0.645·0.632.
 
 **Run 4 — Preliminary gradient-clustered MoE:** 🟠 2026-09-16, `scripts/run_moe_pipeline.py`. Two preliminary hard-MoE runs: `kmeans_b3_1m` ($K=3$, 1M rows) and `kmeans_b4_2m` ($K=4$, 2M rows). Pipeline: 48-d sample gradients → mini-batch k-means → linear $L1$ dispatcher → per-cluster fine-tuned expert heads (frozen L1). Tables: `eval.json` (base/moe/oracle CE+MAE), `expert_metrics.json`, `diagnostics.json`, `summary.json`. Plots in `plots/` (PCA/t-SNE, cluster sizes, centroid cosine, dispatcher accuracy/confusion, expert CE, MoE-vs-base). Not the full battery: linear dispatcher (not MLP), $K \in \{3, 4\}$ only, and 1–2M routed rows (below the $7\times10^6$ per-expert target for $H=256$).
 

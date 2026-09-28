@@ -1,0 +1,12 @@
+{
+  "run_name": "ffnn2_h256",
+  "architecture": "ffnn_dual_hidden_wdl",
+  "parameters": 498947,
+  "n_test": 1507940,
+  "test_ce": 0.6324089765548706,
+  "test_mae": 0.13518622517585754,
+  "test_mse": 0.05268484726548195,
+  "test_r2": 0.8925466537475586,
+  "train_nps": 1351692.274762232,
+  "infer_nps": 2558732.2666902514
+}

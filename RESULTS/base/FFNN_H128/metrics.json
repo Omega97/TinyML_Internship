@@ -1,0 +1,12 @@
+{
+  "run_name": "medium_h128",
+  "architecture": "medium_wdl",
+  "parameters": 216579,
+  "n_test": 1507940,
+  "test_ce": 0.6543202996253967,
+  "test_mae": 0.15730640292167664,
+  "test_mse": 0.06711075454950333,
+  "test_r2": 0.8631242513656616,
+  "train_nps": 1519002.8810490677,
+  "infer_nps": 2700928.164120473
+}

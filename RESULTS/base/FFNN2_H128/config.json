@@ -1,0 +1,22 @@
+{
+  "slices_dir": "/home/omar/jupyterlab/TinyML_Internship/data/processed/board_eval/fen_value_visits",
+  "test_fraction": 0.01,
+  "split": "random fraction of each slice -> test",
+  "split_seed": 0,
+  "architecture": "ffnn_dual_hidden_wdl",
+  "hidden_dim": null,
+  "hidden1_dim": 128,
+  "hidden2_dim": 128,
+  "epochs": 100,
+  "batch_size": 10000,
+  "batches_per_epoch": 512,
+  "eval_batch_size": 32768,
+  "lr": 0.01,
+  "lr_end": 0.001,
+  "amp_dtype": "bfloat16",
+  "device": "cuda",
+  "data_device": "cuda:0",
+  "parameters": 233091,
+  "loss": "unweighted soft cross-entropy, target = STM WDL",
+  "output": "3 logits + softmax (W, D, L) from side to move"
+}

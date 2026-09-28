@@ -1,0 +1,28 @@
+{
+  "name": "Linear",
+  "role": "Linear dual-POV WDL baseline (concat [STM||opp] -> 3 logits, no hidden layers)",
+  "source": "/home/omar/jupyterlab/TinyML_Internship/models/checkpoints/baselines/linear_wdl",
+  "architecture": "linear_wdl",
+  "hidden_dim": null,
+  "hidden1_dim": null,
+  "hidden2_dim": null,
+  "parameters": 5067,
+  "configured_epochs": 100,
+  "copied": [
+    "best.pt",
+    "config.json",
+    "history.json",
+    "ce.png",
+    "metrics.json"
+  ],
+  "epochs_logged": 100,
+  "last_test_ce": 0.765828549861908,
+  "best_test_ce": 0.7657685279846191,
+  "test_ce": 0.765828549861908,
+  "test_mae": 0.2577010989189148,
+  "test_mse": 0.13900452852249146,
+  "test_r2": 0.7164933681488037,
+  "n_test": 1507940,
+  "train_nps": 1581263.7276060318,
+  "infer_nps": 2557110.0693754554
+}

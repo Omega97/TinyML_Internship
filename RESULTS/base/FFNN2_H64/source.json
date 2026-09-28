@@ -1,0 +1,28 @@
+{
+  "name": "FFNN2_H64",
+  "role": "Dual-hidden FFNN (H1=H2=64) over concat [STM||opp]",
+  "source": "/home/omar/jupyterlab/TinyML_Internship/models/checkpoints/baselines/ffnn2_h64",
+  "architecture": "ffnn_dual_hidden_wdl",
+  "hidden_dim": null,
+  "hidden1_dim": 64,
+  "hidden2_dim": 64,
+  "parameters": 112451,
+  "configured_epochs": 100,
+  "copied": [
+    "best.pt",
+    "config.json",
+    "history.json",
+    "ce.png",
+    "metrics.json"
+  ],
+  "epochs_logged": 100,
+  "last_test_ce": 0.6560248732566833,
+  "best_test_ce": 0.6559394001960754,
+  "test_ce": 0.6560248732566833,
+  "test_mae": 0.16144299507141113,
+  "test_mse": 0.07080744206905365,
+  "test_r2": 0.8555846810340881,
+  "n_test": 1507940,
+  "train_nps": 1498312.9389875724,
+  "infer_nps": 2578084.578402138
+}

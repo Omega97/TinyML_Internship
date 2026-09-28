@@ -1,0 +1,28 @@
+{
+  "name": "FFNN_H256",
+  "role": "Single-hidden FFNN (H=256) over concat [STM||opp]",
+  "source": "/home/omar/jupyterlab/TinyML_Internship/models/checkpoints/baselines/medium_h256",
+  "architecture": "medium_wdl",
+  "hidden_dim": 256,
+  "hidden1_dim": null,
+  "hidden2_dim": null,
+  "parameters": 433155,
+  "configured_epochs": 100,
+  "copied": [
+    "best.pt",
+    "config.json",
+    "history.json",
+    "ce.png",
+    "metrics.json"
+  ],
+  "epochs_logged": 100,
+  "last_test_ce": 0.6433637142181396,
+  "best_test_ce": 0.6433054804801941,
+  "test_ce": 0.6433637142181396,
+  "test_mae": 0.1449032872915268,
+  "test_mse": 0.058668557554483414,
+  "test_r2": 0.8803425431251526,
+  "n_test": 1507940,
+  "train_nps": 1486643.3860956978,
+  "infer_nps": 2621377.1921092705
+}
