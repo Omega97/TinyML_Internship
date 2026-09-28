@@ -1,0 +1,69 @@
+{
+  "expert_labels": "piece_count",
+  "buckets": [
+    {
+      "expert": 0,
+      "n_train": 158665,
+      "n_hold": 17629,
+      "base_hold_ce": 1.0307409763336182,
+      "expert_hold_ce": 1.030301570892334,
+      "skipped": 0
+    },
+    {
+      "expert": 1,
+      "n_train": 190624,
+      "n_hold": 21180,
+      "base_hold_ce": 0.8659045100212097,
+      "expert_hold_ce": 0.8660148978233337,
+      "skipped": 0
+    },
+    {
+      "expert": 2,
+      "n_train": 201981,
+      "n_hold": 22442,
+      "base_hold_ce": 0.962427020072937,
+      "expert_hold_ce": 0.961970865726471,
+      "skipped": 0
+    },
+    {
+      "expert": 3,
+      "n_train": 337340,
+      "n_hold": 37482,
+      "base_hold_ce": 0.7130295634269714,
+      "expert_hold_ce": 0.7127745151519775,
+      "skipped": 0
+    },
+    {
+      "expert": 4,
+      "n_train": 293141,
+      "n_hold": 32571,
+      "base_hold_ce": 0.5428772568702698,
+      "expert_hold_ce": 0.5430662631988525,
+      "skipped": 0
+    },
+    {
+      "expert": 5,
+      "n_train": 241731,
+      "n_hold": 26858,
+      "base_hold_ce": 0.43048593401908875,
+      "expert_hold_ce": 0.4316648840904236,
+      "skipped": 0
+    },
+    {
+      "expert": 6,
+      "n_train": 251222,
+      "n_hold": 27913,
+      "base_hold_ce": 0.32821545004844666,
+      "expert_hold_ce": 0.32839077711105347,
+      "skipped": 0
+    },
+    {
+      "expert": 7,
+      "n_train": 125299,
+      "n_hold": 13922,
+      "base_hold_ce": 0.20142334699630737,
+      "expert_hold_ce": 0.20158039033412933,
+      "skipped": 0
+    }
+  ]
+}

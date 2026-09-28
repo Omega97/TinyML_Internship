@@ -1,0 +1,40 @@
+{
+  "run_name": "piececount_k8",
+  "checkpoint": "/home/omar/jupyterlab/TinyML_Internship/models/checkpoints/nnue/dual_h128_H256_e200_bpe512_bs10000/best.pt",
+  "n_buckets": 8,
+  "router": "piece_count",
+  "expert_labels": "piece_count",
+  "expert_epochs": 2,
+  "train_rows": 2000000,
+  "bucket_names": [
+    "32",
+    "28-29",
+    "30-31",
+    "24-27",
+    "20-23",
+    "16-19",
+    "10-15",
+    "2-9"
+  ],
+  "bucket_sizes": [
+    176294,
+    211804,
+    224423,
+    374822,
+    325712,
+    268589,
+    279135,
+    139221
+  ],
+  "metrics": {
+    "n_test": 50000,
+    "base_ce": 0.6302555877256394,
+    "base_mae": 0.13261923822283744,
+    "moe_ce": 0.6302898075091838,
+    "moe_mae": 0.13307252167105674
+  },
+  "plots": [
+    "/home/omar/jupyterlab/TinyML_Internship/RESULTS/moe/piececount_k8/plots/expert_ce_by_bucket.png",
+    "/home/omar/jupyterlab/TinyML_Internship/RESULTS/moe/piececount_k8/plots/moe_vs_base_ce.png"
+  ]
+}

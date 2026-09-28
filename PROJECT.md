@@ -2,11 +2,11 @@
 
 **SARDINE** — *Small Artificial RAM-restricted Deep Intelligent Neural Engine*
 
-Tiny-hardware chess bot. **Spec:** [Goal.md](Goal.md). **This file** is the current repo status (not the old 8-bucket / Python-engine plan).
+Tiny-hardware chess bot. **Spec:** [Goal.md](GOAL%20-%20Results.md). **This file** is the current repo status (not the old 8-bucket / Python-engine plan).
 
 | Doc                        | Role                                 |
 | -------------------------- | ------------------------------------ |
-| [Goal.md](Goal.md)         | What to build (five steps)           |
+| [Goal.md](GOAL%20-%20Results.md)         | What to build (five steps)           |
 | **PROJECT.md** (this file) | What is on disk now                  |
 | [README.md](README.md)     | Short pointer + live tree            |
 | [ai-feed.md](Thesis%20results%20battery.md)   | Cleanup log (what went to `LEGACY/`) |
@@ -134,7 +134,7 @@ Join: `scripts/join_fen_value_visits.py` (sum visits on the same EPD; visit-weig
 
 ## Notes for AI
 
-Facts a later agent should not re-discover or violate. Spec is [Goal.md](Goal.md); this file is **status**; [README.md](README.md) is the short pointer.
+Facts a later agent should not re-discover or violate. Spec is [Goal.md](GOAL%20-%20Results.md); this file is **status**; [README.md](README.md) is the short pointer.
 
 1. **Five-step order is binding.** Dataset → dual-POV 2-hidden NNUE → task-vector MoE → Cfish `evaluate` swap → ACPL / STS / BayesElo. Do not skip ahead into search, hardware, or thesis polish.
 2. **`LEGACY/` is gitignored and dead as a product path.** Old 8-bucket / single-head Python engine / HCE / ICTP 2026-07 live there. Read it to recover the 844 encoder and `DualHiddenNNUE`, then **re-implement under live `src/tinymlinternship/`**. Do not import from `LEGACY/` or revive the Python αβ engine.
@@ -158,7 +158,7 @@ Facts a later agent should not re-discover or violate. Spec is [Goal.md](Goal.md
 20. **Eval output vs training target.** Training target is **STM WDL**. Search eval must still be usable from the side to move (Cfish convention): \(v_{\text{STM}}=W-L\). Do not train White-POV scalar \(v\) against an STM-first concat.
 21. **Data/models are gitignored** (`data/raw/`, `data/processed/`, `/models/`, `*.pt`, `*.nnue`). Code + tests + this file are what you commit. Daily notes (`YYYY-MM-DD.md`, `DAILY-NOTES/`) are typically gitignored too.
 22. **Tests that exist on the live path:** `tests/test_fen_value_visits.py`, `tests/test_lichess_dump_batch.py`, `tests/test_relabel_fen_value_visits_lc0.py`. LEGACY has encoder/NNUE tests (`test_features.py`, `test_nnue_model.py`, …) — port what you need; do not assume they run against live `src/`.
-23. **Doc roles.** [Goal.md](Goal.md) = what to build. **PROJECT.md** = what is on disk. [README.md](README.md) = order + live tree. [ai-feed.md](Thesis%20results%20battery.md) = cleanup log. Session plan/log = root `YYYY-MM-DD.md`. When they disagree on counts, prefer `fen_value_visits.manifest.json`.
+23. **Doc roles.** [Goal.md](GOAL%20-%20Results.md) = what to build. **PROJECT.md** = what is on disk. [README.md](README.md) = order + live tree. [ai-feed.md](Thesis%20results%20battery.md) = cleanup log. Session plan/log = root `YYYY-MM-DD.md`. When they disagree on counts, prefer `fen_value_visits.manifest.json`.
 24. **Do not invent a second student stack.** No new Python search, no HCE product path, no 8-head training as the Goal student. Incremental L1 add/sub on make/unmake is required for Cfish; a dense 844 matmul is only acceptable in the PyTorch trainer.
 25. We created a dataset of 2M FEN codes with Lc0 evaluation (and visit count).
 

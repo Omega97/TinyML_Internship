@@ -6,7 +6,7 @@
 
 > *End-to-end chess engine for tiny hardware: sparse dual-POV NNUE eval, Cfish αβ search, under tight RAM/flash.*
 
-- Spec (five steps): **[Goal.md](Goal.md)**
+- Spec (five steps): **[Goal.md](GOAL%20-%20Results.md)**
 - Status / dataset / notes for AI: **[PROJECT.md](PROJECT.md)**
 - Train how-to: **[demo/demo-training.md](demo/demo-training.md)**
 - Old 8-bucket / HCE / Python-engine / ICTP 2026-07 pipeline: **[LEGACY/](LEGACY/)**

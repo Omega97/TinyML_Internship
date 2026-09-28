@@ -136,7 +136,7 @@ MoE models combine a trained dispatcher (or soft gating network) with $K$ specia
 - Confusion / Routing Matrix across game stages
 
 #### Algorithms & Experiments
-- [ ] 🔴 **Piece-Count Routed MoE**: Fixed Piece-Count Dispatcher + NNUE Expert Heads ($K \in \{7, 8\}$)
+- [x] 🟢📋📊 **Piece-Count Routed MoE**: Fixed Piece-Count Dispatcher + NNUE Expert Heads ($K=8$) — 8-interval piece-count router, 2M rows, 2-epoch expert fine-tune
 - [ ] 🔴 **$L1$-Clustered Hard MoE (Frozen vs. Unfrozen $L1$)**: $L1$ MLP Dispatcher + NNUE Expert Heads ($K \in \{2, 4, 8, 16\}$)
 - [ ] 🟠📋📊 **Gradient-Clustered Hard MoE**: Gradient MLP Dispatcher + NNUE Expert Heads ($K \in \{2, 4, 8, 16\}$) — *preliminary*: linear (not MLP) dispatcher, $K \in \{3, 4\}$, 1–2M rows, 2-epoch expert fine-tune
 - [ ] 🔴 **End-to-End Soft-Gated MoE**: Top-1 / Top-2 Softmax Gating Network + NNUE Experts (Trained joint end-to-end with load balancing loss)
@@ -146,6 +146,7 @@ MoE models combine a trained dispatcher (or soft gating network) with $K$ specia
 #### Results Summary (preliminary)
 - Hard gradient-clustered MoE (K=3,4) matches but does not yet beat the base (MoE CE 0.630 vs base 0.630); the oracle router (CE 0.628) leaves modest headroom.
 - No routing gain so far: experts underfit (1–2M rows, 2 epochs) and the L1 dispatcher recovers gradient buckets poorly.
+- Piece-count routed MoE (K=8, 2M rows) does not beat the base either: MoE CE 0.6303 vs base 0.6303 (MAE 0.1331 vs 0.1326) — per-bucket expert CE ≈ base CE on every bucket, confirming piece count is too weak a routing signal for any specialization.
 
 ---
 
@@ -172,4 +173,6 @@ MoE models combine a trained dispatcher (or soft gating network) with $K$ specia
 **Run 3b — Dense base baselines (linear + single/double-hidden FFNN):** 🟢 2026-09-28, `scripts/run_base_baselines.py`. GPU compact-path training mirroring `train_nnue-gpu.py` (test_fraction 0.01, 100 epochs, 512×10,000 steps/epoch, Adam 1e-2→1e-3). Seven runs staged into `base/` via `scripts/stage_base_baselines.py`: `Linear` (5,067 params); single-hidden `FFNN_H64/H128/H256` (108k/217k/433k params); dual-hidden `FFNN2_H64/H128/H256` (112k/233k/499k params, `DualHiddenFFNN`). Each run exports `config.json`, `history.json`, `ce.png`, `best.pt`, plus `metrics.json` (CE, MAE, MSE, R², train/inference NPS). Test CE: Linear 0.766 / FFNN 0.669·0.654·0.643 / FFNN2 0.656·0.645·0.632.
 
 **Run 4 — Preliminary gradient-clustered MoE:** 🟠 2026-09-16, `scripts/run_moe_pipeline.py`. Two preliminary hard-MoE runs: `kmeans_b3_1m` ($K=3$, 1M rows) and `kmeans_b4_2m` ($K=4$, 2M rows). Pipeline: 48-d sample gradients → mini-batch k-means → linear $L1$ dispatcher → per-cluster fine-tuned expert heads (frozen L1). Tables: `eval.json` (base/moe/oracle CE+MAE), `expert_metrics.json`, `diagnostics.json`, `summary.json`. Plots in `plots/` (PCA/t-SNE, cluster sizes, centroid cosine, dispatcher accuracy/confusion, expert CE, MoE-vs-base). Not the full battery: linear dispatcher (not MLP), $K \in \{3, 4\}$ only, and 1–2M routed rows (below the $7\times10^6$ per-expert target for $H=256$).
+
+**Run 5 — Piece-count routed MoE (K=8):** 🟢 2026-09-28, `scripts/run_piececount_moe.py`. Fixed 8-interval piece-count router (the §1 `PIECE_COUNT_BUCKETS`) + 8 expert (L2, head) blocks fine-tuned on the 2M-row `moe_b4_2m` training pack (frozen L1, 2 epochs). No gradient computation or dispatcher. Tables: `RESULTS/moe/piececount_k8/{eval.json, expert_metrics.json, summary.json}`. Plots: `expert_ce_by_bucket.png`, `moe_vs_base_ce.png`. Result: MoE CE 0.6303 vs base 0.6303 (MAE 0.1331 vs 0.1326) — no routing gain; per-bucket expert CE ≈ base CE on every bucket.
 
