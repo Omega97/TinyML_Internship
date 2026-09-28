@@ -1,0 +1,14 @@
+TODO — fix the tests that were already run  
+Clustering (`RESULTS/clustering/`)  
+**Silhouette is not comparable across representations.** Board/L1 k-means report `silhouette_samples: 2000`, while gradients/DBSCAN/piece-count use `10000`. Recompute silhouette on a single fixed subsample (e.g. 10 000) for every representation so Table 5.1 is a fair comparison. (The caption already discloses this — that's not enough.)  
+**DBSCAN runs in different spaces per representation.** Board and L1 DBSCAN were fit in a 48-d PCA (`dbscan_pca_var` 0.56 / 0.73), gradients in the native 48-d. The resulting inertia/cosine distances/silhouettes are therefore not apples-to-apples. Either fit DBSCAN in a consistent space across the three, or drop the cross-representation comparison and present each separately.  
+**"Targeting 8 clusters" overstates DBSCAN.** It recovers 2–5 clusters and flags 39–75% noise at `min_samples=80`. Report the ε grid / quantile choice, or soften the claim to "density clustering with fixed `min_samples`, ε selected to maximise cluster count".  
+Dispatcher (`RESULTS/dispatcher/`)  
+**Centroid routers are scored against the wrong labels.** They route by _argmin cosine similarity_ but are scored against _Euclidean_ k-means labels. Re-score against cosine (spherical) k-means labels, or report both, otherwise the 0.82–0.98 top-1 numbers understate recoverability by construction.  
+**Transductive validation leakage in dispatcher training.** k-means is fit on the full 1M (including the 100k validation positions), then the dispatcher is trained/validated on a 90/10 split of the same 1M. The validation labels are not independent of the clustering. Refit k-means on the 90% train split only, or explicitly label the evaluation as transductive.  
+**Gradient-target routing is reported twice, inconsistently.** Run 2 (linear dispatcher, 2M rows, `dispatcher/stats.csv`) and Run 2d (MLP sweep, 1M rows, `dispatcher/mlp/stats.csv`) both target gradient k-means but with different data sizes and numbers. Consolidate into one setup so the linear vs MLP comparison is on equal footing.  
+**Routing-error severity metric not computed.** §5.3.2 asks for the cosine similarity between a sample's gradient and the predicted-vs-reference centroid, but no artifact in `RESULTS/dispatcher/` produces it. Implement and report it (or remove the paragraph).  
+Base models (`RESULTS/base/`)  
+**Linear/FFNN baselines have CE in the thesis but no staged artifacts.** `RESULTS/base/` holds only the 5 NNUE checkpoints. Stage `config/history/ce` for Linear and FFNN H64/H128/H256, or mark their §5.1.4 CE as placeholders.  
+MoE (`RESULTS/MoE/` — preliminary)  
+**The preliminary MoE is not the full battery.** Linear (not MLP) dispatcher, K∈{3,4}, 1–2M routed rows (below the 7M/head target), 2-epoch fine-tune. Present it only as "preliminary" and do not let it stand in for the gradient-clustered hard-MoE that §5.5 promises.
