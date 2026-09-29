@@ -191,11 +191,13 @@ MoE models combine a trained dispatcher (or soft gating network) with $K$ specia
 	- purpose: measures max routing headroom (unachievable upper bound — it uses the target to pick the best expert)
 	- **base**: dual-POV two-hidden NNUE ($W=128$, $H=256$, 844-d input)
 
-- [ ] 🔴 **Random Dispatcher Control**
+- [x] 🟢📋📊 **Random Dispatcher Control**
 	- **purpose**: isolates routing quality from raw capacity
-	- **dispatcher**: random (uniform) bucket assignment over the same expert set
-	- **n buckets**: $K$
+	- **dispatcher**: random (uniform) bucket assignment over the same expert set (seed 0)
+	- **n buckets**: $K \in \{2, 4, 8, 16\}$
 	- **L1 frozen**: yes
+	- **applied to**: L1-clustered and gradient-clustered hard MoE expert heads
+	- **base**: dual-POV two-hidden NNUE ($W=128$, $H=256$, 844-d input)
 
 - [ ] 🔴 **Capacity-Matched Dense**
 	- **purpose**: validates sparse execution vs. dense scaling
@@ -218,6 +220,7 @@ MoE models combine a trained dispatcher (or soft gating network) with $K$ specia
 - End-to-end soft-gated MoE (K ∈ {2,4,8,16}, top-1 & top-2, 2M rows, 5 epochs, α=0.01) also fails to beat the base. Best is top-2 K=2: MoE CE 0.6304 vs base 0.6303 (the only config with better MAE, 0.1324 vs 0.1326). Top-2 beats top-1 throughout; gate entropy ≈ ln K and load variance ≈ 0, so the load-balancing loss pins the router near-uniform and the experts never specialize — larger K only adds underfit parameters (CE worsens to 0.6323 at top-1 K=16).
 - Switch (end-to-end sparse top-1, K ∈ {2,4,8,16}, α ∈ {0.001,0.01,0.05}) also fails to beat the base. Best is α=0.001 K=2 (CE 0.6307); CE worsens monotonically with K (→0.6323–0.6326 at K=16). α barely matters (a given K varies by ≤0.0003 across α), and gate entropy ≈ ln K with load variance ≈ 0 — the hard argmax gate receives no gradient from CE (only the load-balancing term), so it stays near-uniform and no expert specializes.
 - True oracle (argmin_k L_k) on the gradient-clustered experts reveals large, monotonic headroom that no router recovers: oracle CE 0.6244 / 0.6160 / 0.6067 / 0.6005 (MAE 0.124 / 0.115 / 0.101 / 0.088) vs base 0.6303 for K=2/4/8/16. This far beats the nearest-gradient-centroid proxy (0.6321/0.6312/0.6291/0.6280), so gradient centroids are NOT the argmin-loss partition; and it beats the realized MoE (≈0.630). The experts can specialize, but the routing signal (L1 → gradient cluster, or gradient centroid) is too weak to realize it.
+- Random dispatcher control (same experts, uniform random routing) is always worse than the trained dispatcher and worse than the base, and it degrades with K: random CE 0.6311/0.6337/0.6429/0.6398 (gradient) and 0.6317/0.6327/0.6341/0.6346 (L1) vs base 0.6303. The experts genuinely drift from the base (a random expert is a poor generalist), so it is the dispatcher's routing — not raw capacity — that buys the MoE back to ≈ base (0.630).
 
 ---
 
@@ -256,4 +259,6 @@ MoE models combine a trained dispatcher (or soft gating network) with $K$ specia
 **Run 9 — End-to-End sparse top-1 MoE (Switch, α ∈ {0.001,0.01,0.05}, K ∈ {2,4,8,16}):** 🟢 2026-09-29, `scripts/run_switch_moe.py`. Switch Transformer-style hard top-1 gating (reuses `SoftGatedMoE(top_k=1)`) trained jointly on the 2M-row `moe_b4_2m` pack, frozen L1, CE + $\alpha$·load-balancing loss, 5 epochs, Adam 1e-3. Tables per run: `RESULTS/moe/switch_k{K}_a{alpha}/{model.pt, history.json, eval.json, summary.json}` + `switch_summary.json`. Result: no config beats base (CE 0.6303); best α=0.001 K=2 (0.6307). CE by K=2/4/8/16: 0.6307/0.6312/0.6316/0.6326 (α=0.001), 0.6307/0.6312/0.6317/0.6323 (α=0.01), 0.6309/0.6313/0.6319/0.6325 (α=0.05) — α has little effect and K only adds underfit parameters; gate entropy ≈ ln K and load variance ≈ 0, so the hard argmax gate (no CE gradient) never specializes.
 
 **Run 10 — Oracle Upper-Bound MoE (K ∈ {2,4,8,16}):** 🟢 2026-09-29, `scripts/run_oracle_moe.py`. Loads the gradient-clustered hard MoE's $K$ expert heads (`grad_clustered_k{K}/moe.pt`, frozen L1) and computes the true routing upper bound: for each test position, evaluate all $K$ experts and route to $\arg\min_k \mathcal{L}_k$. Tables: `RESULTS/moe/oracle_k{K}/{eval.json, summary.json}` + `oracle_summary.json`; plot `moe_vs_base_ce.png`. Result: oracle CE 0.6244 / 0.6160 / 0.6067 / 0.6005 (MAE 0.124 / 0.115 / 0.101 / 0.088) vs base 0.6303 for K=2/4/8/16 — monotonic, large headroom; the true argmin oracle far beats the nearest-gradient-centroid proxy (0.6321/0.6312/0.6291/0.6280) and the realized MoE (≈0.630).
+
+**Run 11 — Random Dispatcher Control (L1 & gradient hard MoE, K ∈ {2,4,8,16}):** 🟢 2026-09-29, `scripts/run_random_dispatcher.py`. Replaces the trained MLP dispatcher with a uniform random router (seed 0) over the same expert heads (`l1_clustered_k{K}/moe.pt` and `grad_clustered_k{K}/moe.pt`, frozen L1). Tables: `RESULTS/moe/random_<variant>_k{K}/{eval.json, summary.json}` + `random_dispatcher_summary.json`. Result: random routing is always worse than the trained dispatcher and worse than base, degrading with K — random CE 0.6311/0.6337/0.6429/0.6398 (gradient) and 0.6317/0.6327/0.6341/0.6346 (L1) vs base 0.6303. Confirms the experts drift from the base and the dispatcher's routing (not raw capacity) is what returns the MoE to ≈ base.
 

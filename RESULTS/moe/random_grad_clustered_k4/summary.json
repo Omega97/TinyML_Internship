@@ -1,0 +1,19 @@
+{
+  "run_name": "random_grad_clustered_k4",
+  "checkpoint": "/home/omar/jupyterlab/TinyML_Internship/models/checkpoints/nnue/dual_h128_H256_e200_bpe512_bs10000/best.pt",
+  "variant": "grad_clustered",
+  "n_experts": 4,
+  "router": "random (uniform) over K experts",
+  "random_seed": 0,
+  "experts": "grad_clustered_k4/moe.pt",
+  "metrics": {
+    "n_test": 50000,
+    "base_ce": 0.6302555877256394,
+    "base_mae": 0.13261923822283744,
+    "random_ce": 0.6336690076380969,
+    "random_mae": 0.1382649897325039,
+    "moe_ce": 0.6306204795837402,
+    "moe_mae": 0.13452836871147156
+  },
+  "seconds": 2.403715644031763
+}
