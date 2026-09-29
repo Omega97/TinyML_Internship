@@ -23,7 +23,12 @@ from tinymlinternship.nnue.cluster import (
 )
 from tinymlinternship.nnue.dataset import FenValueVisitsDataset
 from tinymlinternship.nnue.model import DualHiddenNNUE
-from tinymlinternship.nnue.moe import DualHiddenMoE, LinearDispatcher, load_dual_hidden_checkpoint
+from tinymlinternship.nnue.moe import (
+    DualHiddenMoE,
+    LinearDispatcher,
+    MLPDispatcher,
+    load_dual_hidden_checkpoint,
+)
 from tinymlinternship.nnue.moe_data import (
     batches_to_device,
     count_rows,
@@ -482,13 +487,22 @@ def fine_tune_experts(
     lr: float = 1e-3,
     holdout_fraction: float = 0.10,
     seed: int = 0,
+    dispatcher_kind: str = "linear",
+    dispatcher_hidden: int = 64,
     log: Callable[[str], None] | None = print,
 ) -> DualHiddenMoE:
     work_dir = Path(work_dir)
     name = "labels_dispatcher.npy" if expert_labels == "dispatcher" else "labels.npy"
     labels = np.load(work_dir / name)
     pack, _slice_ids, _local_rows = load_train_pack(work_dir)
-    moe = DualHiddenMoE.from_base(base, int(n_clusters)).to(device)
+    in_dim = base.hidden_dim * 2
+    if dispatcher_kind == "mlp":
+        dispatcher: LinearDispatcher | MLPDispatcher = MLPDispatcher(
+            in_dim, int(n_clusters), hidden_dim=int(dispatcher_hidden)
+        )
+    else:
+        dispatcher = LinearDispatcher(in_dim, int(n_clusters))
+    moe = DualHiddenMoE.from_base(base, int(n_clusters), dispatcher=dispatcher).to(device)
     moe.freeze_l1()
     disp_path = work_dir / "dispatcher.pt"
     if disp_path.is_file():

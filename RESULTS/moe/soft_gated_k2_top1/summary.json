@@ -1,0 +1,28 @@
+{
+  "run_name": "soft_gated_k2_top1",
+  "checkpoint": "/home/omar/jupyterlab/TinyML_Internship/models/checkpoints/nnue/dual_h128_H256_e200_bpe512_bs10000/best.pt",
+  "pack_dir": "/home/omar/jupyterlab/TinyML_Internship/data/processed/board_eval/moe/moe_b4_2m",
+  "top_k": 1,
+  "n_experts": 2,
+  "alpha": 0.01,
+  "epochs": 5,
+  "lr": 0.001,
+  "trainable_params": 133640,
+  "train_rows": 2000000,
+  "metrics": {
+    "n_test": 50000,
+    "base_ce": 0.6302555877256394,
+    "base_mae": 0.13261923822283744,
+    "moe_ce": 0.6307034641855955,
+    "moe_mae": 0.13305284023433925,
+    "gate_entropy": 0.6454524993419647,
+    "load_distribution": [
+      0.468,
+      0.532
+    ],
+    "load_variance": 0.0010240000000000002,
+    "load_max_min_ratio": 1.1367521367521367
+  },
+  "best_test_ce": 0.6307034641855955,
+  "seconds": 55.97504915506579
+}

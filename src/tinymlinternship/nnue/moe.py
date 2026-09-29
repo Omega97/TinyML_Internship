@@ -248,3 +248,141 @@ class DualHiddenMoE(nn.Module):
         moe = cls(base, n_experts)
         moe.load_state_dict(payload["model_state_dict"])
         return moe.to(device)
+
+
+class SoftGatedMoE(nn.Module):
+    """Shared frozen L1 + ``K`` expert (L2, head) blocks + softmax gate.
+
+    End-to-end soft-gated MoE (Goal §4): the gate and the ``K`` experts are
+    trained jointly with an auxiliary load-balancing loss, while the shared L1
+    stays frozen. ``top_k`` selects the top-1 / top-2 experts and blends their
+    output logits by the renormalized softmax gate weights (a differentiable
+    router, unlike the hard dispatcher-based variants).
+    """
+
+    architecture = "soft_gated_moe_wdl"
+    n_outputs = 3
+
+    def __init__(
+        self,
+        base: DualHiddenNNUE,
+        n_experts: int,
+        top_k: int = 1,
+        gate_hidden: int | None = None,
+    ) -> None:
+        super().__init__()
+        n_experts = int(n_experts)
+        if n_experts < 2:
+            raise ValueError(f"n_experts must be >= 2, got {n_experts}")
+        top_k = int(top_k)
+        if top_k < 1 or top_k > n_experts:
+            raise ValueError(f"top_k must be in [1, n_experts], got {top_k}")
+        self.feature_dim = base.feature_dim
+        self.hidden_dim = base.hidden_dim
+        self.hidden2_dim = base.hidden2_dim
+        self.crelu_clip = base.crelu_clip
+        self.n_experts = n_experts
+        self.top_k = top_k
+        self.l1 = _clone_linear(base.l1)
+        self.experts_l2 = nn.ModuleList(_clone_linear(base.l2) for _ in range(n_experts))
+        self.experts_head = nn.ModuleList(_clone_linear(base.head) for _ in range(n_experts))
+        in_dim = self.hidden_dim * 2
+        if gate_hidden is not None and int(gate_hidden) > 0:
+            self.gate = nn.Sequential(
+                nn.Linear(in_dim, int(gate_hidden), bias=True),
+                nn.ReLU(),
+                nn.Linear(int(gate_hidden), n_experts, bias=True),
+            )
+        else:
+            self.gate = nn.Linear(in_dim, n_experts, bias=True)
+        for module in self.gate.modules():
+            if isinstance(module, nn.Linear):
+                nn.init.kaiming_uniform_(module.weight, a=5**0.5)
+                nn.init.zeros_(module.bias)
+
+    def freeze_l1(self) -> None:
+        for param in self.l1.parameters():
+            param.requires_grad = False
+
+    def _sparse(self, indices: torch.Tensor, mask: torch.Tensor) -> torch.Tensor:
+        safe = indices.long().clamp(min=0, max=self.feature_dim - 1)
+        features = torch.zeros(
+            safe.shape[0],
+            self.feature_dim,
+            device=safe.device,
+            dtype=self.l1.weight.dtype,
+        )
+        features.scatter_add_(1, safe, mask.to(dtype=features.dtype))
+        return crelu(self.l1(features), self.crelu_clip)
+
+    def l1_concat(
+        self,
+        white_idx: torch.Tensor,
+        black_idx: torch.Tensor,
+        stm_white: torch.Tensor,
+        white_mask: torch.Tensor,
+        black_mask: torch.Tensor,
+    ) -> torch.Tensor:
+        white_h = self._sparse(white_idx, white_mask)
+        black_h = self._sparse(black_idx, black_mask)
+        stm_mask = stm_white.unsqueeze(1)
+        stm_h = torch.where(stm_mask, white_h, black_h)
+        opp_h = torch.where(stm_mask, black_h, white_h)
+        return torch.cat([stm_h, opp_h], dim=1)
+
+    def expert_logits_from_h(self, h: torch.Tensor, expert_id: int) -> torch.Tensor:
+        h2 = crelu(self.experts_l2[int(expert_id)](h), self.crelu_clip)
+        return self.experts_head[int(expert_id)](h2)
+
+    def all_expert_logits_from_h(self, h: torch.Tensor) -> torch.Tensor:
+        parts = [self.expert_logits_from_h(h, i) for i in range(self.n_experts)]
+        return torch.stack(parts, dim=1)  # (B, K, 3)
+
+    def forward(
+        self,
+        white_idx: torch.Tensor,
+        black_idx: torch.Tensor,
+        stm_white: torch.Tensor,
+        white_mask: torch.Tensor,
+        black_mask: torch.Tensor,
+    ) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
+        """Return ``(logits (B, 3), gate_probs (B, K), topk_idx (B, top_k))``."""
+        h = self.l1_concat(white_idx, black_idx, stm_white, white_mask, black_mask)
+        gate_logits = self.gate(h)
+        gate_probs = F.softmax(gate_logits, dim=-1)
+        topk_probs, topk_idx = gate_probs.topk(self.top_k, dim=-1)
+        topk_probs = topk_probs / topk_probs.sum(dim=-1, keepdim=True).clamp_min(1e-8)
+        stacked = self.all_expert_logits_from_h(h)
+        b = int(h.shape[0])
+        rows = torch.arange(b, device=h.device)
+        combined = torch.zeros(b, 3, device=h.device, dtype=stacked.dtype)
+        for j in range(self.top_k):
+            expert_ids = topk_idx[:, j]
+            logits_e = stacked[rows, expert_ids, :]
+            combined = combined + topk_probs[:, j : j + 1] * logits_e
+        return combined, gate_probs, topk_idx
+
+    def probabilities(self, logits: torch.Tensor) -> torch.Tensor:
+        return F.softmax(logits, dim=-1)
+
+    def stm_value(self, logits: torch.Tensor) -> torch.Tensor:
+        probs = self.probabilities(logits)
+        return probs[..., 0] - probs[..., 2]
+
+    def count_parameters(self) -> int:
+        return sum(p.numel() for p in self.parameters() if p.requires_grad)
+
+    def save(self, path: Path | str) -> None:
+        path = Path(path)
+        path.parent.mkdir(parents=True, exist_ok=True)
+        torch.save(
+            {
+                "architecture": self.architecture,
+                "hidden_dim": self.hidden_dim,
+                "hidden2_dim": self.hidden2_dim,
+                "n_experts": self.n_experts,
+                "top_k": self.top_k,
+                "model_state_dict": self.state_dict(),
+            },
+            path,
+        )

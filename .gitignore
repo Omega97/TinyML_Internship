@@ -32,6 +32,8 @@ src/cfish/nn-62ef826d1a6d.nnue
 RESULTS/moe/**/train_pack.pt
 RESULTS/moe/**/slice_ids.npy
 RESULTS/moe/**/local_rows.npy
+RESULTS/moe/**/gradients.npy
+RESULTS/moe/**/meta.json
 
 # Local tools (Stockfish judge download, etc. — use PATH / STOCKFISH_PATH)
 tools/

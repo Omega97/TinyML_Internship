@@ -1,0 +1,17 @@
+{
+  "run_name": "oracle_k8",
+  "checkpoint": "/home/omar/jupyterlab/TinyML_Internship/models/checkpoints/nnue/dual_h128_H256_e200_bpe512_bs10000/best.pt",
+  "n_experts": 8,
+  "experts": "grad_clustered_k8/moe.pt",
+  "oracle": "argmin_k per-position CE over all K experts (unachievable upper bound)",
+  "metrics": {
+    "n_test": 50000,
+    "base_ce": 0.6302555877256394,
+    "base_mae": 0.13261923822283744,
+    "oracle_ce": 0.6067204665404559,
+    "oracle_mae": 0.10064195400118828,
+    "moe_ce": 0.630023181438446,
+    "moe_mae": 0.13282151520252228
+  },
+  "seconds": 2.494047428946942
+}

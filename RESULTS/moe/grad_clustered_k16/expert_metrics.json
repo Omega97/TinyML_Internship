@@ -1,0 +1,133 @@
+{
+  "expert_labels": "dispatcher",
+  "buckets": [
+    {
+      "expert": 0,
+      "n_train": 97893,
+      "n_hold": 10876,
+      "base_hold_ce": 0.6486191153526306,
+      "expert_hold_ce": 0.6480151414871216,
+      "skipped": 0
+    },
+    {
+      "expert": 1,
+      "n_train": 135555,
+      "n_hold": 15061,
+      "base_hold_ce": 1.0087006092071533,
+      "expert_hold_ce": 1.0082895755767822,
+      "skipped": 0
+    },
+    {
+      "expert": 2,
+      "n_train": 58609,
+      "n_hold": 6512,
+      "base_hold_ce": 1.0158288478851318,
+      "expert_hold_ce": 1.0163538455963135,
+      "skipped": 0
+    },
+    {
+      "expert": 3,
+      "n_train": 68352,
+      "n_hold": 7594,
+      "base_hold_ce": 0.8202988505363464,
+      "expert_hold_ce": 0.8198527693748474,
+      "skipped": 0
+    },
+    {
+      "expert": 4,
+      "n_train": 108273,
+      "n_hold": 12030,
+      "base_hold_ce": 0.5796077251434326,
+      "expert_hold_ce": 0.5791720151901245,
+      "skipped": 0
+    },
+    {
+      "expert": 5,
+      "n_train": 151154,
+      "n_hold": 16794,
+      "base_hold_ce": 0.34144943952560425,
+      "expert_hold_ce": 0.34098801016807556,
+      "skipped": 0
+    },
+    {
+      "expert": 6,
+      "n_train": 47254,
+      "n_hold": 5250,
+      "base_hold_ce": 1.0210310220718384,
+      "expert_hold_ce": 1.0210579633712769,
+      "skipped": 0
+    },
+    {
+      "expert": 7,
+      "n_train": 263943,
+      "n_hold": 29327,
+      "base_hold_ce": 0.11072008311748505,
+      "expert_hold_ce": 0.11063573509454727,
+      "skipped": 0
+    },
+    {
+      "expert": 8,
+      "n_train": 54393,
+      "n_hold": 6043,
+      "base_hold_ce": 0.7627560496330261,
+      "expert_hold_ce": 0.7631644606590271,
+      "skipped": 0
+    },
+    {
+      "expert": 9,
+      "n_train": 170783,
+      "n_hold": 18975,
+      "base_hold_ce": 1.000638484954834,
+      "expert_hold_ce": 1.0004489421844482,
+      "skipped": 0
+    },
+    {
+      "expert": 10,
+      "n_train": 101501,
+      "n_hold": 11277,
+      "base_hold_ce": 1.0367203950881958,
+      "expert_hold_ce": 1.0366101264953613,
+      "skipped": 0
+    },
+    {
+      "expert": 11,
+      "n_train": 84783,
+      "n_hold": 9420,
+      "base_hold_ce": 0.9797903299331665,
+      "expert_hold_ce": 0.9796077013015747,
+      "skipped": 0
+    },
+    {
+      "expert": 12,
+      "n_train": 122242,
+      "n_hold": 13582,
+      "base_hold_ce": 0.624000072479248,
+      "expert_hold_ce": 0.6231326460838318,
+      "skipped": 0
+    },
+    {
+      "expert": 13,
+      "n_train": 120834,
+      "n_hold": 13425,
+      "base_hold_ce": 0.7209503054618835,
+      "expert_hold_ce": 0.721879243850708,
+      "skipped": 0
+    },
+    {
+      "expert": 14,
+      "n_train": 144572,
+      "n_hold": 16063,
+      "base_hold_ce": 0.10034680366516113,
+      "expert_hold_ce": 0.09988347440958023,
+      "skipped": 0
+    },
+    {
+      "expert": 15,
+      "n_train": 69867,
+      "n_hold": 7763,
+      "base_hold_ce": 0.7133484482765198,
+      "expert_hold_ce": 0.7126854658126831,
+      "skipped": 0
+    }
+  ]
+}

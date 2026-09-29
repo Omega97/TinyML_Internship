@@ -1,0 +1,41 @@
+{
+  "run_name": "switch_k16_a0_001",
+  "checkpoint": "/home/omar/jupyterlab/TinyML_Internship/models/checkpoints/nnue/dual_h128_H256_e200_bpe512_bs10000/best.pt",
+  "pack_dir": "/home/omar/jupyterlab/TinyML_Internship/data/processed/board_eval/moe/moe_b4_2m",
+  "top_k": 1,
+  "n_experts": 16,
+  "alpha": 0.001,
+  "epochs": 5,
+  "lr": 0.001,
+  "trainable_params": 1069120,
+  "train_rows": 2000000,
+  "metrics": {
+    "n_test": 50000,
+    "base_ce": 0.6302555877256394,
+    "base_mae": 0.13261923822283744,
+    "moe_ce": 0.6325489330875873,
+    "moe_mae": 0.13468871055275203,
+    "gate_entropy": 2.696653892621994,
+    "load_distribution": [
+      0.05842,
+      0.07342,
+      0.06932,
+      0.05712,
+      0.06508,
+      0.06116,
+      0.06364,
+      0.05978,
+      0.06308,
+      0.06456,
+      0.07188,
+      0.0512,
+      0.05642,
+      0.05378,
+      0.06986,
+      0.06128
+    ],
+    "load_variance": 3.858855000000001e-05,
+    "load_max_min_ratio": 1.4339843749999999
+  },
+  "best_test_ce": 0.6325489330875873
+}

@@ -1,0 +1,69 @@
+{
+  "expert_labels": "dispatcher",
+  "buckets": [
+    {
+      "expert": 0,
+      "n_train": 263581,
+      "n_hold": 29286,
+      "base_hold_ce": 0.9325960278511047,
+      "expert_hold_ce": 0.932076096534729,
+      "skipped": 0
+    },
+    {
+      "expert": 1,
+      "n_train": 210740,
+      "n_hold": 23415,
+      "base_hold_ce": 1.0322834253311157,
+      "expert_hold_ce": 1.0320707559585571,
+      "skipped": 0
+    },
+    {
+      "expert": 2,
+      "n_train": 175289,
+      "n_hold": 19476,
+      "base_hold_ce": 0.7433998584747314,
+      "expert_hold_ce": 0.7433136105537415,
+      "skipped": 0
+    },
+    {
+      "expert": 3,
+      "n_train": 308719,
+      "n_hold": 34302,
+      "base_hold_ce": 0.23908762633800507,
+      "expert_hold_ce": 0.23873314261436462,
+      "skipped": 0
+    },
+    {
+      "expert": 4,
+      "n_train": 154586,
+      "n_hold": 17176,
+      "base_hold_ce": 0.720400333404541,
+      "expert_hold_ce": 0.7202192544937134,
+      "skipped": 0
+    },
+    {
+      "expert": 5,
+      "n_train": 203367,
+      "n_hold": 22596,
+      "base_hold_ce": 0.7575643658638,
+      "expert_hold_ce": 0.7572092413902283,
+      "skipped": 0
+    },
+    {
+      "expert": 6,
+      "n_train": 127733,
+      "n_hold": 14192,
+      "base_hold_ce": 1.035656213760376,
+      "expert_hold_ce": 1.0355337858200073,
+      "skipped": 0
+    },
+    {
+      "expert": 7,
+      "n_train": 355988,
+      "n_hold": 39554,
+      "base_hold_ce": 0.19999708235263824,
+      "expert_hold_ce": 0.19961166381835938,
+      "skipped": 0
+    }
+  ]
+}

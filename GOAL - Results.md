@@ -136,17 +136,88 @@ MoE models combine a trained dispatcher (or soft gating network) with $K$ specia
 - Confusion / Routing Matrix across game stages
 
 #### Algorithms & Experiments
-- [x] 🟢📋📊 **Piece-Count Routed MoE**: Fixed Piece-Count Dispatcher + NNUE Expert Heads ($K=8$) — 8-interval piece-count router, 2M rows, 2-epoch expert fine-tune
-- [ ] 🔴 **$L1$-Clustered Hard MoE (Frozen vs. Unfrozen $L1$)**: $L1$ MLP Dispatcher + NNUE Expert Heads ($K \in \{2, 4, 8, 16\}$)
-- [ ] 🟠📋📊 **Gradient-Clustered Hard MoE**: Gradient MLP Dispatcher + NNUE Expert Heads ($K \in \{2, 4, 8, 16\}$) — *preliminary*: linear (not MLP) dispatcher, $K \in \{3, 4\}$, 1–2M rows, 2-epoch expert fine-tune
-- [ ] 🔴 **End-to-End Soft-Gated MoE**: Top-1 / Top-2 Softmax Gating Network + NNUE Experts (Trained joint end-to-end with load balancing loss)
-- [ ] 🔴 **End-to-End Sparse Top-1 MoE (Switch)**: Switch-style joint training with load-balancing loss ($\alpha \in \{0.001, 0.01, 0.05\}$) — forces the network to discover its own optimal clustering purely by minimizing valuation error.
-- [ ] 🔴 **Oracle Upper-Bound MoE**: Perfect assignment ($\arg\min_k \mathcal{L}_k$) to measure routing headroom
+
+- [x] 🟢📋📊 **Piece-Count Routed MoE**:
+	- **clustering**: handcrafted piece-count buckets (8 disjoint intervals, §1 `PIECE_COUNT_BUCKETS`), not learned
+	- **dispatcher**: fixed piece-count rule (Board Input → Bucket ID), no training
+	- **n buckets:** $K = 8$
+	- **L1 frozen**: yes
+	- **expert heads**: NNUE (L2, head) blocks, one per bucket, cloned from the base
+	- **training**: 2M rows (`moe_b4_2m`), 2-epoch expert fine-tune (frozen L1)
+	- **base**: dual-POV two-hidden NNUE ($W=128$, $H=256$, 844-d input)
+
+- [x] 🟢📋📊 **$L1$-Clustered Hard MoE**
+	- **clustering**: mini-batch $k$-Means on 256-d $L1$ activations
+	- **dispatcher**: single-hidden MLP ($L1 \to \text{Bucket ID}$), $h=64$, 8 epochs
+	- **n buckets**: $K \in \{2, 4, 8, 16\}$
+	- **L1 frozen**: yes
+	- **expert heads**: NNUE (L2, head) blocks, one per bucket, 2-epoch fine-tune
+	- **training**: 2M rows (`moe_b4_2m`)
+	- **base**: dual-POV two-hidden NNUE ($W=128$, $H=256$, 844-d input)
+
+- [x] 🟢📋📊 **Gradient-Clustered Hard MoE**
+	- clustering: mini-batch $k$-Means on 48-d sample head gradients ($\nabla_w \mathcal{L}$, Gaussian-projected from 66,563-d)
+	- dispatcher: single-hidden MLP on $L1$ ($h=64$, 8 epochs) predicting gradient-cluster buckets
+	- n buckets: $K \in \{2, 4, 8, 16\}$
+	- L1 frozen: yes
+	- expert heads: NNUE (L2, head) blocks, one per bucket, 2-epoch fine-tune
+	- training: 2M rows (`moe_b4_2m`); oracle upper bound (nearest gradient centroid) also evaluated
+	- **base**: dual-POV two-hidden NNUE ($W=128$, $H=256$, 844-d input)
+
+- [x] 🟢📋📊 **End-to-End Soft-Gated MoE**
+	- clustering: none (implicit, learned end-to-end)
+	- dispatcher: top-1 / top-2 softmax gating network (linear, differentiable)
+	- n experts: $K \in \{2, 4, 8, 16\}$ (joint end-to-end training)
+	- L1 frozen: yes
+	- expert heads: NNUE (L2, head) blocks, one per expert, cloned from base
+	- load balancing: auxiliary loss ($\alpha = 0.01$), 5 epochs joint training on 2M rows (`moe_b4_2m`)
+	- **base**: dual-POV two-hidden NNUE ($W=128$, $H=256$, 844-d input)
+
+- [x] 🟢📋📊 **End-to-End Sparse Top-1 MoE (Switch)**
+	- clustering: none (self-organizing)
+	- dispatcher: Switch-style single-expert (hard top-1) gating, differentiable gate trained only via load-balancing loss
+	- load balancing: $\alpha \in \{0.001, 0.01, 0.05\}$
+	- n experts: $K \in \{2, 4, 8, 16\}$ (joint end-to-end training)
+	- L1 frozen: yes
+	- expert heads: NNUE (L2, head) blocks, one per expert, cloned from base
+	- training: 5 epochs joint training on 2M rows (`moe_b4_2m`)
+	- **base**: dual-POV two-hidden NNUE ($W=128$, $H=256$, 844-d input)
+
+- [x] 🟢📋📊 **Oracle Upper-Bound MoE**
+	- clustering: n/a (reuses the gradient-clustered hard MoE's $K$ expert heads)
+	- dispatcher: perfect assignment ($\arg\min_k \mathcal{L}_k$) — retroactively routes each position to its minimum-loss expert
+	- n buckets: $K \in \{2, 4, 8, 16\}$ (same expert set as the gradient-clustered MoE)
+	- L1 frozen: yes
+	- purpose: measures max routing headroom (unachievable upper bound — it uses the target to pick the best expert)
+	- **base**: dual-POV two-hidden NNUE ($W=128$, $H=256$, 844-d input)
+
+- [ ] 🔴 **Random Dispatcher Control**
+	- **purpose**: isolates routing quality from raw capacity
+	- **dispatcher**: random (uniform) bucket assignment over the same expert set
+	- **n buckets**: $K$
+	- **L1 frozen**: yes
+
+- [ ] 🔴 **Capacity-Matched Dense**
+	- **purpose**: validates sparse execution vs. dense scaling
+	- **reference**: dense single head (e.g. $H=512$) vs. $B=4$, $H=256$ MoE (cf. §3 optional baseline)
+
+- [ ] 🔴 **Inference NPS Benchmark**
+	- **purpose**: measures real-world execution overhead
+	- **metric**: nodes-per-second (NPS), MoE vs. base
+    
+- [ ] 🔴 todo: L1 sparse weights
+
+
 
 #### Results Summary (preliminary)
-- Hard gradient-clustered MoE (K=3,4) matches but does not yet beat the base (MoE CE 0.630 vs base 0.630); the oracle router (CE 0.628) leaves modest headroom.
-- No routing gain so far: experts underfit (1–2M rows, 2 epochs) and the L1 dispatcher recovers gradient buckets poorly.
+- Gradient-clustered hard MoE (full battery, K ∈ {2,4,8,16}, 2M rows, MLP h=64 dispatcher): MoE CE 0.6307 / 0.6306 / 0.6300 / 0.6301 vs base 0.6303 for K=2/4/8/16 — only K=8 (0.63002) and K=16 (0.63006) edge out the base, and MAE is flat-to-worse. The L1→gradient dispatcher recovers the gradient partition poorly (Top-1 ≈ 0.64/0.59/0.53/0.48), confirming L1 is a weak proxy for gradient direction.
+- The oracle upper bound shows real headroom that the dispatcher leaves on the table: oracle CE 0.6321 / 0.6312 / 0.6291 / 0.6280 for K=2/4/8/16 — i.e. at K=16 perfect gradient routing would reach 0.628 vs the 0.630 the MLP router actually achieves. More gradient clusters (K↑) monotonically improve the oracle even though each expert sees fewer rows, so the bottleneck is the L1→gradient dispatcher, not the experts.
+- No routing gain so far: experts underfit (1–2M rows, 2 epochs, below the $7\times10^6$ per-expert target) and the L1 dispatcher recovers gradient buckets poorly.
 - Piece-count routed MoE (K=8, 2M rows) does not beat the base either: MoE CE 0.6303 vs base 0.6303 (MAE 0.1331 vs 0.1326) — per-bucket expert CE ≈ base CE on every bucket, confirming piece count is too weak a routing signal for any specialization.
+- L1-clustered hard MoE (K ∈ {2,4,8,16}, 2M rows, MLP h=64 dispatcher) shows no meaningful routing gain: MoE CE 0.6309 / 0.6305 / 0.6303 / 0.6300 vs base 0.6303 for K=2/4/8/16. Only K=16 edges out the base on CE (−0.0002) while MAE stays flat-to-worse. The L1 partition is trivially recoverable (dispatcher Top-1 ≈ 0.98–1.00), so the experts specialize on nearly the same signal the base already models.
+- End-to-end soft-gated MoE (K ∈ {2,4,8,16}, top-1 & top-2, 2M rows, 5 epochs, α=0.01) also fails to beat the base. Best is top-2 K=2: MoE CE 0.6304 vs base 0.6303 (the only config with better MAE, 0.1324 vs 0.1326). Top-2 beats top-1 throughout; gate entropy ≈ ln K and load variance ≈ 0, so the load-balancing loss pins the router near-uniform and the experts never specialize — larger K only adds underfit parameters (CE worsens to 0.6323 at top-1 K=16).
+- Switch (end-to-end sparse top-1, K ∈ {2,4,8,16}, α ∈ {0.001,0.01,0.05}) also fails to beat the base. Best is α=0.001 K=2 (CE 0.6307); CE worsens monotonically with K (→0.6323–0.6326 at K=16). α barely matters (a given K varies by ≤0.0003 across α), and gate entropy ≈ ln K with load variance ≈ 0 — the hard argmax gate receives no gradient from CE (only the load-balancing term), so it stays near-uniform and no expert specializes.
+- True oracle (argmin_k L_k) on the gradient-clustered experts reveals large, monotonic headroom that no router recovers: oracle CE 0.6244 / 0.6160 / 0.6067 / 0.6005 (MAE 0.124 / 0.115 / 0.101 / 0.088) vs base 0.6303 for K=2/4/8/16. This far beats the nearest-gradient-centroid proxy (0.6321/0.6312/0.6291/0.6280), so gradient centroids are NOT the argmin-loss partition; and it beats the realized MoE (≈0.630). The experts can specialize, but the routing signal (L1 → gradient cluster, or gradient centroid) is too weak to realize it.
 
 ---
 
@@ -175,4 +246,14 @@ MoE models combine a trained dispatcher (or soft gating network) with $K$ specia
 **Run 4 — Preliminary gradient-clustered MoE:** 🟠 2026-09-16, `scripts/run_moe_pipeline.py`. Two preliminary hard-MoE runs: `kmeans_b3_1m` ($K=3$, 1M rows) and `kmeans_b4_2m` ($K=4$, 2M rows). Pipeline: 48-d sample gradients → mini-batch k-means → linear $L1$ dispatcher → per-cluster fine-tuned expert heads (frozen L1). Tables: `eval.json` (base/moe/oracle CE+MAE), `expert_metrics.json`, `diagnostics.json`, `summary.json`. Plots in `plots/` (PCA/t-SNE, cluster sizes, centroid cosine, dispatcher accuracy/confusion, expert CE, MoE-vs-base). Not the full battery: linear dispatcher (not MLP), $K \in \{3, 4\}$ only, and 1–2M routed rows (below the $7\times10^6$ per-expert target for $H=256$).
 
 **Run 5 — Piece-count routed MoE (K=8):** 🟢 2026-09-28, `scripts/run_piececount_moe.py`. Fixed 8-interval piece-count router (the §1 `PIECE_COUNT_BUCKETS`) + 8 expert (L2, head) blocks fine-tuned on the 2M-row `moe_b4_2m` training pack (frozen L1, 2 epochs). No gradient computation or dispatcher. Tables: `RESULTS/moe/piececount_k8/{eval.json, expert_metrics.json, summary.json}`. Plots: `expert_ce_by_bucket.png`, `moe_vs_base_ce.png`. Result: MoE CE 0.6303 vs base 0.6303 (MAE 0.1331 vs 0.1326) — no routing gain; per-bucket expert CE ≈ base CE on every bucket.
+
+**Run 6 — L1-clustered hard MoE (K ∈ {2,4,8,16}):** 🟢 2026-09-29, `scripts/run_l1_clustered_moe.py`. Pipeline per $K$: mini-batch k-means on 256-d L1 activations → single-hidden MLP dispatcher ($h=64$, 8 epochs, 90/10 split) → per-bucket NNUE (L2, head) expert fine-tune (frozen L1, 2 epochs) on the 2M-row `moe_b4_2m` pack. No gradient computation / oracle. Tables per $K$: `RESULTS/moe/l1_clustered_k{K}/{labels.npy, centroids.npy, diagnostics.json, dispatcher.pt, dispatcher_history.json, labels_dispatcher.npy, expert_metrics.json, eval.json, summary.json}`. Plots: `expert_ce_by_bucket.png`, `moe_vs_base_ce.png`. Dispatcher Top-1 ≈ 0.996/0.992/0.986/0.980 for K=2/4/8/16. Result: MoE CE 0.6309 / 0.6305 / 0.6303 / 0.6300 vs base 0.6303 — no meaningful routing gain (only K=16 −0.0002 on CE), confirming the L1 partition carries little valuation-specialization signal.
+
+**Run 7 — Gradient-clustered hard MoE (K ∈ {2,4,8,16}):** 🟢 2026-09-29, `scripts/run_gradient_clustered_moe.py`. Full battery replacing the preliminary Run 4: mini-batch k-means on the cached 48-d sample head gradients (`moe_b4_2m/gradients.npy`, no recompute) → single-hidden MLP dispatcher on L1 ($h=64$, 8 epochs) predicting gradient buckets → per-bucket NNUE (L2, head) expert fine-tune (frozen L1, 2 epochs) → eval with oracle upper bound. Tables per $K$: `RESULTS/moe/grad_clustered_k{K}/{labels.npy, centroids.npy, diagnostics.json, dispatcher.pt, dispatcher_history.json, labels_dispatcher.npy, expert_metrics.json, eval.json, summary.json}`. Dispatcher Top-1 ≈ 0.643/0.587/0.534/0.476 for K=2/4/8/16. Result: MoE CE 0.6307 / 0.6306 / 0.6300 / 0.6301 vs base 0.6303; oracle CE 0.6321 / 0.6312 / 0.6291 / 0.6280 — the oracle improves monotonically with $K$ (0.628 at K=16) but the L1→gradient dispatcher recovers only ~0.48–0.64 of the partition, so the realized MoE cannot reach it.
+
+**Run 8 — End-to-End soft-gated MoE (top-1 & top-2, K ∈ {2,4,8,16}):** 🟢 2026-09-29, `scripts/run_soft_gated_moe.py`. Joint end-to-end training of a differentiable top-1/top-2 softmax gate (linear, random init) + $K$ expert (L2, head) blocks (cloned from base, frozen L1) on the 2M-row `moe_b4_2m` pack, CE + $\alpha=0.01$ load-balancing loss, 5 epochs, Adam 1e-3. New `SoftGatedMoE` in `src/tinymlinternship/nnue/moe.py`. Tables per run: `RESULTS/moe/soft_gated_k{K}_top{tk}/{model.pt, history.json, eval.json, summary.json}` + `soft_gated_summary.json`. Result: no config beats base (CE 0.6303); best is top-2 K=2 (CE 0.6304, MAE 0.1324 vs base 0.1326). Top-2 CE 0.6304/0.6306/0.6306/0.6310 and top-1 CE 0.6307/0.6315/0.6317/0.6323 for K=2/4/8/16. Gate entropy ≈ ln K and load variance ≈ 0 — the load-balancing loss keeps routing near-uniform, so experts never specialize.
+
+**Run 9 — End-to-End sparse top-1 MoE (Switch, α ∈ {0.001,0.01,0.05}, K ∈ {2,4,8,16}):** 🟢 2026-09-29, `scripts/run_switch_moe.py`. Switch Transformer-style hard top-1 gating (reuses `SoftGatedMoE(top_k=1)`) trained jointly on the 2M-row `moe_b4_2m` pack, frozen L1, CE + $\alpha$·load-balancing loss, 5 epochs, Adam 1e-3. Tables per run: `RESULTS/moe/switch_k{K}_a{alpha}/{model.pt, history.json, eval.json, summary.json}` + `switch_summary.json`. Result: no config beats base (CE 0.6303); best α=0.001 K=2 (0.6307). CE by K=2/4/8/16: 0.6307/0.6312/0.6316/0.6326 (α=0.001), 0.6307/0.6312/0.6317/0.6323 (α=0.01), 0.6309/0.6313/0.6319/0.6325 (α=0.05) — α has little effect and K only adds underfit parameters; gate entropy ≈ ln K and load variance ≈ 0, so the hard argmax gate (no CE gradient) never specializes.
+
+**Run 10 — Oracle Upper-Bound MoE (K ∈ {2,4,8,16}):** 🟢 2026-09-29, `scripts/run_oracle_moe.py`. Loads the gradient-clustered hard MoE's $K$ expert heads (`grad_clustered_k{K}/moe.pt`, frozen L1) and computes the true routing upper bound: for each test position, evaluate all $K$ experts and route to $\arg\min_k \mathcal{L}_k$. Tables: `RESULTS/moe/oracle_k{K}/{eval.json, summary.json}` + `oracle_summary.json`; plot `moe_vs_base_ce.png`. Result: oracle CE 0.6244 / 0.6160 / 0.6067 / 0.6005 (MAE 0.124 / 0.115 / 0.101 / 0.088) vs base 0.6303 for K=2/4/8/16 — monotonic, large headroom; the true argmin oracle far beats the nearest-gradient-centroid proxy (0.6321/0.6312/0.6291/0.6280) and the realized MoE (≈0.630).
 

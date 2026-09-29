@@ -1,0 +1,37 @@
+{
+  "expert_labels": "dispatcher",
+  "buckets": [
+    {
+      "expert": 0,
+      "n_train": 524706,
+      "n_hold": 58300,
+      "base_hold_ce": 0.6232516765594482,
+      "expert_hold_ce": 0.6237626671791077,
+      "skipped": 0
+    },
+    {
+      "expert": 1,
+      "n_train": 241299,
+      "n_hold": 26810,
+      "base_hold_ce": 0.19140663743019104,
+      "expert_hold_ce": 0.19093696773052216,
+      "skipped": 0
+    },
+    {
+      "expert": 2,
+      "n_train": 813509,
+      "n_hold": 90389,
+      "base_hold_ce": 0.8808890581130981,
+      "expert_hold_ce": 0.881133496761322,
+      "skipped": 0
+    },
+    {
+      "expert": 3,
+      "n_train": 220489,
+      "n_hold": 24498,
+      "base_hold_ce": 0.20739074051380157,
+      "expert_hold_ce": 0.207518070936203,
+      "skipped": 0
+    }
+  ]
+}

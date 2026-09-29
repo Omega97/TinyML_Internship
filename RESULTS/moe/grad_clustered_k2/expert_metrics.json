@@ -1,0 +1,21 @@
+{
+  "expert_labels": "dispatcher",
+  "buckets": [
+    {
+      "expert": 0,
+      "n_train": 863523,
+      "n_hold": 95947,
+      "base_hold_ce": 0.30060142278671265,
+      "expert_hold_ce": 0.300948828458786,
+      "skipped": 0
+    },
+    {
+      "expert": 1,
+      "n_train": 936477,
+      "n_hold": 104053,
+      "base_hold_ce": 0.934929370880127,
+      "expert_hold_ce": 0.935422956943512,
+      "skipped": 0
+    }
+  ]
+}

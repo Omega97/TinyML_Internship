@@ -1,0 +1,43 @@
+{
+  "run_name": "grad_clustered_k16",
+  "checkpoint": "/home/omar/jupyterlab/TinyML_Internship/models/checkpoints/nnue/dual_h128_H256_e200_bpe512_bs10000/best.pt",
+  "pack_dir": "/home/omar/jupyterlab/TinyML_Internship/data/processed/board_eval/moe/moe_b4_2m",
+  "n_buckets": 16,
+  "router": "mlp_l1_to_gradient",
+  "dispatcher_hidden": 64,
+  "dispatcher_val_acc": 0.475849986076355,
+  "expert_labels": "dispatcher",
+  "expert_epochs": 2,
+  "train_rows": 2000000,
+  "cluster_sizes": [
+    108712,
+    144744,
+    113141,
+    95358,
+    158764,
+    135528,
+    118644,
+    236337,
+    79515,
+    133502,
+    76194,
+    116530,
+    153556,
+    99828,
+    136272,
+    93375
+  ],
+  "metrics": {
+    "n_test": 50000.0,
+    "base_ce": 0.6302553415298462,
+    "base_mae": 0.13261926174163818,
+    "moe_ce": 0.6300610303878784,
+    "moe_mae": 0.13296453654766083,
+    "oracle_ce": 0.6279505491256714,
+    "oracle_mae": 0.1306239813566208
+  },
+  "plots": [
+    "/home/omar/jupyterlab/TinyML_Internship/RESULTS/moe/grad_clustered_k16/plots/expert_ce_by_bucket.png",
+    "/home/omar/jupyterlab/TinyML_Internship/RESULTS/moe/grad_clustered_k16/plots/moe_vs_base_ce.png"
+  ]
+}

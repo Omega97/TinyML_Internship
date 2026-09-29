@@ -1,0 +1,14 @@
+{
+  "n_test": 50000,
+  "base_ce": 0.6302555877256394,
+  "base_mae": 0.13261923822283744,
+  "moe_ce": 0.630413427528441,
+  "moe_mae": 0.13240867897510528,
+  "gate_entropy": 0.6687742851614952,
+  "load_distribution": [
+    0.5,
+    0.5
+  ],
+  "load_variance": 0.0,
+  "load_max_min_ratio": 1.0
+}
