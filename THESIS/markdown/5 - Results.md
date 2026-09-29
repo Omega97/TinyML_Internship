@@ -45,7 +45,7 @@ The clustering and dispatcher experiments operate on a representative **1,000,00
 
 *Table 5.1 — Base models and their test cross-entropy on the fixed 1.5M-position test set.* The reference model `W128 H256` is the checkpoint whose head is replaced by expert heads in the MoE experiments, and whose gradients define the routing signal.
 
-The Mixture-of-Experts models evaluated in Section 5.5 share the frozen L1 accumulator of the reference base model and add $K$ expert heads plus a dispatcher. Four routing families are compared: fixed piece-count routing, L1-activation clustering, sample-gradient clustering, and end-to-end soft/sparse gating, each at $K \in \{2,4,8,16\}$ where applicable, alongside an oracle upper bound that assigns each position to the expert with lowest loss.
+The Mixture-of-Experts models evaluated in Section 5.5 share the frozen L1 accumulator of the reference base model and add $K$ expert heads plus a dispatcher. Four routing families are compared: fixed piece-count routing, L1-activation clustering, sample-gradient clustering, and end-to-end soft/sparse gating, each at $K \in \{2,4,8,16\}$ where applicable, alongside an oracle upper bound that assigns each position to the expert with lowest loss, and a random-routing control that isolates the contribution of routing from raw capacity.
 
 ### 5.1.5 Training Protocol
 
@@ -281,25 +281,41 @@ training** to map L1 activations (or the board) to bucket IDs, spanning paramete
 
 ### 5.4.1 Base Model Architecture and Training
 
-\[Describe the base NNUE architecture, training procedure, WDL targets, loss function, and relevant hyperparameters.\]
+<span style="color: #808080;">[Architecture]</span> The base model is the dual-POV two-hidden NNUE described in Chapter 4: a sparse binary input of $d_{\text{in}}=844$ features per perspective, a shared accumulator L1 ($844 \to W$) run once for each POV with CReLU clipping to 127, the two $W$-dimensional accumulator vectors concatenated in side-to-move order ($2W$), a second hidden layer L2 ($2W \to H$) with the same CReLU non-linearity, and a linear head ($H \to 3$) producing the side-to-move $(W,D,L)$ logits normalised by softmax. Five widths were trained, $(W,H) \in \{(32,64),(64,128),(128,128),(128,256),(256,512)\}$, spanning 31k to 481k parameters; the $(128,256)$ model is the reference used throughout the MoE experiments, both for its frozen L1 accumulator and as the source of the sample-gradient routing signal.
 
-\[Describe the simpler neural baselines used to establish the capacity and computational requirements of the evaluation function.\]
+<span style="color: #808080;">[Training]</span> Training follows the protocol of Section 5.1.5: Adam with a learning rate of $10^{-2}$ linearly decayed to $10^{-3}$ over 100 epochs of 512 batches of 10,000 positions, soft cross-entropy against the Lc0 WDL distribution, accumulated in float32 under bfloat16 AMP on the int16 compact feature tables.
+
+<span style="color: #808080;">[Dense baselines]</span> Three dense baselines isolate the contribution of the NNUE inductive bias. All operate on the side-to-move-ordered concatenation of the two raw 844-d views ($2\times844$ features) rather than the shared dual-POV accumulator: a linear head (concat $\to 3$), a single-hidden FFNN (concat $\to H \to 3$), and a dual-hidden FFNN (concat $\to H_1 \to H_2 \to 3$), each with a CReLU on its hidden activations. They match the reference NNUE in depth and roughly in width while removing the shared-accumulator structure, so the gap between them and the NNUE at equal parameter count is a direct measure of the inductive bias.
 
 ### 5.4.2 Base Model Metrics
 
-\[Report test soft cross-entropy on WDL predictions and MAE on expected value.\]
-
-\[Report model size, parameter count, inference cost, and, where applicable, playing-strength metrics such as Elo, ACPL, depth, or nodes per second.\]
-
-\[For the base NNUE, evaluate performance as a function of training-set size to identify the point at which additional data no longer provides substantial benefit or where overfitting becomes relevant.\]
+<span style="color: #808080;">[Metrics]</span> The base models are scored on the fixed 1.5M-position test set with the metrics of Section 5.1.6. The primary accuracy figure is the soft cross-entropy (Table 5.1); for the dense baselines the full regression suite is also reported — MAE and MSE on the scalar expected value $v = p_W - p_L$ and the coefficient of determination $R^2$ — together with the model size and the measured inference throughput (positions per second on the compact dense path). The scaling of test CE with training-set size is evaluated by retraining the $H=64$ and $H=256$ models on progressively larger training subsamples.
 
 ### 5.4.3 Base Model Results
 
-\[Present the results for the linear model, shallow FFNN, deeper FFNN, and base NNUE.\]
+<span style="color: #808080;">[Dense baselines]</span> Table 5.9 reports the dense baselines with their full metrics. The linear model (5,067 parameters) reaches CE 0.766 / MAE 0.258 / $R^2$ 0.716; the single-hidden FFNN improves monotonically with width (CE 0.669 → 0.643, $R^2$ 0.842 → 0.880 for $H=64\to256$); the dual-hidden FFNN adds a second CReLU layer and recovers most of the remaining gap (CE 0.656 → 0.632, $R^2$ 0.856 → 0.893). Crucially, at equal or larger parameter count the flat FFNN still underperforms the NNUE: FFNN H256 (433k parameters, CE 0.643) is worse than the reference NNUE W128 H256 (175k parameters, CE 0.632), and even the dual-hidden FFNN2 H256 (499k parameters, CE 0.632) only *matches* the reference NNUE at nearly three times the parameter count. This is the NNUE inductive bias at work: the shared, POV-reused accumulator and the sparse input give the NNUE strictly better predictive quality per parameter.
 
-\[Present the dataset-size experiment and identify the training-data regime used for the subsequent MoE experiments.\]
+| Model | Parameters | Test CE | Test MAE | Test MSE | $R^2$ | Infer NPS |
+| :--- | ---: | ---: | ---: | ---: | ---: | ---: |
+| Linear | 5,067 | 0.766 | 0.258 | 0.139 | 0.716 | 2.56M |
+| FFNN H64 | 108,291 | 0.669 | 0.172 | 0.077 | 0.842 | 2.69M |
+| FFNN H128 | 216,579 | 0.654 | 0.157 | 0.067 | 0.863 | 2.70M |
+| FFNN H256 | 433,155 | 0.643 | 0.145 | 0.059 | 0.880 | 2.62M |
+| FFNN2 H64 | 112,451 | 0.656 | 0.161 | 0.071 | 0.856 | 2.58M |
+| FFNN2 H128 | 233,091 | 0.645 | 0.149 | 0.062 | 0.873 | 2.65M |
+| FFNN2 H256 | 498,947 | 0.632 | 0.135 | 0.053 | 0.893 | 2.56M |
 
-\[Establish the base NNUE as the reference model against which the specialized models are evaluated.\]
+*Table 5.9 — Dense baselines (linear, single-hidden FFNN, dual-hidden FFNN) with full regression metrics and inference throughput on the 1.5M-position test set. The reference NNUE W128 H256 (174,723 parameters) attains CE 0.632, beating the dual-hidden FFNN2 H256 at 2.9× the parameters.*
+
+<span style="color: #808080;">[NNUE width sweep]</span> Across the five NNUE widths (Table 5.1), test CE falls to 0.629 at the largest model $(W{=}256,H{=}512)$. The reference $W{=}128,H{=}256$ model — chosen because its 2M-position gradient cache already exists and its head is the seed of the expert heads in the MoE — attains CE 0.632 at 174,723 parameters, within 0.003 of the largest model. (The $W{=}64,H{=}128$ point is the sole non-monotonicity of the sweep and is treated as an outlier of the early width grid.)
+
+<span style="color: #808080;">[Dataset scaling]</span> The scaling of test CE with training-set size, shown for the $H=64$ and $H=256$ models in the figure below, improves steeply at first and then plateaus: the $H=256$ model reaches CE $\approx 0.631$ by roughly 30M positions and then oscillates within $\pm 0.002$ out to 90M; the smaller $H=64$ model levels off near CE $\approx 0.660$ by roughly 70M positions. The reference model was therefore trained deep into the plateau. Critically for Section 5.5, the expert heads in the MoE experiments are fine-tuned on only 2M positions, far to the left of the region where the base architecture even begins to saturate; this data-starvation of the experts, rather than any architectural limitation, is the recurring explanation for the modest MoE results reported below.
+
+<div align="center">
+    <img src="RESULTS/base/scaling/nnue_ce_vs_train_size.png" width="600">
+</div>
+
+<span style="color: #808080;">[Reference model]</span> The reference base model is thus established as W128 H256, with full-test CE 0.632 (Table 5.1) and, on the 50,000-position subsample used for the MoE comparisons of Section 5.5, CE 0.6303 and MAE 0.1326. Every MoE variant in the next section is judged against this model with the same frozen L1 accumulator.
 
 ---
 
@@ -307,44 +323,107 @@ training** to map L1 activations (or the board) to bucket IDs, spanning paramete
 
 ### 5.5.1 MoE Architecture and Training
 
-\[Describe the shared L1 representation, expert heads, bucket assignment, expert-training procedure, and inference-time routing.\]
+<span style="color: #808080;">[Shared L1 and expert heads]</span> Every MoE variant shares the frozen L1 accumulator of the reference base model (W128 H256) and replaces its single head with $K$ expert (L2, head) blocks, each cloned from the base head and then fine-tuned. At inference a router selects one (hard) or a blend (soft) of the $K$ experts; L1 is never updated, so only the L2/head blocks and the router parameters are trained. The experts are therefore true *specialists* in the sense that their inductive bias is inherited from the base and only the per-bucket behaviour is re-learned.
 
-\[Describe the activation-based and gradient-based bucketing approaches.\]
+<span style="color: #808080;">[Routing families]</span> Four routing families and three controls are compared, each at $K \in \{2,4,8,16\}$ where applicable:
 
-\[Separate experiments with fixed $B$ from experiments in which $B$ is varied.\]
+1. **Piece-count** — fixed eight-interval handcrafted bucketing on the scalar piece count (Section 5.2), with no training; this is the conventional NNUE bucketing baseline.
+2. **L1-clustered hard MoE** — mini-batch $k$-means on the 256-d L1 activations, plus an MLP dispatcher ($h{=}64$) mapping L1 → bucket ID.
+3. **Gradient-clustered hard MoE** — mini-batch $k$-means on the 48-d sample head gradients, plus an MLP dispatcher ($h{=}64$) mapping L1 → gradient bucket ID.
+4. **End-to-end soft-gated MoE** — a differentiable top-1/top-2 softmax gate trained jointly with the experts and an auxiliary load-balancing loss.
+5. **Switch (end-to-end sparse top-1)** — hard argmax top-1 routing with the load-balancing loss swept over $\alpha \in \{0.001, 0.01, 0.05\}$.
+6. **Oracle upper bound** — retroactive $\arg\min_k \mathcal{L}_k$ routing (each position sent to its minimum-loss expert), an unachievable ceiling that uses the target at inference.
+7. **Random dispatcher control** — uniform random routing over the same experts, to isolate the contribution of routing from raw capacity.
 
-\[Explain how the available training data is partitioned among experts and how the dataset-size constraints identified for the base model affect expert training.\]
+<span style="color: #808080;">[Training budget]</span> All experts are fine-tuned on the 2M-position training pack (`moe_b4_2m`), with frozen L1: two epochs per expert for the hard (dispatcher) variants and five epochs of joint training for the soft-gated and Switch variants. This gives $2\times10^6/K$ routed rows per expert — far below the $7\times10^6$-per-expert budget identified for $H{=}256$ in Section 5.1.5 — so every expert is trained in a data-starved regime relative to the base model's scaling behaviour (Section 5.4.3). The consequence of this shortfall is visible in every result below.
 
 ### 5.5.2 MoE Metrics
 
-\[Evaluate WDL cross-entropy and expected-value MAE for the complete MoE.\]
-
-\[Report per-bucket cross-entropy to determine whether individual experts specialize relative to the base head.\]
-
-\[Compare Oracle routing with learned dispatcher routing where appropriate.\]
-
-\[Report model size, memory footprint, inference latency, nodes per second, and other relevant computational costs.\]
-
-\[For the complete engine, report the playing-strength metrics defined by the evaluation protocol.\]
+<span style="color: #808080;">[Metrics]</span> Each MoE is scored on the 50,000-position test subsample used throughout this chapter, against the reference base (CE 0.6303, MAE 0.1326 on this subsample). The primary figures are the soft cross-entropy and the expected-value MAE of the complete MoE; for the hard variants the dispatcher's top-1 accuracy against its pseudo-ground-truth buckets is reported alongside, and for the soft variants the gate entropy and the load-balance variance quantify whether routing actually specialises. Per-bucket expert CE (vs. the base head's CE on the same bucket) measures whether individual experts improve on their own subset. The oracle and random-router evaluations use the exact same expert weights and test set, differing only in how the bucket index is chosen.
 
 ### 5.5.3 MoE Results
 
-\[Present the results for activation-based bucketing with fixed $B$.\]
+<span style="color: #808080;">[Dispatcher-routed hard MoE]</span> Table 5.10 summarises the three hard variants. The headline is uniformly negative: **no routing variant beats the base.** The piece-count MoE (K=8) is exactly tied with the base (CE 0.6303), and its per-bucket expert CE equals the base CE on every bucket — piece count carries no specialisation signal. The L1-clustered MoE is trivially recoverable by its dispatcher (top-1 0.996 → 0.980) yet gains essentially nothing: its CE ranges from 0.6309 (K=2) to 0.6300 (K=16), a −0.0003 edge at best. The gradient-clustered MoE is the most interesting: its dispatcher recovers the gradient partition only weakly (top-1 0.643 → 0.476, consistent with Section 5.3.3), yet it is the only variant that edges out the base on CE at the larger $K$ (0.6300 at K=8, 0.6301 at K=16). The weak dispatcher is exactly what caps it — the routing signal is present in the experts but not recoverable from L1.
 
-\[Present the results for activation-based bucketing with variable $B$.\]
+| Variant | $K$ | Dispatcher Top-1 | MoE CE | MoE MAE |
+| :--- | :-: | :-: | :-: | :-: |
+| piece-count | 8 | — (fixed rule) | 0.6303 | 0.1331 |
+| L1-clustered | 2 | 0.996 | 0.6309 | 0.1343 |
+| L1-clustered | 4 | 0.992 | 0.6305 | 0.1343 |
+| L1-clustered | 8 | 0.986 | 0.6303 | 0.1332 |
+| L1-clustered | 16 | 0.980 | 0.6300 | 0.1327 |
+| gradient-clustered | 2 | 0.643 | 0.6307 | 0.1338 |
+| gradient-clustered | 4 | 0.587 | 0.6306 | 0.1345 |
+| gradient-clustered | 8 | 0.534 | 0.6300 | 0.1328 |
+| gradient-clustered | 16 | 0.476 | 0.6301 | 0.1330 |
 
-\[Present the results for gradient-based bucketing with fixed $B$.\]
+*Table 5.10 — Dispatcher-routed hard MoE (piece-count, L1-clustered, gradient-clustered) on the 50,000-position test subsample. The reference base attains CE 0.6303 and MAE 0.1326 on this subsample. "Dispatcher Top-1" is the MLP dispatcher's accuracy against its own k-means pseudo-labels (L1 or gradient).*
 
-\[Present the results for gradient-based bucketing with variable $B$.\]
+<div align="center">
+    <img src="RESULTS/moe/grad_clustered_k16/plots/moe_vs_base_ce.png" width="600">
+</div>
 
-\[Compare the resulting expert specialization, predictive quality, and computational cost across the different bucketing strategies.\]
+<span style="color: #808080;">[End-to-end soft-gated MoE]</span> Table 5.11 reports the jointly-trained soft gate. It, too, fails to beat the base. The best configuration is top-2 with $K=2$ (CE 0.6304), which is the only run whose MAE improves on the base (0.1324 vs. 0.1326) even as its CE is slightly worse; top-2 beats top-1 at every $K$, and performance degrades monotonically with $K$ because the extra experts only add parameters that underfit the 2M-position budget. The gate entropy sits at $\ln K$ throughout and the load variance is $\approx 0$: the load-balancing loss pins the router near-uniform, so the gate never learns to specialise and the experts remain near-clones of the base head.
 
-\[Distinguish the effect of the partition itself from the effect of the learned dispatcher by comparing Oracle and learned routing where applicable.\]
+| Top-k | $K{=}2$ | $K{=}4$ | $K{=}8$ | $K{=}16$ |
+| :--- | :-: | :-: | :-: | :-: |
+| top-1 | 0.6307 | 0.6315 | 0.6317 | 0.6323 |
+| top-2 | 0.6304 | 0.6306 | 0.6306 | 0.6310 |
+
+*Table 5.11 — End-to-end soft-gated MoE test CE (top-1 and top-2 gating), on the 50,000-position subsample. Base CE 0.6303. Gate entropy ≈ ln K and load variance ≈ 0 at every setting.*
+
+<span style="color: #808080;">[Switch (sparse top-1)]</span> Table 5.12 reports the Switch-style hard top-1 variant across the load-balancing weight $\alpha$. It reproduces the soft-gated top-1 behaviour and adds nothing: the best run is $\alpha{=}0.001$, $K{=}2$ (CE 0.6307), and $\alpha$ barely matters (a given $K$ varies by $\leq 0.0003$ across $\alpha$). The hard argmax gate receives no gradient through the CE path — only through the load-balancing term — so it drifts toward uniform and, like the soft gate, never specialises; larger $K$ again only adds underfit parameters.
+
+| $\alpha$ | $K{=}2$ | $K{=}4$ | $K{=}8$ | $K{=}16$ |
+| :--- | :-: | :-: | :-: | :-: |
+| 0.001 | 0.6307 | 0.6312 | 0.6316 | 0.6326 |
+| 0.01 | 0.6307 | 0.6312 | 0.6317 | 0.6323 |
+| 0.05 | 0.6309 | 0.6313 | 0.6319 | 0.6325 |
+
+*Table 5.12 — Switch (end-to-end sparse top-1) test CE vs. load-balancing weight $\alpha$, on the 50,000-position subsample. Base CE 0.6303.*
+
+<span style="color: #808080;">[Oracle upper bound]</span> The most informative result is the oracle (Table 5.13). Routing each test position to its $\arg\min_k \mathcal{L}_k$ expert reveals large, monotonic headroom: CE falls from 0.6244 (K=2) to 0.6005 (K=16), with MAE reaching 0.088 at K=16 against the base's 0.133. The experts genuinely *can* specialise. Two further facts sharpen this. First, the nearest-gradient-centroid proxy oracle (Section 5.3.3's routing rule) is far weaker — 0.6280 at K=16 — so the gradient centroids are *not* the argmin-loss partition: the partition implied by "route to the closest gradient centroid" is a different, much weaker one than "route to the best expert". Second, the realised dispatcher MoE sits at ≈0.630, an order of magnitude farther from the oracle than the oracle is from a perfect model. The entire gap is therefore a *routing* gap, not a *capacity* gap: the experts hold the information, but no deployable signal (L1 activations, or even gradient centroids) can recover the assignment.
+
+| $K$ | Base CE | Dispatcher CE | Nearest-centroid CE | Oracle CE | Oracle MAE |
+| :--- | :-: | :-: | :-: | :-: | :-: |
+| 2 | 0.6303 | 0.6307 | 0.6320 | 0.6244 | 0.1242 |
+| 4 | 0.6303 | 0.6306 | 0.6312 | 0.6160 | 0.1145 |
+| 8 | 0.6303 | 0.6300 | 0.6291 | 0.6067 | 0.1006 |
+| 16 | 0.6303 | 0.6301 | 0.6280 | 0.6005 | 0.0881 |
+
+*Table 5.13 — Oracle upper bound on the gradient-clustered experts, on the 50,000-position subsample. "Dispatcher CE" is the realised MLP-routed MoE; "Nearest-centroid CE" is the cosine/nearest-centroid routing rule of Section 5.3.3; "Oracle CE" is the true $\arg\min_k \mathcal{L}_k$ routing. The oracle uses the target at inference and is an unachievable upper bound.*
+
+<div align="center">
+    <img src="RESULTS/moe/oracle_k16/plots/moe_vs_base_ce.png" width="600">
+</div>
+
+<span style="color: #808080;">[Random dispatcher control]</span> Finally, Table 5.14 replaces the trained dispatcher with a uniform random router over the same experts. Random routing is always *worse* than the trained dispatcher and *worse than the base*, and it degrades with $K$ (gradient: 0.6311 → 0.6398; L1: 0.6317 → 0.6346). This is the complement of the oracle result: each fine-tuned expert has drifted from the generalist base into a specialist, so a random expert is a poor generalist on out-of-bucket positions. The trained dispatcher's routing is precisely what "buys back" that drift and returns the MoE to ≈ base — confirming that the (small) difference between the MoE and the base is a routing effect, not a capacity effect.
+
+| Variant | $K{=}2$ | $K{=}4$ | $K{=}8$ | $K{=}16$ |
+| :--- | :-: | :-: | :-: | :-: |
+| gradient-clustered | 0.6311 | 0.6337 | 0.6429 | 0.6398 |
+| L1-clustered | 0.6317 | 0.6327 | 0.6341 | 0.6346 |
+
+*Table 5.14 — Random dispatcher control (uniform random routing over the same experts), on the 50,000-position subsample. Base CE 0.6303; the trained-dispatcher MoE CE is given in Table 5.10.*
+
+<span style="color: #808080;">[Synthesis]</span> Read together, the three controls tell a coherent story. The oracle shows the experts carry real, monotonic specialisation headroom (0.600 at K=16). The random router shows that, without correct routing, the same experts are worse than the base and degrade with $K$. And the realised dispatchers — the only deployable routers — sit essentially on top of the base, because the routing signal they can consume (L1 activations, or even gradient centroids) is too weak to recover the argmin assignment. The mixture-of-experts hypothesis therefore fails not for lack of capacity or specialisation, but for lack of an *inference-time* signal that identifies the right expert; quantifying and, if possible, closing that gap is the central open question carried into the Discussion.
 
 ---
 
 ## 5.6 Summary of Experimental Findings
 
-\[Summarize the main empirical findings without introducing new analysis.\]
+<span style="color: #808080;">[Summary]</span> The empirical results of this chapter can be condensed into six findings.
 
-\[State which experimental observations will be examined in greater depth in the Discussion, including clustering stability, dispatcher approximation, expert specialization, predictive performance, and computational trade-offs.\]
+1. **Clustering.** Sample head gradients are a markedly better-separated and more stable routing representation than board features or L1 activations, and they are nearly orthogonal to the piece-count and activation partitions (Section 5.2.3).
+
+2. **Dispatcher approximation.** L1 activations recover the L1 partition almost perfectly (top-1 $\approx 0.97\text{--}0.99$) but the gradient partition only weakly (top-1 $\approx 0.49\text{--}0.64$, ARI $\leq 0.37$): L1 activations are a poor proxy for gradient direction (Section 5.3.3).
+
+3. **Base model.** The dual-POV two-hidden NNUE is the best architecture per parameter, and its quality saturates only at 30–70M training positions — far beyond the 2M positions available for expert fine-tuning (Section 5.4.3).
+
+4. **No routing gain.** No MoE variant — piece-count, L1-clustered, gradient-clustered, soft-gated, or Switch — beats the reference base on test CE; the best results tie it, and most are slightly worse (Section 5.5.3).
+
+5. **The gap is routing, not capacity.** The oracle upper bound shows large monotonic headroom (CE 0.600 at $K{=}16$), while the random-router control shows the same experts are worse than the base without correct routing. The experts hold the information; the deployable routing signal does not (Section 5.5.3).
+
+6. **Gradient centroids are not the argmin partition.** Even perfect nearest-gradient-centroid routing (CE 0.628 at $K{=}16$) falls far short of the true argmin oracle (0.600), so the clustering objective and the routing objective diverge.
+
+<span style="color: #808080;">[Forward to Discussion]</span> The Discussion will examine in depth: (i) the stability and separability of the gradient partition; (ii) why L1 activations fail to approximate gradient direction and whether an alternative inference-time feature could; (iii) the mismatch between the clustering objective and the argmin-loss routing objective; (iv) the extent to which the $2\times10^6$-position expert budget — versus the $\sim 30\times10^6$ the base needs to saturate — is the binding constraint on expert specialisation; and (v) the computational trade-offs of the MoE head relative to a single dense head of equal capacity.
