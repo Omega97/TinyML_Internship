@@ -1,0 +1,259 @@
+\chapter[Implementation]{Implementation: NNUE and MoE for Chess}\label{ch:implementation}
+
+\section{Dataset and Teacher}\label{sec:dataset}
+
+The quality of an NNUE evaluation function depends critically on the dataset used for training. For this work, we constructed a dataset of approximately 105 million chess positions extracted from human games and labeled with high-quality value estimates from a strong teacher network, \textbf{Leela Chess Zero} (Lc0), the \emph{spiritual} successor of \emph{AlphaZero}.
+
+\subsection{Dataset Construction}\label{sec:dataset-construction}
+
+The raw positions are sourced from \textbf{Lichess} monthly PGN archives, containing standard-rated games played by humans across all time controls. We filter games to include only those with at least 16 moves, excluding very short games that often end in early blunders or resignations and would introduce noisy or uninformative positions into the training set. From each remaining game, we sample positions randomly with probability \(5\%\), ensuring a diverse and representative collection of states across all phases of play, and mostly avoiding highly correlated positions.
+
+The dataset retains the natural distribution of game phases found in human play: a majority of middlegame positions, with fewer openings and endgames. We intentionally avoid resampling to balance phases, as the natural distribution better reflects the positions the engine will encounter during actual play. Each position is stored as a FEN string along with the multiplicity of the position, a visit count that may be used for optional weighting during training.
+
+A small fraction of the dataset is also a collection of interesting tactical positions, and high level bot games. They capture a portion of the state space that may be outside of regular human play.
+
+\subsection{Feature Encoding}\label{sec:feature-encoding}
+
+For the NNUE model, each FEN string is encoded as a sparse binary feature vector of length \(d_{\mathrm{in}} = 844\). This encoding is designed to capture both the positional and tactical structure of the board in a form suitable for the accumulator layer.
+
+The \(844\) features are divided into two categories. The first comprises \(716\) base features that encode piece-square pairs, representing the presence of each piece type on each square. The feature set is pruned to remove impossible pawn ranks and compressed to reduce redundancy. In the \(844\)-dimensional SARDINE encoder, the king plane is compressed from \(64\) squares to \(32\), saving features. The remaining \(128\) tactical features encode dynamic aspects of the position, specifically which pieces are under attack and which pieces are attacking the king. These features provide the network with explicit information about immediate tactical threats.
+
+A key design choice is the \textbf{dual-POV} encoding: for each position, the encoder produces two sets of sparse indices, one from the perspective of the \textbf{side-to-move} (STM) and one from the opponent's perspective (obtained by flipping the board rank-wise and swapping colors). This dual representation allows the network to learn symmetric evaluations and is consistent with the NNUE architecture's ability to evaluate positions from either player's viewpoint.
+
+The encoded features are pre-computed and stored in \texttt{.npz} slices for efficient loading during training.
+
+\subsection{Data Splits}\label{sec:data-splits}
+
+The dataset is partitioned into training and test splits. The training set consists of approximately 105 million positions, distributed across 165 slices for balanced I/O and stochastic sampling. The test set comprises a random portion of \(1\%\) of the positions that are held out of the training set.
+
+\subsection{Teacher Model: Lc0}\label{sec:teacher-lc0}
+
+To provide accurate target labels, we use \textbf{Lc0} (Leela Chess Zero) as the teacher model. Lc0 is a \emph{convolutional neural network} trained via self-play reinforcement learning, following the AlphaZero paradigm. Its value head outputs a probability distribution over the three possible game outcomes, Win, Draw, and Loss, from the perspective of the side-to-move:
+\[
+p_{\mathrm{WDL}}(s) = \mathrm{softmax}(\mathrm{logits}(s)) = (p_W, p_D, p_L).
+\]
+From this distribution, we compute the scalar expected reward:
+\[
+v(s) = p_W - p_L \in [-1, +1],
+\]
+which represents the expected outcome of the game from the current position. This scalar is the training target for the NNUE value head.
+
+Lc0 is chosen as the teacher for several reasons. First, it natively outputs WDL probabilities, which align directly with the NNUE's output head. Second, its strength, rated well above 3500 Elo, makes it a highly reliable source of positional evaluations. Finally, Lc0 is open-source and provides pre-trained networks, making the labelling pipeline reproducible.
+
+For this work, we label positions using Lc0's latest best network (e.g., \texttt{791556.pb.gz} from the Lc0 training server). We run Lc0 in UCI mode with \texttt{--show-wdl} enabled and evaluate each position with a single MCTS search. While depth-1 evaluations may occasionally miss short-term tactics, the resulting label noise is acceptable given the target Elo range of the engine (approximately 1700). For a cleaner but more expensive relabelling, one could increase the search depth.
+
+\subsection{Labelling Pipeline}\label{sec:labelling-pipeline}
+
+The complete labelling pipeline is straightforward. We parse Lichess PGNs and sample positions uniformly at random from each game, saving FEN strings and visit counts. This reduces the correlation between the positions in the final dataset. For each unique FEN, we invoke Lc0 in \emph{UCI mode} at depth 1 to obtain WDL probabilities from the STM perspective. We then proceed to save the WDL probabilities alongside the FEN and visit counts in JSON format. In the encoding step we pre-compute the \(844\)-dimensional sparse feature vectors (both STM and opponent POVs) and store them in \texttt{.npz} slices for efficient training. The final result is a dataset of pairs of sparse input board positions and their relative WDL probabilities.
+
+\section{Base NNUE Architecture}\label{sec:base-nnue}
+
+The base NNUE (Efficiently Updatable Neural Network) model serves as the foundation upon which the Mixture of Experts extension is built. Its architecture is designed to balance representational capacity with the stringent memory and computational constraints of the target hardware. The model follows the dual-perspective paradigm introduced by the original NNUE design, but incorporates modifications tailored to the specific feature set and bucketing objectives of this work.
+
+\subsection{Model Overview}\label{sec:model-overview}
+
+The base model \(f_\theta\) is a feed-forward neural network with three parameterised layers: a shared sparse first layer (L1), a dense second layer (L2), and a linear output head, with \emph{softmax} activations. The input to the model is the sparse binary feature representation described in Section~\ref{sec:feature-encoding}, consisting of \(844\) active features per perspective. The model processes both the side-to-move (STM) and opponent perspectives through the same L1 layer, producing two accumulator vectors that are later concatenated and passed through the remaining layers.
+
+Formally, the model computes:
+\[
+h_{\mathrm{own}} = W_{\mathrm{L1}} \, x_{\mathrm{own}}, \qquad
+h_{\mathrm{opp}} = W_{\mathrm{L1}} \, x_{\mathrm{opp}},
+\]
+where \(x_{\mathrm{own}}, x_{\mathrm{opp}} \in \{0,1\}^{844}\) are the sparse feature vectors for the two perspectives, and \(W_{\mathrm{L1}} \in \mathbb{R}^{d_{\mathrm{in}} \times W}\) is the shared weight matrix of the accumulator layer. The output of the L1 layer is a pair of vectors \(h_{\mathrm{own}}, h_{\mathrm{opp}} \in \mathbb{R}^{W}\), where \(W\) is the hidden dimension of the accumulator, set to \(W = 128\) in this work.
+
+\begin{figure}[ht]
+\centering
+\includegraphics[width=0.85\textwidth]{sardine_nnue_architecture.png}
+\caption{Dual-perspective NNUE architecture used as the base model. The shared L1 accumulator produces side-to-move and opponent activations, which are reordered, concatenated, and passed through the L2 layer and the three-way WDL output head.}
+\label{fig:nnue-arch}
+\end{figure}
+
+\subsection{Shared L1 Accumulator}\label{sec:l1-accumulator}
+
+The L1 layer, often referred to as the accumulator, is the defining component of the NNUE architecture. Its weight matrix \(W_{\mathrm{L1}}\) is shared between the two perspectives, enabling the network to learn a common representation of board structure while retaining perspective-specific information through the different input features. The sparsity of the input features allows the accumulator to be updated efficiently: rather than recomputing the entire matrix-vector product for each new position, the network maintains the accumulator vector incrementally, adding or subtracting the contributions of features that change as pieces move.
+
+The L1 activations are passed through a \textbf{CReLU} (Clipped Rectified Linear Unit) activation function, which maps each activation to the range \([0, 127]\):
+\[
+a_{\mathrm{own}} = \mathrm{clamp}(h_{\mathrm{own}}, 0, 127), \qquad
+a_{\mathrm{opp}} = \mathrm{clamp}(h_{\mathrm{opp}}, 0, 127).
+\]
+This clipping is essential for integer quantization, as it bounds the dynamic range of the accumulator values and allows the use of low-precision integer arithmetic during inference.
+
+\subsection{Side-to-Move Reorder}\label{sec:stm-reorder}
+
+Before concatenating the two accumulator vectors, we apply a \emph{side-to-move (STM) reorder} to ensure that the expert head always receives the perspective of the current player first. The reordering is governed by the binary flag \(\mathrm{stm\_white} \in \{0,1\}\), which indicates whether White is to move:
+\begin{align*}
+h_{\mathrm{first}} &=
+\begin{cases}
+a_{\mathrm{own}}, & \text{if } \mathrm{stm\_white} = 1, \\
+a_{\mathrm{opp}}, & \text{otherwise},
+\end{cases}
+\\
+h_{\mathrm{second}} &=
+\begin{cases}
+a_{\mathrm{opp}}, & \text{if } \mathrm{stm\_white} = 1, \\
+a_{\mathrm{own}}, & \text{otherwise}.
+\end{cases}
+\end{align*}
+The two vectors are then concatenated to form the input to the L2 layer:
+\[
+h = [h_{\mathrm{first}} \, \Vert \, h_{\mathrm{second}}] \in \mathbb{R}^{2W}.
+\]
+This reordering step is critical for making the evaluation perspective-invariant: the network always receives the board from the point of view of the side to move, and the output \(v \in [-1, +1]\) is always interpreted as the expected reward for the current player, regardless of colour.
+
+\subsection{L2 Layer and Output Head}\label{sec:l2-head}
+
+The concatenated vector \(h\) is passed through a dense L2 layer with hidden dimension \(H = 256\):
+\[
+z = \mathrm{ReLU}(W_{\mathrm{L2}} \, h + b_{\mathrm{L2}}),
+\]
+where \(W_{\mathrm{L2}} \in \mathbb{R}^{2W \times H}\) and \(b_{\mathrm{L2}} \in \mathbb{R}^{H}\) are the weight matrix and bias of the L2 layer. The ReLU activation introduces non-linearity and has been shown to work well with the sparse accumulator features.
+
+Finally, the L2 activations are projected to a three-dimensional output representing the logits for Win, Draw, and Loss probabilities:
+\[
+\mathrm{logits} = W_{\mathrm{out}} \, z + b_{\mathrm{out}},
+\]
+where \(W_{\mathrm{out}} \in \mathbb{R}^{H \times 3}\) and \(b_{\mathrm{out}} \in \mathbb{R}^{3}\). During training, these logits are converted to probabilities via the softmax function:
+\[
+p_{\mathrm{WDL}}(s) = \mathrm{softmax}(\mathrm{logits}(s)) = (p_W, p_D, p_L).
+\]
+The scalar evaluation used for search is obtained as \(v = p_W - p_L\), the expected reward from the side-to-move perspective.
+
+\subsection{Training Objective}\label{sec:training-objective}
+
+The model is trained to minimise the \textbf{soft cross-entropy} between its predicted WDL distribution and the teacher labels provided by the Lc0 value function. Let \(\mathcal{O} = \{W, D, L\}\) denote the set of possible game outcomes. For a batch of \(N\) positions with teacher probabilities \(\hat{p}_i = (\hat{P}_i(o))_{o \in \mathcal{O}}\) and model outputs \(p_i = (P_i(o))_{o \in \mathcal{O}}\), the loss is:
+\[
+\mathcal{L} = -\frac{1}{N} \sum_{i=1}^N \sum_{o \in \mathcal{O}} \hat{P}_i(o) \log P_i(o).
+\]
+The outer sum averages the loss over the batch, while the inner sum accumulates the contribution of each outcome for a given position.
+
+This loss is well-suited to the task because the teacher labels are probability distributions rather than point estimates. Soft cross-entropy encourages the model to match the full outcome distribution, not merely its scalar expected reward, and therefore provides a richer training signal. The loss also handles the non-linearity introduced by the softmax in a principled way, and its gradient does not saturate at extreme values, unlike the squared error on the scalar evaluation \(v = P(W) - P(L)\).
+
+\subsection{Parameter Count and Model Size}\label{sec:param-count}
+
+With \(W = 128\) and \(H = 256\), the total number of trainable parameters is approximately \(175{,}000\). This compact size is deliberately chosen to fit within the memory constraints of the target hardware: the L1 weights (\(844 \times 128\) \texttt{int8} values) dominate the parameter count, while the L2 and output layers contribute only a small fraction. The model is therefore both computationally efficient and storage-friendly, with a footprint that can be further reduced through pruning and quantisation.
+
+\subsection{Training Protocol}\label{sec:training-protocol}
+
+The base model is trained on the full training set (approximately 105 million positions) using the Adam optimiser with a learning rate of \(10^{-2}\), linearly decayed to \(10^{-3}\) over the course of training. We use a batch size of \(10{,}000\) and train for up to 1000 epochs. The model's performance is evaluated on a held-out test set of random positions, \(1\%\) of the total dataset, ensuring that generalisation is measured on unseen data. The training is conducted on a \emph{DGX Nvidia Spark GPU}.
+
+\section{Sample Gradient Computation}\label{sec:grad-impl}
+
+\subsection{Implementation with PyTorch}\label{sec:grad-pytorch}
+
+The sample gradients are computed using PyTorch's automatic differentiation engine. For each batch of positions, a forward pass through the base model is performed to obtain WDL logits. Then, the soft cross-entropy loss is computed against the teacher labels. Finally, \texttt{torch.autograd.grad} is called to obtain the gradients of the loss with respect to the head parameters.
+
+The computation proceeds as follows. For a batch of \(M\) positions, the base model \(f_{w_{\mathrm{base}}}\) produces logits \(\ell_i \in \mathbb{R}^3\) for each position. The loss is computed as the average soft cross-entropy over the batch:
+\[
+\mathcal{L}_{\mathrm{batch}} = \frac{1}{M} \sum_{i=1}^M \mathcal{L}_{\mathrm{CE}}(\mathrm{softmax}(\ell_i), \hat{p}_i),
+\]
+where \(\hat{p}_i\) are the teacher's WDL probabilities. We then call:
+\begin{lstlisting}[language=Python,basicstyle=\ttfamily\footnotesize,breaklines=true]
+grads = torch.autograd.grad(
+    loss,
+    head_parameters,
+    retain_graph=False,
+    create_graph=False
+)
+\end{lstlisting}
+The \texttt{head\_parameters} list contains the trainable parameters of the L2 layer and the output head: \((W_{L2}, b_{L2}, W_{\mathrm{out}}, b_{\mathrm{out}})\). The L1 weights are excluded, as they remain frozen throughout the entire pipeline.
+
+The resulting gradient tensors are detached from the computation graph to free memory, then flattened and concatenated into a single vector per position:
+\[
+\Delta_i = \mathrm{concat}\left[\mathrm{vec}(\nabla_{W_{L2}} \mathcal{L}_i),\; \nabla_{b_{L2}} \mathcal{L}_i,\; \mathrm{vec}(\nabla_{W_{\mathrm{out}}} \mathcal{L}_i),\; \nabla_{b_{\mathrm{out}}} \mathcal{L}_i\right].
+\]
+The computation is parallelised across the GPU and performed in a single pass over the dataset. Gradients are computed in batches of 1024 positions, and the resulting vectors are accumulated on disk rather than held in memory, preventing memory exhaustion. The \texttt{retain\_graph=False} option ensures that the computational graph is freed after each batch, further reducing memory usage.
+
+\subsection{Parameter Selection}\label{sec:grad-params}
+
+The gradients are computed with respect to the trainable parameters of the head only, namely the weights and biases of the L2 layer and of the output layer: \((W_{L2}, b_{L2}, W_{\mathrm{out}}, b_{\mathrm{out}})\). The L1 accumulator is deliberately excluded. This choice follows from the design of the method: the L1 representation is shared across all experts and frozen throughout the pipeline, so its parameters are never updated during expert fine-tuning and their gradients are irrelevant to the partition. Including them would also inflate the dimensionality of the gradient vectors by an order of magnitude, since the L1 weights alone account for the majority of the model's parameters, and would make both storage and clustering substantially more expensive without contributing information that the partition can use.
+
+The selected parameters are flattened and concatenated into a single vector per position. If the L2 layer has weight matrix \(W_{L2} \in \mathbb{R}^{2W \times H}\) and bias \(b_{L2} \in \mathbb{R}^{H}\), and the output layer has \(W_{\mathrm{out}} \in \mathbb{R}^{H \times 3}\) and bias \(b_{\mathrm{out}} \in \mathbb{R}^{3}\), the resulting gradient vector has dimension \(P_{\mathrm{head}} = 2W \cdot H + 4H + 3\), which for the architecture used in this work amounts to \(66{,}563\) values per position. This is the representation that is normalised, stored, and clustered in the subsequent steps.
+
+\subsection{Normalisation}\label{sec:grad-norm}
+
+Each gradient vector is L2-normalised before storage, so that the clustering operates on directions rather than magnitudes. The normalisation is applied element-wise to every vector in the batch:
+\[
+\Delta_i^{\mathrm{norm}} = \frac{\Delta_i}{\lVert\Delta_i\rVert + \epsilon},
+\]
+where \(\lVert\Delta_i\rVert\) is the Euclidean norm of the flattened gradient and \(\epsilon = 10^{-8}\) prevents division by zero for degenerate vectors. The operation is vectorised across the batch: the norms are computed in a single reduction over the flattened buffer. In practice, no gradient in the dataset is exactly zero, but the epsilon guard is retained for safety.
+
+The same normalisation is applied uniformly to all gradients. No per-dimension standardisation is performed, and no additional scaling is introduced. This ensures that the stored vectors all lie on the unit hypersphere, so that the Euclidean distance between two normalised vectors is a monotone function of their cosine similarity, and the clustering algorithm effectively operates on angles rather than magnitudes.
+
+\subsection{Storage and Memory Management}\label{sec:grad-storage}
+
+Computing and storing sample gradients for 105 million positions presents a significant practical challenge. Each gradient vector has dimension \(P_{\mathrm{head}} = 66{,}563\), corresponding to the flattened parameters of the L2 layer and output head. Storing the full set in 32-bit floating-point would require approximately \(28\)\,TB. We therefore adopt half-precision storage, reducing this to roughly \(14\)\,TB while preserving sufficient numerical precision for clustering, as the gradients are normalised and clustered based on their directions rather than their exact magnitudes.
+
+The gradients are stored in memory-mapped \texttt{.npy} files, which provide efficient random access without loading the entire dataset into memory. Computation proceeds in batches of 1024 positions, with each batch written to disk immediately after computation and the memory-mapped array pre-allocated to avoid accumulating gradients in GPU or CPU memory. For exploratory analysis, gradient computation can be performed on a subset of the dataset, but for the final MoE architecture we use the full dataset.
+
+\subsection{Computational Cost and Timing}\label{sec:grad-cost}
+
+Computing sample gradients is the most expensive step of the pipeline after base training itself. Unlike inference, which requires only a forward pass through the model, gradient computation requires both a forward and a backward pass for every batch. The backward pass is the dominant cost, since it involves propagating gradients through the L2 layer and the output layer. The L1 accumulator is frozen and excluded from differentiation, so no gradient is propagated through it; this keeps the backward pass confined to the small head and avoids the cost of differentiating through the largest layer of the network.
+
+The computation is \emph{embarrassingly parallel} across batches. Each batch is independent of the others, and the only shared state is the model weights, which are read-only during this step. On a GPU, this parallelism is exploited by processing batches of 1024 positions at a time and running them through the model in sequence, with the backward pass overlapping the next forward pass through the use of asynchronous kernel launches. On a CPU, the same batching strategy applies, but the throughput is substantially lower, and the per-position cost becomes the bottleneck. For this reason, the gradient computation is performed on a GPU, where the throughput is roughly two orders of magnitude higher than on a modern multi-core CPU. The exact timing depends on the batch size, the size of the head, and the speed of the storage device used to write the gradients, since the I/O can become the limiting factor when the model itself is small.
+
+The batching strategy is designed to balance memory usage and throughput. A batch size of 1024 positions is large enough to saturate the GPU and small enough to fit comfortably in device memory, including the activations needed for the backward pass. Each batch is processed independently, and the resulting gradient vectors are written directly to the memory-mapped output file before the next batch begins. This has two effects: it bounds the memory footprint of the step to a single batch, regardless of the total dataset size, and it makes the computation resilient to interruption, since the gradients already written to disk remain valid. The main cost of this approach is that the GPU is idle during the write phase. For large batches, the write time is negligible compared to the backward pass; for small batches, the overhead becomes more significant, which is one of the reasons for choosing a batch size at the upper end of what the memory allows.
+
+Under the configuration used in this work, computing gradients for the full dataset of 105 million positions is performed on a DGX Nvidia Spark GPU, with the storage writes contributing a minor fraction of the total time. The throughput scales roughly linearly with the number of positions, so the computation can be halted at any point and resumed later without loss, which is useful when a subset is sufficient for an exploratory analysis. A random subsample of the dataset is often used for tuning the clustering parameters before committing to a full pass, since the clustering cost also grows with the size of the stored gradients and the number of iterations.
+
+\section{Clustering}\label{sec:clustering-impl}
+
+The clustering step operates on the full set of normalised sample gradients produced in the previous stage. The gradients are loaded from the memory-mapped file, and the clustering is performed with \textbf{Mini-Batch K-Means}, as described in Section~\ref{sec:kmeans}. The choice of Mini-Batch K-Means over the standard K-Means follows from the size of the dataset: with millions of gradient vectors in dimension \(P_{\mathrm{head}} = 66{,}563\), the batch updates provided by Mini-Batch K-Means reduce both memory consumption and convergence time, while producing partitions that are nearly indistinguishable from those of the full algorithm on this scale.
+
+The clustering is run for several values of \(B\) (\(2\), \(4\), \(8\), \(16\), and \(32\)), so that the effect of the number of experts on the final evaluation quality can be assessed. The Mini-Batch K-Means implementation uses a batch size of \(10{,}000\) gradients and is initialised with the \(k\)-means++ scheme, which improves the stability of the final partition by spreading the initial centroids across the data. The algorithm is run for a fixed number of iterations with early stopping on the within-cluster sum of squares, and the random seed is fixed so that the partitions are reproducible across runs. The trained centroids and the per-position cluster assignments are stored for the subsequent dispatcher training and expert fine-tuning steps.
+
+As a secondary reference, Density Peak Clustering is applied to a random subsample of the gradients, typically a few hundred thousand positions, to avoid the quadratic cost of computing pairwise distances on the full dataset. The number of clusters identified by this method is not used directly to set \(B\), but serves as a qualitative check on whether the values explored with Mini-Batch K-Means are consistent with the natural structure of the gradient space. If the density-based algorithm consistently selects a number of clusters within the explored range, this provides some evidence that the partition is not being forced by an arbitrary choice of \(B\).
+
+The structure of the partition is visualised using two complementary tools. \emph{Principal Component Analysis} is applied to a subsample of the gradients to project them onto the first few principal components, and the projection is coloured by cluster assignment to reveal the gross geometry of the partition. \emph{t-SNE} is used on a smaller subsample to produce a non-linear embedding that preserves local neighbourhoods, which often reveals structure that the linear projection misses. Both visualisations are produced for several values of \(B\), so that the progressive refinement of the partition can be inspected. These plots are not used to select the final value of \(B\), which is decided on the basis of the downstream evaluation metrics, but they provide a useful qualitative check on the clustering and help identify whether any bucket is dominated by a narrow region of the state space.
+
+\section{Dispatcher Training}\label{sec:dispatcher-impl}
+
+The dispatcher is trained to predict the cluster assignment of a position from the L1 activations produced by the frozen base model. The training data consists of the same set of positions used for clustering, with the cluster labels obtained from Mini-Batch K-Means serving as targets. Since the L1 weights are frozen and the activations depend only on the input features, the L1 activations can be computed once for the entire dataset and cached. This reduces the dispatcher training to a simple classification problem on a fixed set of features, and the entire procedure completes in a fraction of the time required for gradient computation or expert fine-tuning.
+
+The input to the dispatcher is the concatenated L1 activations after the side-to-move reorder, \(h = [h_{\mathrm{first}} \Vert h_{\mathrm{second}}] \in \mathbb{R}^{2W}\), matching the input received by the L2 layer of the expert heads. Using the same representation as the heads ensures that the dispatcher sees the position in the same perspective-aligned form, so that the routing decision is consistent with the expert that will eventually process the position. An alternative would be to use only the side-to-move activations \(h_{\mathrm{own}}\), halving the input dimension and the number of dispatcher parameters. This was considered but not adopted, because the opponent's perspective provides additional information about the position at negligible cost, and because the full concatenation matches the input of the expert heads more closely.
+
+The dispatcher is a single linear layer mapping the \(2W\)-dimensional input to \(B\) logits, with no hidden layers and no non-linear activation beyond the softmax used during training. The softmax is discarded at inference, where the predicted bucket is simply the argmax of the logits. This architecture was chosen for its minimal inference cost and because its limited expressiveness is less likely to overfit, as discussed in Section~\ref{sec:disp-linear}, and it is trained separately for each value of \(B\) explored in the clustering stage.
+
+Training uses the standard cross-entropy loss between the predicted distribution over buckets and the one-hot cluster assignment. The optimisation is performed with Adam, using a learning rate of \(10^{-2}\) decayed to \(10^{-3}\), a batch size of 1024, and early stopping on a held-out validation set comprising \(10\%\) of the training positions. Convergence typically occurs within a few epochs, and the validation accuracy is monitored to detect overfitting. No class weighting is applied, even when the cluster sizes are imbalanced, because the dispatcher's objective is to approximate the partition as faithfully as possible, and artificially balancing the classes would distort the routing behaviour relative to the clustering. The trained dispatcher parameters are stored alongside the expert heads and loaded at inference time as part of the MoE model.
+
+\section{Expert Fine-Tuning}\label{sec:expert-impl}
+
+With the partition fixed and the dispatcher trained, the final training step produces the expert heads. Each expert is initialised from the base head and fine-tuned on the positions assigned to its bucket, with the L1 accumulator kept frozen throughout. The implementation follows the procedure described in Section~\ref{sec:step-experts}, and the practical details of the training schedule are described here.
+
+The fine-tuning runs over the buckets in sequence, each expert trained independently of the others. Because the L1 activations are pre-computed and cached, the fine-tuning only requires forward and backward passes through the small head, not the full model. This makes the procedure fast relative to base training, and it allows the experts to be trained with the same optimiser and loss used for the base model. The initialisation from the base head ensures that every expert starts from a well-trained configuration and that the differences between experts reflect the data they see, not differences in initialisation.
+
+The choice of training schedule is guided by the size of the buckets and the risk of overfitting. In the present work the dataset is large enough that no bucket is small, and the training proceeds for a fixed number of sweeps over the bucket, with the cross-entropy on a held-out portion of the bucket serving as the stopping signal. The held-out portion is drawn from the same bucket, so the stopping criterion reflects performance on the type of positions the expert is intended to handle. When a bucket is small, early stopping is essential, because an expert trained for too long on a limited set of positions will memorise them rather than generalise. When a bucket is large, the risk is lower, and the training can proceed for more sweeps without overfitting, but the gains from additional sweeps diminish quickly and the additional cost is not justified. The schedule used in the experiments is one to two sweeps for each bucket, with a learning rate lower than the one used for base training to avoid destabilising the shared representation.
+
+The results of the fine-tuning are evaluated per bucket, using the cross-entropy of the expert on its own held-out data. This is the same metric used to monitor the base model, and it allows a direct comparison between the expert and the base head on the subset of positions that the expert was trained for. The per-bucket cross-entropy is reported in Chapter~\ref{ch:experiments}, along with the corresponding metrics for the base model and the dispatcher accuracy, so that the effect of specialisation can be assessed separately from the effect of routing.
+
+\section{Final MoE Model}\label{sec:final-moe}
+
+The final MoE model assembles the three components produced by the pipeline into a single evaluation function: the frozen L1 accumulator, the trained dispatcher, and the \(B\) expert heads. In implementation terms, these correspond to three sets of parameters loaded from disk at startup and held in memory for the duration of the search. The L1 weights are shared and read-only, the dispatcher is a single linear layer with \(2W \times B\) weights and \(B\) biases, and each expert head contains its own L2 and output parameters initialised from the base head and fine-tuned on its bucket.
+
+The inference path is linear and adds only one stage to the base model. The engine encodes the position into its sparse feature representation and updates the L1 accumulator incrementally, as it does for the single-head model. The resulting activation vector, after the side-to-move reorder, is passed to the dispatcher, which computes \(B\) logits and selects the index of the maximum. The corresponding expert head is then evaluated on the same activation vector, producing WDL logits that are converted to probabilities via the softmax, and the scalar evaluation is derived as \(v = p_W - p_L\) from the side-to-move perspective. No other expert is evaluated, and no ensembling is performed. The routing decision is therefore a single matrix-vector multiplication followed by an argmax, and the cost of the head forward pass is identical to that of the base model.
+
+At the implementation level, the expert heads are stored as separate parameter blocks but share the same architecture, which allows the forward pass to be dispatched to the appropriate block using a single index. The dispatcher parameters and the expert heads are stored separately from the L1 weights, so that the shared representation can be loaded once and reused regardless of the number of experts. The total memory footprint of the model is the sum of the L1 weights, the dispatcher weights, and the \(B\) expert heads, which for small \(B\) remains modest relative to the L1 layer. The additional cost introduced by the MoE architecture over the base model is therefore bounded by the size of the dispatcher and the \(B-1\) additional heads, and the inference path adds only the dispatcher operation to the cost of a single-head evaluation.
+
+The assembled model is integrated into Cfish in the following sections. Its behaviour depends on the choices made throughout the pipeline, and in particular on the value of \(B\) and on the quality of the partition. The evaluation of the resulting engine, both in terms of the accuracy of the value estimates and in terms of the cost of the additional dispatcher, is reported in Chapter~\ref{ch:experiments}.
+
+\section{Cfish as the Host Engine}\label{sec:cfish-host}
+
+The Mixture-of-Experts NNUE developed in this chapter is not intended to run as a standalone evaluator. It is designed to replace the evaluation component of an existing chess engine, so that its behaviour can be assessed within the full search pipeline, and so that its cost can be measured against the constraints of the target hardware. The host engine selected for this purpose is Cfish, a port of Stockfish written in plain C by Ronald de Man and first published on GitHub in July 2016. Cfish shares the same search and evaluation logic as its C++ counterpart, but compiles to a smaller and more portable binary, which makes it a natural fit for embedded targets. Since August 2020, Cfish has included the NNUE evaluation ported from Stockfish, together with SIMD-optimised code paths for AVX2 and AVX-512.
+
+The evaluation function in Cfish follows the \emph{HalfKP} feature set, in which the active inputs are the positions of the non-king pieces relative to the square of the friendly king. The accumulator is updated incrementally as moves are made, and the network output is a scalar value in centipawns from the side-to-move perspective. The search is an alpha-beta variant with iterative deepening, move ordering, and a transposition table, and it calls the evaluation function at every leaf node. The integration described in the following section replaces the single NNUE head with the MoE architecture, while leaving the search tree, the move generation, and the transposition table unchanged.
+
+The target hardware for the deployment is the Wio Terminal, an ARM board built around the ATSAMD51P19 Cortex-M4 processor running at 120\,MHz. The board provides 512\,KB of flash memory, 192\,KB of RAM, and 4\,MB of external flash. These figures impose hard limits on the size of the model and on the amount of state that can be kept in memory during search. The L1 accumulator must fit within the available RAM alongside the transposition table and the search stack, and the expert heads and dispatcher must fit within the flash budget together with the engine code. The evaluation function must also be fast enough to sustain a reasonable number of nodes per second, which in turn determines the search depth the engine can reach within a given time control. The precise throughput depends on the quantisation strategy and on the efficiency of the integer arithmetic, and is measured as part of the experimental evaluation in Chapter~\ref{ch:experiments}.
+
+\section{Integration with Cfish}\label{sec:cfish}
+
+The integration of the NNUE MoE into Cfish follows the same structure that Cfish uses for the standard NNUE, with the addition of the dispatcher and the selection of the appropriate expert head. The entry point is the \texttt{evaluate()} function, which is called at every leaf node of the search. In the original engine, this function computes the accumulator from the current position, passes it through the single head, and returns a centipawn score. In the MoE version, the same accumulator is used, but the head is selected by the dispatcher before the output is computed.
+
+The accumulator update is unchanged. Cfish maintains the accumulator incrementally as moves are made and unmade during the search, adding and subtracting the contributions of the pieces that change. Because the L1 weights are shared across all experts and frozen, the incremental update logic requires no modification: the accumulator is a single vector, computed once per position and reused by whichever expert the dispatcher selects. This is the practical consequence of freezing L1, and it is what makes the integration tractable. If each expert had its own accumulator, the engine would have to maintain \(B\) separate accumulator states and update them all on every move, which would multiply the cost of the most frequent operation in the search.
+
+The dispatcher is invoked after the accumulator is computed and before the head forward pass. It reads the concatenated activations in the perspective-aligned order, computes \(B\) logits, and returns the index of the maximum. The forward pass of the selected expert is then performed on the same activation vector, using the same code path as the base head. The additional cost per evaluation is therefore one linear layer of size \(2W \times B\) and one argmax over \(B\) values, both of which are inexpensive relative to the head forward pass. For the values of \(B\) explored in this work, the dispatcher adds a small but measurable increment to the per-node cost, and the effect on nodes per second is reported in the evaluation.
+
+All weights are quantised to 8-bit integers for storage and inference. The L1 weights, the dispatcher weights, and the expert head weights are all stored as int8, and the biases are stored as int32 to preserve the dynamic range of the accumulation. The accumulator itself is maintained in int16, which provides sufficient precision for the CReLU-clipped activations while keeping the vector within a compact representation. The multiply-accumulate operations at the dispatcher and the head use int32 accumulators, which is the standard integer path in NNUE implementations and is supported efficiently by the Cortex-M4 DSP instructions. The output of the head is a set of three int32 logits, converted to a scalar evaluation through a fixed-point approximation of the softmax difference \(p_W - p_L\).
+
+The memory layout is organised so that the largest component, the L1 weight matrix, is stored in the external flash and accessed through the board's memory-mapped interface, while the accumulator and the search state reside in the internal RAM. The dispatcher and the expert heads are small enough to be stored in the internal flash alongside the engine code, which avoids the latency of external memory access on the critical path. The expert heads are stored as a contiguous block indexed by the dispatcher output, so that selecting an expert amounts to offsetting a pointer into the block rather than searching a data structure. This layout keeps the per-evaluation memory access pattern predictable and cache-friendly, which matters on a device with no hardware cache.
+
+The integration is validated in two stages. First, the MoE model is run on a set of positions with known evaluations to confirm that the dispatcher selects the correct expert and that the output matches the reference implementation on the host. Second, the full engine is run on a set of test positions to measure nodes per second and search depth against the unmodified Cfish with the same base NNUE, so that the cost of the MoE extension can be isolated from the cost of the search itself. The results of these measurements are reported in Chapter~\ref{ch:experiments}, together with the evaluation accuracy of the resulting engine.

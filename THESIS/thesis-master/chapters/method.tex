@@ -1,0 +1,348 @@
+\chapter[Method]{Method: Unsupervised Bucketing via Sample Gradients}\label{ch:method}
+
+\section{Method Overview}\label{sec:method-overview}
+
+This chapter presents the proposed method for unsupervised state-space bucketing via sample gradients. The central idea is to use the learning signal itself, the per-sample gradients of the loss with respect to the head parameters, as the basis for partitioning the state space, rather than relying on handcrafted features or hidden-layer activations.
+
+The method unfolds through a carefully orchestrated sequence designed to balance computational tractability with the stringent efficiency demands of on-device inference. It begins by training a base NNUE model on the complete dataset, which establishes a shared L1 representation and provides a stable reference point for subsequent gradient computations. From this foundation, normalized per-sample gradients are extracted with respect to the trainable head parameters, effectively capturing the direction in which each position would push the head during optimization.
+
+These gradient vectors then become the substrate for clustering, yielding a partition of the state space into \(B\) distinct buckets that group together positions exhibiting similar learning dynamics. To enable fast routing at inference time without the prohibitive cost of recomputing gradients, a lightweight linear dispatcher is trained to predict bucket assignments directly from the frozen L1 activations.
+
+The pipeline culminates in fine-tuning a dedicated expert head on each bucket, initialized from the base model while keeping the L1 weights frozen. The end result is a mixture-of-experts NNUE architecture in which each expert develops specialised competence over a coherent region of the state space, guided by a dispatcher that introduces negligible overhead to the evaluation function.
+
+\section{Notation and Definitions}\label{sec:notation}
+
+We introduce here the formal notation used throughout this chapter and the remainder of the thesis. The notation is organized into sets, scalars, vectors and matrices, functions, and key operators.
+
+\subsection{Sets}\label{sec:notation-sets}
+
+\begin{center}
+\small
+\begin{tabularx}{\textwidth}{@{}>{\raggedright\arraybackslash}p{0.42\textwidth} X@{}}
+\hline
+\textbf{Symbol} & \textbf{Description} \\
+\hline
+\(\mathcal{S}\) &
+  The space of all possible chess positions (states). \\
+\(\mathcal{D}\) &
+  The training dataset of positions with labels: \(\mathcal{D} = \{(s_i, v_i)\}_{i=1}^{N}\). \\
+\(\mathcal{P} = \{\mathcal{D}_1, \dots, \mathcal{D}_B\}\) &
+  A partition of the state space into \(B\) buckets, where each \(\mathcal{D}_i \subset \mathcal{S}\) is a non-empty subset. \\
+\(\Theta\) &
+  The space of all model parameters (weights). \\
+\hline
+\end{tabularx}
+\end{center}
+
+\subsection{Scalars}\label{sec:notation-scalars}
+
+\begin{center}
+\small
+\begin{tabularx}{\textwidth}{@{}l X@{}}
+\hline
+\textbf{Symbol} & \textbf{Description} \\
+\hline
+\(B\) & The number of experts (buckets). \\
+\(N\) & The total number of positions in the training dataset. \\
+\(N_i\) & The number of positions in bucket \(\mathcal{D}_i\). \\
+\(W\) & The hidden dimension of the NNUE accumulator per perspective (\(128\) in this work). \\
+\(H\) & The hidden dimension of the L2 layer (\(256\) in this work). \\
+\(d_{\mathrm{in}}\) & The input dimension of the NNUE accumulator (\(844\) in this work). \\
+\(v_i \in \mathbb{R}\) & The scalar label (expected reward) for position \(s_i\). \\
+\(\eta\) & The learning rate used for gradient updates. \\
+\hline
+\end{tabularx}
+\end{center}
+
+\subsection{Vectors and Matrices}\label{sec:notation-vectors}
+
+\begin{center}
+\small
+\begin{tabularx}{\textwidth}{@{}>{\raggedright\arraybackslash}p{0.40\textwidth} l X@{}}
+\hline
+\textbf{Symbol} & \textbf{Type} & \textbf{Description} \\
+\hline
+\(W_{L1} \in \mathbb{R}^{d_{\mathrm{in}} \times W}\) &
+  Matrix &
+  Weights of the first layer (accumulator), frozen after base training. \\
+\(W_{L2} \in \mathbb{R}^{2W \times H}\) &
+  Matrix &
+  Weights of the second layer. \\
+\(W_{\mathrm{out}} \in \mathbb{R}^{H \times 3}\) &
+  Matrix &
+  Weights of the output layer (3 logits for WDL). \\
+\(w_{\mathrm{base}} \in \mathbb{R}^{P}\) &
+  Vector &
+  All parameters of the base model: \(w_{\mathrm{base}} = \mathrm{vec}(W_{L1}, W_{L2}^{\mathrm{base}}, W_{\mathrm{out}}^{\mathrm{base}})\). \\
+\(\theta_i \in \mathbb{R}^{P}\) &
+  Vector &
+  All parameters of the expert model \(i\): \(\theta_i = \mathrm{vec}(W_{L1}, W_{L2}^{(i)}, W_{\mathrm{out}}^{(i)})\). \\
+\(\delta_i \in \mathbb{R}^{P_{\mathrm{head}}}\) &
+  Vector &
+  The task vector for expert \(i\): \(\delta_i = \theta_i^{\mathrm{head}} - \theta_{\mathrm{base}}^{\mathrm{head}}\), where \(\theta^{\mathrm{head}} = \mathrm{vec}(W_{L2}, W_{\mathrm{out}})\). \\
+\(\Delta_i \in \mathbb{R}^{P_{\mathrm{head}}}\) &
+  Vector &
+  The \textbf{per-sample gradient} for position \(s_i\): \(\Delta_i = \nabla_{w_{\mathrm{head}}} \mathcal{L}(\hat{f}_{w_{\mathrm{base}}}(s_i), v_i)\). \\
+\(x_i \in \{0,1\}^{d_{\mathrm{in}}}\) &
+  Vector &
+  The sparse binary feature vector for position \(s_i\). \\
+\(h_i = W_{L1} \cdot x_i \in \mathbb{R}^{W}\) &
+  Vector &
+  The accumulator output (L1 activation) for position \(s_i\). \\
+\hline
+\end{tabularx}
+\end{center}
+
+\subsection{Functions and Models}\label{sec:notation-functions}
+
+\begin{center}
+\small
+\begin{tabularx}{\textwidth}{@{}>{\raggedright\arraybackslash}p{0.42\textwidth} X@{}}
+\hline
+\textbf{Symbol} & \textbf{Description} \\
+\hline
+\(f_w: \mathcal{S} \rightarrow \mathbb{R}^3\) &
+  The NNUE evaluation function parameterized by weights \(w\), producing WDL logits. \\
+\(\hat{f}_w: \mathcal{S} \rightarrow \mathbb{R}\) &
+  The NNUE scalar value function: \(\hat{f}_w(s) = \mathrm{softmax}(f_w(s))_W - \mathrm{softmax}(f_w(s))_L\). \\
+\(g_\phi: \mathcal{S} \rightarrow \{1, \dots, B\}\) &
+  The dispatcher function, parameterized by \(\phi\), mapping a position to a bucket index. \\
+\(\mathcal{L}(y, v)\) &
+  The loss function, typically soft cross-entropy on WDL probabilities. \\
+\(\mathcal{L}_{\mathrm{acc}}(y, v)\) &
+  The accumulated loss over a batch or epoch. \\
+\hline
+\end{tabularx}
+\end{center}
+
+\subsection{Key Operators}\label{sec:notation-operators}
+
+\begin{center}
+\small
+\begin{tabularx}{\textwidth}{@{}>{\raggedright\arraybackslash}p{0.48\textwidth} X@{}}
+\hline
+\textbf{Symbol} & \textbf{Description} \\
+\hline
+\(\mathrm{vec}(\cdot)\) &
+  The vectorization operator, flattening a matrix into a column vector. \\
+\(\nabla_w \mathcal{L}\) &
+  The gradient of the loss with respect to the parameters \(w\). \\
+\(\lVert \cdot \rVert\) &
+  The Euclidean (L2) norm. \\
+\(\mathrm{softmax}(z)_k = \frac{e^{z_k}}{\sum_j e^{z_j}}\) &
+  The softmax function over logits \(z\). \\
+\(d_{\mathrm{cos}}(u, v) = 1 - \frac{u \cdot v}{\lVert u\rVert \lVert v\rVert}\) &
+  The cosine distance between two vectors \(u\) and \(v\). \\
+\hline
+\end{tabularx}
+\end{center}
+
+\subsection{Relationship Between \texorpdfstring{\(\Delta_i\) and \(\delta_i\)}{Delta i and delta i}}\label{sec:delta-vs-task}
+
+A crucial distinction in this work is between \textbf{per-sample gradients} \(\Delta_i\) and \textbf{task vectors} \(\delta_i\). These two concepts are similar to each other, but it is worth emphasizing that the task vector \(\delta_i = \theta_i - \theta_{\mathrm{base}}\) is the difference in model parameters between before and after the fine-tuning, while the sample gradient \(\Delta_i = \nabla_{w_{\mathrm{head}}} \mathcal{L}(\hat{f}_{w_{\mathrm{base}}}(s_i), v_i)\) is the gradient of the loss with respect to the head parameters, evaluated at a single position \(s_i\) using the base model.
+
+The central hypothesis of this work is that clustering positions by their \(\Delta_i\) yields a partitioning for which the resulting learning dynamics are maximally diverse, each expert specializes in a distinct region of the state space, and that the dispatcher is able to approximate this partitioning with enough accuracy to preserve its general structure.
+
+\section{Step 1: Train the Base Model}\label{sec:step-base}
+
+The first step of our method is to train a \textbf{base evaluation model} that will serve as the foundation for all subsequent steps. This model provides two essential functions: it supplies the reference point from which the sample gradients are computed, and it provides the frozen L1 representation used by the dispatcher at inference time.
+
+\subsection{Model Architecture}\label{sec:method-arch}
+
+The base model follows the NNUE architecture described in Section~\ref{sec:nnue}: a sparse accumulator layer \(W_{L1}\) that maps a binary feature representation to a hidden state in \(\mathbb{R}^{W}\), followed by a small fully-connected head \((W_{L2}, W_{\mathrm{out}})\) that produces WDL logits. The architecture is kept deliberately small to reflect the resource constraints of the target hardware, specifically a hidden dimension of \(W = 128\) for the accumulator and \(H = 256\) for the L2 layer, resulting in approximately \(175{,}000\) trainable parameters.
+
+\subsection{Training Objective}\label{sec:method-loss}
+
+The model is trained to minimize the \textbf{soft cross-entropy loss} between its predicted WDL distribution and the teacher labels provided by Lc0 (see Section~\ref{sec:teacher-lc0}). For a batch of \(N\) positions with teacher probabilities \(\hat{p}_i = (\hat{P}_i(W), \hat{P}_i(D), \hat{P}_i(L))\) and model outputs \(p_i = (P_i(W), P_i(D), P_i(L))\), the loss is:
+\[
+\mathcal{L} = -\frac{1}{N} \sum_{i=1}^N \left[ \hat{P}_i(W) \log P_i(W) + \hat{P}_i(D) \log P_i(D) + \hat{P}_i(L) \log P_i(L) \right].
+\]
+This choice of loss is deliberate. Unlike mean squared error on a scalar value (centipawns or expected reward \(v = P(W) - P(L)\)), the cross-entropy loss encourages the model to match the \textbf{full outcome distribution} rather than just its mean. This provides a richer training signal and naturally handles the non-linear relationship between WDL probabilities and the scalar evaluation used during search.
+
+\subsection{Training Protocol}\label{sec:method-protocol}
+
+The base model is trained on the full dataset of approximately 105 million positions using the Adam optimiser with a learning rate of \(10^{-2}\), linearly decayed to \(10^{-3}\) over the course of training. We use a batch size of \(10{,}000\) and train until convergence on the held-out test set (\(1\%\) of the total dataset). All training is performed in PyTorch on a DGX Nvidia Spark GPU.
+
+\subsection{The Role of the Base Model}\label{sec:base-role}
+
+Once trained, the base model \(w_{\mathrm{base}} = (W_{L1}, W_{L2}^{\mathrm{base}}, W_{\mathrm{out}}^{\mathrm{base}})\) serves several critical functions in our pipeline, one of which is as reference point for gradients. For each position \(s_i\), we compute the sample gradient \(\Delta_i\) evaluated at the base model. This gradient represents the direction in which the head would need to move to better fit that specific position, the \emph{learning signal} that drives our bucketing.
+
+Another important role of the base model is as frozen representation for routing. The L1 weights \(W_{L1}\) are frozen after base training and are never updated during expert fine-tuning. This ensures that all experts operate on the same shared representation, and that the dispatcher can rely on stable L1 activations \(h = W_{L1} \cdot x\) as input features.
+
+Finally, the base model is of course also the starting point for expert fine-tuning. Each expert head \((W_{L2}^{(i)}, W_{\mathrm{out}}^{(i)})\) is initialised from the base head \((W_{L2}^{\mathrm{base}}, W_{\mathrm{out}}^{\mathrm{base}})\) before being fine-tuned on its assigned bucket.
+
+\subsection{Why Freeze L1?}\label{sec:why-freeze-l1}
+
+Freezing the L1 layer is a deliberate design choice. The accumulator is the most expensive component of the NNUE architecture in terms of parameter count, and updating it during fine-tuning would be computationally prohibitive. More importantly, freezing L1 ensures that the representation space remains the same for all experts: the dispatcher, trained on L1 activations, can reliably route positions without needing to account for different representations. This stability is essential for the lightweight inference pipeline, where the dispatcher must operate with negligible overhead.
+
+\section{Step 2: Compute Sample Gradients}\label{sec:step-gradients}
+
+With the base model trained, the second step is to compute, for each position in the dataset, the sample gradient of the loss with respect to the head parameters. These gradients encode the direction in which the head parameters would need to move to improve the prediction for each individual position. They represent the \emph{learning signal} that we will later use for bucketing.
+
+\subsection{Definition of Sample Gradient}\label{sec:sg-def}
+
+For each position \(s_i\) in the dataset \(\mathcal{D} = \{(s_i, v_i)\}_{i=1}^N\), the sample gradient is defined as:
+\[
+\Delta_i = \nabla_{w_{\mathrm{head}}} \mathcal{L}(\hat{f}_{w^{\mathrm{base}}}(s_i), v_i),
+\]
+where \(w_{\mathrm{head}} = \mathrm{vec}(W_{L2}, W_{\mathrm{out}})\) is the vector of all head parameters (the L2 weights and biases, and the output weights and biases), \(\hat{f}_{w_{\mathrm{base}}}\) is the base model evaluated at the current weights, \(\mathcal{L}\) is the soft cross-entropy loss on WDL probabilities, and \(v_i = (p_W, p_D, p_L)\) is the teacher label for position \(s_i\).
+
+The gradient is computed at the base model \(w_{\mathrm{base}}\), before any fine-tuning occurs. It represents the instantaneous direction in weight space that would reduce the loss on that specific position, independent of all other positions.
+
+\subsection{Implementation}\label{sec:sg-impl}
+
+In practice, the gradient computation leverages PyTorch's \texttt{torch.autograd.grad} function, which efficiently computes sample gradients for an entire batch of inputs in a single operation. Crucially, these gradients are computed only with respect to the head parameters, namely \((W_{L2}, W_{\mathrm{out}})\), while the L1 accumulator weights remain excluded from this differentiation.
+
+The workflow begins with a forward pass through the model for a batch of positions, producing WDL predictions that are then compared against teacher labels via cross-entropy loss. Calling \texttt{torch.autograd.grad} on the loss with respect to the head parameters yields the desired gradients, which are subsequently detached from the computation graph and flattened into a single vector representation for each position. This entire computation runs fully parallelised on the GPU and completes in a single pass over the dataset, with the resulting gradient tensors persisted to disk for use in the downstream clustering stage.
+
+\subsection{Normalisation}\label{sec:sg-norm}
+
+The raw gradients can have highly variable magnitudes depending on the position, the current state of the model, and on whether the multiplicity of the state is considered or not. The \emph{L2 normalization} of each gradient vector has been shown to work well in gradient-clustering literature~\cite{li2025elrea,sridharan2025gradientspace} and preserves the relative angular structure of the gradients:
+\[
+\Delta_i^{\mathrm{norm}} = \frac{\Delta_i}{\lVert\Delta_i\rVert + \epsilon}.
+\]
+This projects each gradient onto the unit hypersphere, preserving direction while removing magnitude information. This is appropriate because the \emph{direction} of the gradient encodes the type of specialisation needed, while the magnitude is more sensitive to the current loss value and position difficulty.
+
+\subsection{Storage and Compute Considerations}\label{sec:sg-storage}
+
+Computing and storing sample gradients for 105 million positions presents practical challenges. Each gradient vector has dimension \(P_{\mathrm{head}} \approx 66{,}563\) (flattened L2 and output weights and biases). Storing this as 32-bit floats would require approximately
+\[
+105 \times 10^{6} \times 66{,}563 \times 4 \text{ bytes} \approx 28\,\mathrm{TB}.
+\]
+The implementation chapter describes how this cost is managed in practice through half-precision storage, memory mapping, and, when appropriate, computation on a subset of the data.
+
+\subsection{Handling Duplicate Positions}\label{sec:duplicates}
+
+In a dataset of chess positions extracted from human games, the same position can occur many times. Opening positions, in particular, are heavily overrepresented: the starting position appears in every game, and the first few moves are shared across a large fraction of the dataset. This multiplicity has two distinct effects on the pipeline, one on training and one on clustering, and they call for different treatments.
+
+During training, the frequency of a position determines its contribution to the loss. If every occurrence is treated equally, the natural distribution of the data is preserved: common positions contribute more, rare positions contribute less. This is statistically appropriate if the goal is to match the distribution of positions encountered during play. However, extreme overrepresentation is wasteful, both computationally and statistically: the starting position carries no more information on its millionth occurrence than on its first, and it can dominate the gradient signal to the detriment of more informative positions. A common remedy is to cap the multiplicity of any position, so that no single state contributes more than a fixed number of times per epoch.
+
+For clustering, the issue is different. The clustering operates on sample gradients, and duplicated positions produce identical gradient vectors. If duplicates are retained, they occupy a disproportionate volume in the gradient space, and cluster centroids are pulled toward common positions. This biases the partition toward regions of the state space that are frequent in the data, rather than regions that require distinct learning signals. Deduplicating before clustering avoids this bias, but it discards the information that some positions are more important than others.
+
+\section{Step 3: Cluster Sample Gradients}\label{sec:step-cluster}
+
+With the normalised sample gradients \(\{\Delta_i^{\mathrm{norm}}\}_{i=1}^N\) computed for every position in the dataset, the third step is to partition the data into \(B\) clusters (buckets) such that positions with similar learning signals are grouped together. This partition will define the assignment of positions to expert heads during fine-tuning.
+
+\subsection{The Objective of Clustering}\label{sec:cluster-obj}
+
+Recall the central hypothesis of this work: clustering positions by their sample gradients \(\Delta_i\) yields a partition \(\mathcal{P} = \{\mathcal{D}_1, \dots, \mathcal{D}_B\}\) for which the resulting task vectors \(\delta_i = \theta_i - \theta_{\mathrm{base}}\) are maximally diverse. The role of the clustering algorithm is to discover a partition that approximates this objective. From a practical standpoint, we seek an efficient clustering algorithm that produces clusters that are cohesive, balanced, stable, and, hopefully, as separated as possible. Different clustering algorithms make different trade-offs with respect to these criteria. We consider two broad families: fixed-\(B\) algorithms and density-based algorithms.
+
+\subsection{Fixed-\texorpdfstring{\(B\)}{B} Algorithms: K-Means and Variants}\label{sec:kmeans}
+
+The most widely used clustering algorithm is \textbf{K-Means}, which partitions the data into \(B\) clusters by minimising the within-cluster sum of squares. For a set of clusters \(\{\mathcal{C}_1, \dots, \mathcal{C}_B\}\), K-Means minimises:
+\[
+\sum_{k=1}^B \sum_{i \in \mathcal{C}_k} \lVert\Delta_i - \mu_k\rVert^2,
+\]
+where \(\mu_k = \frac{1}{|\mathcal{C}_k|} \sum_{i \in \mathcal{C}_k} \Delta_i\) is the centroid of cluster \(k\). This algorithm is fast and well-understood. Specifically, \emph{Mini-Batch K-Means} is particularly attractive for our scale, as it efficiently handles large datasets by processing data in mini-batches, making it suitable for our dataset, that comprises millions of chess positions. It reduces memory requirements and converges faster than standard K-Means, while producing nearly identical results.
+
+\subsection{Density-Based Algorithms}\label{sec:density-cluster}
+
+An alternative family of algorithms, \textbf{density-based clustering}, does not require a fixed number of clusters. Instead, these methods identify clusters as regions of high density separated by regions of low density.
+
+\textbf{Density Peak Clustering}~\cite{rodriguez2014density} is a particularly relevant algorithm for our setting. It works by identifying cluster centres as points that have high local density (many neighbours within a cutoff distance) and are far from points with higher density (suggesting they are local maxima).
+
+The number of clusters emerges naturally from the data: each point with density higher than all its neighbours and with large distance to the nearest higher-density point is a cluster centre. The remaining points are assigned to the same cluster as their nearest higher-density neighbour.
+
+We chose to use this algorithm because it automatically determines \(B\), so it will be interesting to find out what the clusters of board positions actually represent. This algorithm is also notoriously robust to outliers; points with low density and large distance to higher-density points are naturally identified as outliers.
+
+DBSCAN (Density-Based Spatial Clustering of Applications with Noise) defines clusters as regions of high density separated by regions of low density, using two parameters: \(\varepsilon\) (neighbourhood radius) and a minimum number of points to form a dense region. It does not require the number of clusters \(B\) as an input and can label outliers as noise. It avoids the need to pre-specify \(B\), which could be useful when the natural structure of the gradient space is unknown. It can detect clusters of arbitrary shapes and is robust to outliers, potentially identifying positions that yield uninformative gradients.
+
+\subsection{Choosing \texorpdfstring{\(B\)}{B} and the Algorithm}\label{sec:choose-b}
+
+The choice between fixed-\(B\) and density-based clustering depends on the relative importance of architectural efficiency and data-driven discovery. A density-based approach that automatically determines \(B\) could reveal the natural structure in the gradient space, potentially identifying a number of clusters that better reflects the underlying distribution of learning signals. On the other hand, hardware constraints might impose a hard limit on how many expert heads our device is allowed to store based on our architecture of choice.
+
+\subsection{Validation and Diagnostics}\label{sec:cluster-val}
+
+Once the clustering is complete, the quality of the resulting partition is assessed using several complementary metrics. The purpose of this step is not to select a single best partition, but to understand the structure of the gradient space and to guide the choice of the number of experts \(B\) used in the subsequent fine-tuning stage.
+
+The \textbf{cluster size distribution} provides a first diagnostic. We examine the number of positions assigned to each bucket to ensure that no cluster is too small to support stable fine-tuning. A bucket with very few positions may lead to an expert head that is poorly conditioned or that overfits its small training set. Conversely, a highly imbalanced distribution may indicate that the clustering algorithm has collapsed most of the data into a single region, which would defeat the purpose of partitioning. A perfectly balanced distribution is not required, but the sizes should be large enough to train each expert reliably.
+
+\textbf{Inertia}, the within-cluster sum of squared distances to the centroid, measures the compactness of the clusters. For a fixed value of \(B\), lower inertia indicates tighter clusters. We compute inertia across a range of \(B\) values and look for an elbow point, the value beyond which additional clusters yield diminishing reductions in inertia. This heuristic is not definitive, but it provides a useful indication of the natural structure of the gradient space and helps constrain the range of \(B\) values worth exploring.
+
+The \textbf{silhouette score}~\cite{rousseeuw1987silhouettes} measures how similar each point is to its own cluster compared to the nearest neighbouring cluster. For a point \(i\), the coefficient is defined as
+\[
+s_i = \frac{b_i - a_i}{\max(a_i, b_i)},
+\]
+where \(a_i\) is the mean distance to the other points in the same cluster and \(b_i\) is the mean distance to the points in the nearest other cluster. Values range from \(-1\) to \(+1\), with higher values indicating better-defined clusters. A score near zero suggests overlapping clusters, while negative values indicate that some points may be assigned to the wrong cluster. We report the average silhouette score over all positions, but interpret it with caution: the gradient space is high-dimensional, and silhouette scores tend to degrade as dimensionality increases even when the data exhibits meaningful structure.
+
+Finally, the \textbf{cosine distance between cluster centroids} provides a direct measure of the diversity that is central to the method. The objective of the partition is to obtain task vectors \(\delta_i = \theta_i - \theta_{\mathrm{base}}\) that are maximally diverse, and the pairwise cosine distance between centroids serves as a proxy for this diversity. We compute the cosine distance between the centroid of clusters in the normalised gradient space. High average distances indicate that the clusters are well separated and likely to induce distinct task vectors. Low distances suggest that the clusters are redundant and may not yield meaningful specialisation. We report both the average and the minimum pairwise distance, since the presence of even one nearly collinear pair of centroids may indicate that two buckets could be merged without loss of diversity.
+
+Together, these diagnostics provide a comprehensive view of the partition and inform the choice of \(B\). In practice, the clustering pipeline is run for a range of values, such as \(B \in \{2, 4, 8, 16, 32\}\), and the partition that offers the best balance between compactness, separation, and cluster size is selected. The chosen partition is then used for dispatcher training and expert fine-tuning in the subsequent steps.
+
+\section{Step 4: Train the Dispatcher}\label{sec:step-dispatcher}
+
+The clustering step yields a partition of the training dataset into \(B\) buckets, but this partition is defined in terms of sample gradients. At inference time, gradients are unavailable; computing them would require the teacher evaluation of the position, which we of course do not have. To route a new position to the appropriate expert, we therefore need a mechanism that predicts the bucket assignment from features that are already computed during the normal forward pass. The dispatcher \(g_\phi\) serves this purpose.
+
+\subsection{Architecture}\label{sec:disp-arch}
+
+The dispatcher is a linear classifier that takes as input the concatenated L1 activations \(h = [h_{\mathrm{own}} \Vert h_{\mathrm{opp}}] \in \mathbb{R}^{2W}\) and produces a vector of logits over the \(B\) buckets:
+\[
+z = W_{\mathrm{disp}} \, h + b_{\mathrm{disp}},
+\]
+where \(W_{\mathrm{disp}} \in \mathbb{R}^{B \times 2W}\) and \(b_{\mathrm{disp}} \in \mathbb{R}^{B}\). During training, a softmax function converts these logits into a probability distribution over buckets, and the model is trained to predict the cluster assignments produced by the clustering step. At inference, the softmax is discarded and the predicted bucket is simply the argmax of the logits:
+\[
+g_\phi(s) = \arg\max_i z_i.
+\]
+This design ensures that routing adds only a matrix-vector multiplication and a comparison, both of which are inexpensive integer operations.
+
+\subsection{Why a Linear Model}\label{sec:disp-linear}
+
+The choice of a linear dispatcher is deliberate and follows directly from the inference-time constraints discussed in Section~\ref{sec:eval-cheap}. A linear layer with \(2W\) inputs and \(B\) outputs requires \(2W \times B + B\) parameters, which for \(W=128\) and \(B=8\) amounts to approximately \(2{,}056\) parameters. This is small enough to fit comfortably in the flash memory of a microcontroller alongside the expert heads. The computation itself is a single matrix-vector product, which can be implemented with integer arithmetic and adds negligible latency to the evaluation function.
+
+A more expressive dispatcher, such as a multi-layer perceptron with hidden layers, could potentially achieve higher classification accuracy. However, the additional parameters and non-linearities would increase both memory footprint and inference cost. Given the extreme efficiency requirements of the target hardware, we prioritize simplicity and speed over marginal gains in routing accuracy. As we discuss in Section~\ref{sec:disp-expressiveness}, the linear dispatcher is sufficient to capture the coarse structure of the partition.
+
+\subsection{Training}\label{sec:disp-train}
+
+The dispatcher is trained on the same dataset used for clustering, with the cluster labels serving as targets. The input features are the L1 activations \(h_i = W_{L1} \cdot x_i\), which are already computed during the base model's forward pass and can be cached for the entire dataset. The loss is the standard cross-entropy between the predicted distribution and the one-hot cluster assignment:
+\[
+\mathcal{L}_{\mathrm{disp}} = -\frac{1}{N} \sum_{i=1}^N \log \bigl(g_\phi(s_i)_{c_i}\bigr),
+\]
+where \(c_i\) is the cluster index assigned to position \(s_i\). We optimize this loss using Adam with a learning rate of \(10^{-2}\), decayed to \(10^{-3}\) over the course of training. Training typically converges within a few epochs, and we use early stopping on a held-out validation set to prevent overfitting. Because the dispatcher is a small linear model, the entire training procedure takes only a few minutes on a GPU.
+
+\subsection{Can a Linear Dispatcher Capture the Clustering?}\label{sec:disp-expressiveness}
+
+The sample-gradient space is highly dimensional (\(P_{\mathrm{head}} \approx 66{,}563\)), while the dispatcher operates on the L1 activations, which have dimension \(2W = 256\). A natural question is whether a linear function of these activations can accurately predict the cluster assignments derived from gradients. The answer depends on how much information about the learning signal is already encoded in the L1 representation.
+
+\subsection{Fixed vs.\ Re-Assigned Cluster Assignments}\label{sec:disp-reassign}
+
+A subtle but important design decision concerns the relationship between the dispatcher and the expert fine-tuning. During the fine-tuning step (Section~\ref{sec:step-experts}), each position is assigned to a bucket. We can either use the original cluster assignments produced by the clustering algorithm, or we can re-assign positions using the dispatcher's predictions. These two options have different implications.
+
+If we use the dispatcher to re-assign positions, the experts are trained on the buckets that the dispatcher believes are correct, rather than the buckets discovered by clustering. This could potentially align the experts more closely with the dispatcher's behavior at inference time. The downside is that some of the structure and complexity of the original clustering is lost, in favor of a simpler, linear partitioning.
+
+\section{Step 5: Fine-Tune Expert Heads}\label{sec:step-experts}
+
+The final step of the pipeline produces the specialised experts. Once the clustering has defined the partition and the dispatcher has been trained to approximate it, we fine-tune a separate head on each bucket, starting from the base model and keeping the L1 representation frozen. The result is a set of \(B\) expert heads, each adapted to a distinct region of the state space, sharing a common L1 accumulator.
+
+\subsection{What Is Trained and What Is Frozen}\label{sec:expert-frozen}
+
+The L1 accumulator remains frozen throughout this step, as it has been since the base model was trained. This is not merely a convenience but a structural requirement: the dispatcher relies on L1 activations to route positions, and those activations must be computed by the same weight matrix regardless of which expert is selected. If each expert were to fine-tune its own L1 weights, the dispatcher would need to account for \(B\) different representation spaces, and the inference pipeline would become unworkable. Freezing L1 also keeps the memory footprint constant: all experts share the same accumulator, and only the head parameters differ between them.
+
+Each expert head consists of the L2 layer and the output layer, parameterised by \((W_{L2}^{(i)}, b_{L2}^{(i)}, W_{\mathrm{out}}^{(i)}, b_{\mathrm{out}}^{(i)})\). These are initialised from the corresponding parameters of the base model, so that every expert starts from the same well-trained foundation. The only thing that distinguishes one expert from another is the data on which it is fine-tuned, the subset of positions assigned to its bucket by the clustering step.
+
+\subsection{Training Procedure}\label{sec:expert-train}
+
+For each bucket \(\mathcal{D}_i\), we fine-tune a copy of the base head on the positions in that bucket, using the same soft cross-entropy loss and optimiser as in the base training. The L1 activations are pre-computed once for the entire dataset and cached, so the fine-tuning step only requires forward and backward passes through the small head, not the full model. This makes the procedure extremely fast: fine-tuning \(B\) heads on subsets of a dataset of millions of positions takes only a fraction of the time required to train the base model.
+
+We use a short training schedule, typically one or two sweeps over the bucket, with early stopping based on the cross-entropy on a held-out portion of the bucket. Depending on the dataset size, one of two approaches is best. If the buckets are too small, training for too long risks overfitting. In our specific case data is abundant, and the goal is to reach the best possible performance on each bucket in isolation, to produce a set of experts whose combined behaviour significantly improves upon the single base head. The learning rate is set lower than in base training, to avoid large deviations from the base head that could destabilise the shared L1 representation.
+
+\subsection{Data Availability per Expert}\label{sec:expert-data}
+
+Partitioning the dataset into \(B\) buckets means that each expert sees only a fraction of the total data. If the partition is balanced, each expert is fine-tuned on approximately \(N/B\) positions. For \(B=8\) and \(N=105\) million, this amounts to roughly \(13\) million positions per expert, which is still a substantial training set. However, if the clustering produces imbalanced buckets, some experts may be trained on far fewer positions, which can lead to underfitting or unstable training.
+
+This is one of the reasons why we monitor the cluster size distribution as part of the validation diagnostics in Section~\ref{sec:cluster-val}. If a bucket is too small to support stable fine-tuning, several remedies are possible, and we return to this question in the experimental evaluation.
+
+\subsection{The Resulting MoE Model}\label{sec:method-moe}
+
+At the end of this step, we have a complete mixture-of-experts evaluation function. The model consists of three components: the frozen L1 accumulator, which is shared across all experts; the dispatcher, which maps L1 activations to a bucket index; and the \(B\) expert heads, each containing its own L2 and output parameters. During inference, a position is encoded into its sparse feature representation, passed through L1 to obtain the accumulator vector, routed by the dispatcher to a single bucket, and finally evaluated by the corresponding expert head. The output is a WDL distribution from the side-to-move perspective, from which the scalar evaluation is derived as usual.
+
+The inference cost is therefore one L1 forward pass (which is incremental during search), one linear dispatcher operation, and one head forward pass. Compared to the single-head base model, the only additional cost is the dispatcher, which as we have seen adds a matrix-vector multiplication of negligible size. The experts themselves are not more expensive than the base head: they have the same architecture, and only one is evaluated per position. The memory cost is \(B\) times the size of the head parameters, which remains small relative to the L1 accumulator. This is the essential trade-off of the method: we gain specialisation at the cost of additional head parameters, while keeping the inference path as lean as the base model.
+
+\section{Generalisation Beyond Chess}\label{sec:generalisation-method}
+
+The method presented in this chapter is not specific to chess. Its core ingredients are a state space, a parametric model that maps states to predictions, a differentiable loss, and a dataset of \emph{state-target} pairs. Given these, the pipeline can be applied to a different domain without modification: train a base model, compute per-sample gradients with respect to the parameters of a head, cluster them, train a dispatcher on a frozen intermediate representation, and fine-tune specialised heads on the resulting buckets. Chess is an attractive testbed because it offers a large dataset of labelled positions, a well-established efficient architecture in NNUE, and clear resource constraints that make the efficiency of the dispatcher meaningful. But the underlying principle, that a partition of the state space can be discovered by clustering the learning signal rather than the input or the representation, is domain-agnostic.
+
+Several other settings share the structural properties that make the method applicable. In similar board games such as shogi, the same formulation carries over directly: shogi engines already use NNUE-style accumulators, and the position encoding and WDL labels can be adapted with minimal changes. In the ancient game of Go, the NNUE architecture should be swapped for a model of convolutional nature. In video game AI and simulated environments, where agents must evaluate states or select actions under tight latency budgets, a similar decomposition into a shared representation and a small routed head could reduce inference cost while preserving specialisation. In robotics, where control policies often operate on high-frequency sensor streams and must run on embedded hardware, the same pattern of a frozen feature extractor followed by a lightweight, routed head is a natural fit: the feature extractor runs continuously, while the head is selected by a dispatcher that observes the same features at negligible cost.
+
+The method also connects to recent work on world models, where a learned representation of the environment is used to predict future states or plan actions. World models typically maintain a latent state that is updated incrementally as the environment evolves, much like the NNUE accumulator is updated as pieces move. This parallel suggests that the gradient-based bucketing idea could be extended to world models, where different regions of the latent state space may require different dynamics or reward predictors. In such a setting, the head would be the component that predicts the next latent state or the reward, and the dispatcher would route to a specialised predictor based on the current latent representation. The efficiency argument carries over: a dispatcher that operates on the shared latent state adds minimal cost compared to evaluating multiple full predictors.
+
+What must change across domains is not the algorithmic structure but the concrete choices within it. The feature encoding, the architecture of the base model, the loss function, and the definition of the target all depend on the domain. In chess, we use a sparse binary encoding and a WDL target from a strong teacher; in another domain, the encoding might be dense and continuous, the loss might be a regression or a contrastive objective, and the target might come from human demonstrations, simulation, or self-play. The dispatcher's input features would likewise be domain-specific: in chess they are the L1 activations, but in another model they could be any intermediate representation that is cheap to compute and informative about the learning signal. These choices affect performance but do not alter the underlying method. The central claim, that per-sample gradients provide a useful signal for partitioning a state space in a way that supports efficient mixture-of-experts inference, is independent of the domain in which it is tested.

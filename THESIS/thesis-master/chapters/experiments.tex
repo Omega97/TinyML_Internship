@@ -1,0 +1,49 @@
+\chapter{Experiments and Results}\label{ch:experiments}
+
+\section{Experimental Setup}\label{sec:setup}
+
+\section{Evaluation Metrics}\label{sec:metrics}
+
+\section{Results}\label{sec:results}
+
+\subsection{Linear Model}\label{sec:res-linear}
+
+\subsection{Single-layer FFNN}\label{sec:res-ffnn1}
+
+\subsection{Double-layer FFNN}\label{sec:res-ffnn2}
+
+\subsection{Base NNUE}\label{sec:res-base}
+
+We also tested the soft cross-entropy of the base NNUE model as a function of the size of the dataset, from 50k samples all the way to 105 million. The model has a \(2\times 128\)-neuron accumulator layer and a 256-neuron L2 layer, which lies on the larger side of the models we trained.
+
+\begin{lstlisting}[basicstyle=\ttfamily\footnotesize,breaklines=true]
+python3.12 -u scripts/train_nnue-gpu.py --epochs 100 --lr 0.01 --lr-end 0.001 --hidden-dim 128 --hidden2-dim 256 --test-fraction 0.01 --batch-size 10000 --batches-per-epoch 512 --train-val-subset-size 10000 --run-name dual_h128_H256_e100_bpe512_bs10000 --plot plots/dual_h128_H256_e100_bpe512_bs10000.png
+\end{lstlisting}
+
+\begin{figure}[ht]
+\centering
+\includegraphics[width=0.85\textwidth]{variable_dataset_size_ce_64.png}
+\caption{Soft cross-entropy of a smaller base NNUE as a function of training-set size.}
+\label{fig:nnue-ce-vs-size-64}
+\end{figure}
+
+\begin{figure}[ht]
+\centering
+\includegraphics[width=0.85\textwidth]{variable_dataset_size_ce_256.png}
+\caption{Soft cross-entropy of the \(W=128\), \(H=256\) base NNUE as a function of training-set size.}
+\label{fig:nnue-ce-vs-size-256}
+\end{figure}
+
+We found that, below 7 million positions, the model clearly overfits the training set. On the other hand, above 7 million positions no overfitting is visible. These figures are to be kept in mind when partitioning a dataset for the MoE, as the per-expert data should never fall below this threshold.
+
+\subsection{MoE NNUE --- bucketing by L1 --- fixed \texorpdfstring{\(B\)}{B}}\label{sec:res-moe-l1-fixed}
+
+\subsection{MoE NNUE --- bucketing by L1 --- variable \texorpdfstring{\(B\)}{B}}\label{sec:res-moe-l1-var}
+
+\subsection{MoE NNUE --- bucketing with sample-gradients --- fixed \texorpdfstring{\(B\)}{B}}\label{sec:res-moe-grad-fixed}
+
+\subsection{MoE NNUE --- bucketing with sample-gradients --- variable \texorpdfstring{\(B\)}{B}}\label{sec:res-moe-grad-var}
+
+\section{Results: Comparison of the Models}\label{sec:res-comparison}
+
+\section{Visualization: Clustering}\label{sec:visualisation}

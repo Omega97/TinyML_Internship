@@ -1,0 +1,88 @@
+% Master file: packages, settings, and document assembly.
+% Chapter sources live in chapters/; compile only one of them with
+%   \includeonly{chapters/introduction}
+% in this preamble (uncomment the line below).
+
+% \includeonly{chapters/introduction}
+
+\documentclass[a4paper,11pt,oneside,openany]{book}
+
+\usepackage[english]{babel}
+\usepackage[T1]{fontenc}
+
+\usepackage{fancyhdr}
+\usepackage{graphicx}
+\usepackage{caption}
+\usepackage{subcaption}
+\usepackage{array}
+\usepackage{tabularx}
+\usepackage{longtable}
+\usepackage[titletoc]{appendix}
+\usepackage{float}
+\usepackage{amsmath}
+\numberwithin{equation}{section}
+\usepackage{listings}
+\usepackage{multirow}
+\usepackage{csquotes}
+\usepackage[backend=biber,style=numeric,sorting=none]{biblatex}
+\addbibresource{bib/bibliography.bib}
+\usepackage{hyperref}
+
+\input{settings/settings.tex}
+
+\usepackage[some]{background}
+\usepackage{amsfonts}
+\SetBgScale{1}
+\SetBgContents{
+    \includegraphics[scale=1]{img/units_sigillo_pantone-534}}
+\SetBgColor{gray}
+\SetBgAngle{0}
+\SetBgOpacity{0.07}
+
+\usepackage{textcomp}
+\usepackage{color}
+
+\title{Unsupervised State Bucketing for Mixture of Experts in Resource-Constrained Chess Engines}
+\author{Omar Cusma Fait}
+\hypersetup{
+    pdftitle={Unsupervised State Bucketing for Mixture of Experts in Resource-Constrained Chess Engines},
+    pdfauthor={Omar Cusma Fait},
+    pdfsubject={Master's thesis, Data Science and Artificial Intelligence, University of Trieste},
+    pdfkeywords={chess, bucketing, NNUE, reinforcement learning, clustering, value function, Mixture of Experts}
+}
+
+\begin{document}
+
+\input{front/cover.tex}
+\input{front/dedication.tex}
+
+\frontmatter
+\input{chapters/abstract.tex}
+
+{\hypersetup{linkcolor=black}
+    \tableofcontents
+}
+
+\mainmatter
+\renewcommand{\chaptermark}[1]{\markboth{\MakeUppercase{\chaptername\ \thechapter.\ #1}}{}}
+
+\include{chapters/introduction}
+\include{chapters/background}
+\include{chapters/method}
+\include{chapters/implementation}
+\include{chapters/experiments}
+\include{chapters/discussion}
+\include{chapters/conclusion}
+
+\pagestyle{fancy}
+\renewcommand{\chaptermark}[1]{\markboth{\MakeUppercase{APPENDIX\ \thechapter.\ #1}}{}}
+\appendix
+\label{appendix}
+\include{chapters/appendix}
+
+\backmatter
+\printbibliography
+
+\input{back/final_dedication.tex}
+
+\end{document}
