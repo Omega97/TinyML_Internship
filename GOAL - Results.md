@@ -199,6 +199,15 @@ MoE models combine a trained dispatcher (or soft gating network) with $K$ specia
 	- **applied to**: L1-clustered and gradient-clustered hard MoE expert heads
 	- **base**: dual-POV two-hidden NNUE ($W=128$, $H=256$, 844-d input)
 
+- [ ] 🔴📋📊 **Well-Resourced Gradient-Clustered Hard MoE (K=8)**
+	- clustering: mini-batch $k$-Means on 48-d sample head gradients ($\nabla_w \mathcal{L}$, Gaussian-projected from 66,563-d), $K=8$
+	- dispatcher: single-hidden MLP ($h=64$) trained **200 epochs** (early-stopped on validation) predicting gradient-cluster buckets; input = $L1 \oplus$ board features to combat the weak $L1 \to$ gradient proxy (cf. Run 7)
+	- n buckets: $K = 8$
+	- L1 frozen: yes
+	- expert heads: 8 NNUE (L2, OUT) blocks, one per bucket, cloned from base, **100-epoch** fine-tune (warm-start + cosine LR decay) on **7M positions per head** (≈56M total, new `moe_b8_56m` pack)
+	- evaluation: base vs MoE CE/MAE + argmin-loss oracle upper bound + capacity-matched dense reference
+	- **base**: dual-POV two-hidden NNUE ($W=128$, $H=256$, 844-d input)
+
 - [ ] 🔴 **Capacity-Matched Dense**
 	- **purpose**: validates sparse execution vs. dense scaling
 	- **reference**: dense single head (e.g. $H=512$) vs. $B=4$, $H=256$ MoE (cf. §3 optional baseline)
@@ -261,4 +270,6 @@ MoE models combine a trained dispatcher (or soft gating network) with $K$ specia
 **Run 10 — Oracle Upper-Bound MoE (K ∈ {2,4,8,16}):** 🟢 2026-09-29, `scripts/run_oracle_moe.py`. Loads the gradient-clustered hard MoE's $K$ expert heads (`grad_clustered_k{K}/moe.pt`, frozen L1) and computes the true routing upper bound: for each test position, evaluate all $K$ experts and route to $\arg\min_k \mathcal{L}_k$. Tables: `RESULTS/moe/oracle_k{K}/{eval.json, summary.json}` + `oracle_summary.json`; plot `moe_vs_base_ce.png`. Result: oracle CE 0.6244 / 0.6160 / 0.6067 / 0.6005 (MAE 0.124 / 0.115 / 0.101 / 0.088) vs base 0.6303 for K=2/4/8/16 — monotonic, large headroom; the true argmin oracle far beats the nearest-gradient-centroid proxy (0.6321/0.6312/0.6291/0.6280) and the realized MoE (≈0.630).
 
 **Run 11 — Random Dispatcher Control (L1 & gradient hard MoE, K ∈ {2,4,8,16}):** 🟢 2026-09-29, `scripts/run_random_dispatcher.py`. Replaces the trained MLP dispatcher with a uniform random router (seed 0) over the same expert heads (`l1_clustered_k{K}/moe.pt` and `grad_clustered_k{K}/moe.pt`, frozen L1). Tables: `RESULTS/moe/random_<variant>_k{K}/{eval.json, summary.json}` + `random_dispatcher_summary.json`. Result: random routing is always worse than the trained dispatcher and worse than base, degrading with K — random CE 0.6311/0.6337/0.6429/0.6398 (gradient) and 0.6317/0.6327/0.6341/0.6346 (L1) vs base 0.6303. Confirms the experts drift from the base and the dispatcher's routing (not raw capacity) is what returns the MoE to ≈ base.
+
+**Run 12 — Well-resourced gradient-clustered hard MoE (K=8, 7M/head):** 🔴 2026-09-30, `scripts/run_wellresourced_gradient_moe.py` (to be implemented). Targets the two bottlenecks isolated in Runs 6–11 — expert underfitting (≤2M rows, 2 epochs) and the weak $L1 \to$ gradient dispatcher (Top-1 ≈ 0.53 at $K=8$): mini-batch k-means on the cached 48-d head gradients ($K=8$) → single-hidden MLP dispatcher ($h=64$, **200 epochs**, early-stopped; input $L1 \oplus$ board features) → 8 expert NNUE (L2, OUT) blocks (frozen L1) fine-tuned **100 epochs** with warm-start + cosine LR decay on **7M routed positions per head** (≈56M, new `moe_b8_56m` pack). Tables per run: `RESULTS/moe/wellresourced_k8/{labels.npy, centroids.npy, diagnostics.json, dispatcher.pt, dispatcher_history.json, labels_dispatcher.npy, expert_metrics.json, eval.json, summary.json}` + `wellresourced_summary.json`; plots `expert_ce_by_bucket.png`, `moe_vs_base_ce.png`. Also evaluates the argmin-loss oracle upper bound (Run 10) and a capacity-matched dense reference. Target: MoE CE meaningfully below base 0.6303.
 

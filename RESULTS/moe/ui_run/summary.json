@@ -1,0 +1,40 @@
+{
+  "run_name": "ui_run",
+  "config": {
+    "base_source": "load",
+    "base_checkpoint": "/home/omar/jupyterlab/TinyML_Internship/models/checkpoints/nnue/dual_h128_H128_512x8198_e1000/best.pt",
+    "h": 128,
+    "H": 256,
+    "base_epochs": 20,
+    "max_rows": 2000000,
+    "max_test": 50000,
+    "clustering": "gradient",
+    "k": 4,
+    "dispatcher_type": "mlp",
+    "dispatcher_hidden": 32,
+    "dispatcher_epochs": 100,
+    "dispatcher_lr": 0.01,
+    "expert_epochs": 100,
+    "expert_lr": 0.005,
+    "expert_lr_end": 0.0001,
+    "l1_frozen": true,
+    "device": "auto",
+    "run_name": "ui_run"
+  },
+  "metrics": {
+    "n_test": 50000,
+    "base_ce": 0.6538687062543631,
+    "base_mae": 0.15583289743602277,
+    "moe_ce": 0.6684289047026635,
+    "moe_mae": 0.16944360732257366,
+    "oracle_ce": 0.618888726928234,
+    "oracle_mae": 0.113640917327106
+  },
+  "dispatcher_val_acc": 0.585,
+  "cluster_sizes": [
+    485649,
+    407279,
+    550836,
+    556236
+  ]
+}
