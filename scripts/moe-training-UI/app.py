@@ -50,7 +50,7 @@ from PyQt6.QtWidgets import (
 
 from runner import CancelToken, CancelledError, TrainingConfig, iter_checkpoints, run_moe_training
 
-STAGE_NAMES = ["loading", "base", "cluster", "dispatcher", "experts", "eval"]
+STAGE_NAMES = ["loading", "base", "cluster", "dispatcher", "experts", "switch", "eval"]
 
 PROJECT_ROOT = Path(__file__).resolve().parent.parent.parent
 
@@ -181,6 +181,16 @@ class MainWindow(QMainWindow):
         host = QWidget()
         layout = QVBoxLayout(host)
 
+        # Technique
+        tech_group = QGroupBox("Technique")
+        tf = QFormLayout(tech_group)
+        self.technique = QComboBox()
+        self.technique.addItem("Hard MoE (cluster + router)", "hard_moe")
+        self.technique.addItem("Switch (end-to-end top-1)", "switch")
+        self.technique.currentIndexChanged.connect(self._sync_enabled_state)
+        tf.addRow("Method", self.technique)
+        layout.addWidget(tech_group)
+
         # Base model
         base_group = QGroupBox("Base model")
         bf = QFormLayout(base_group)
@@ -235,6 +245,7 @@ class MainWindow(QMainWindow):
         cf.addRow("Representation", self.clustering)
         cf.addRow("Buckets K", self.k_combo)
         layout.addWidget(cluster_group)
+        self.cluster_group = cluster_group
 
         # Dispatcher
         disp_group = QGroupBox("Dispatcher")
@@ -259,6 +270,7 @@ class MainWindow(QMainWindow):
         pf.addRow("Epochs", self.dispatcher_epochs)
         pf.addRow("LR", self.dispatcher_lr)
         layout.addWidget(disp_group)
+        self.disp_group = disp_group
 
         # Experts
         exp_group = QGroupBox("Experts")
@@ -281,6 +293,32 @@ class MainWindow(QMainWindow):
         ef.addRow("LR end", self.expert_lr_end)
         ef.addRow("", self.l1_frozen)
         layout.addWidget(exp_group)
+        self.exp_group = exp_group
+
+        # Switch (end-to-end top-1)
+        switch_group = QGroupBox("Switch (top-1)")
+        sf = QFormLayout(switch_group)
+        self.switch_k_combo = QComboBox()
+        for k in (2, 4, 8, 16):
+            self.switch_k_combo.addItem(str(k), k)
+        self.switch_k_combo.setCurrentIndex(2)  # 8
+        self.switch_alpha = QDoubleSpinBox()
+        self.switch_alpha.setDecimals(4)
+        self.switch_alpha.setRange(0.0, 1.0)
+        self.switch_alpha.setValue(0.01)
+        self.switch_epochs = QSpinBox()
+        self.switch_epochs.setRange(1, 100)
+        self.switch_epochs.setValue(5)
+        self.switch_lr = QDoubleSpinBox()
+        self.switch_lr.setDecimals(4)
+        self.switch_lr.setRange(1e-5, 1.0)
+        self.switch_lr.setValue(1e-3)
+        sf.addRow("Experts K", self.switch_k_combo)
+        sf.addRow("Load-balancing α", self.switch_alpha)
+        sf.addRow("Epochs", self.switch_epochs)
+        sf.addRow("LR", self.switch_lr)
+        layout.addWidget(switch_group)
+        self.switch_group = switch_group
 
         # Misc
         misc_group = QGroupBox("Run")
@@ -297,14 +335,17 @@ class MainWindow(QMainWindow):
         layout.addWidget(misc_group)
 
         for w in (
-            self.base_source, self.checkpoint, self.clustering, self.k_combo,
-            self.dispatcher_type, self.dispatcher_hidden,
+            self.technique, self.base_source, self.checkpoint, self.clustering,
+            self.k_combo, self.dispatcher_type, self.dispatcher_hidden,
+            self.switch_k_combo,
         ):
             w.currentIndexChanged.connect(self._refresh_run_name)
         for w in (
             self.h_spin, self.H_spin, self.base_epochs, self.max_rows,
-            self.max_test, self.expert_epochs,
+            self.max_test, self.expert_epochs, self.switch_epochs,
         ):
+            w.valueChanged.connect(self._refresh_run_name)
+        for w in (self.switch_alpha, self.switch_lr):
             w.valueChanged.connect(self._refresh_run_name)
         self._refresh_run_name()
 
@@ -402,6 +443,17 @@ class MainWindow(QMainWindow):
             self.checkpoint.addItem(str(best.parent.name), str(best))
 
     def _sync_enabled_state(self) -> None:
+        is_switch = self.technique.currentData() == "switch"
+
+        self.cluster_group.setVisible(not is_switch)
+        self.disp_group.setVisible(not is_switch)
+        self.exp_group.setVisible(not is_switch)
+        self.switch_group.setVisible(is_switch)
+
+        for name in ("cluster", "dispatcher", "experts"):
+            self.stage_rows[name].setVisible(not is_switch)
+        self.stage_rows["switch"].setVisible(is_switch)
+
         training_new = self.base_source.currentIndex() == 1
         self.checkpoint.setEnabled(not training_new)
         self.h_spin.setEnabled(training_new)
@@ -423,14 +475,21 @@ class MainWindow(QMainWindow):
         else:
             ckpt = self.checkpoint.currentText().strip()
             parts.append(f"load_{ckpt}" if ckpt else "load")
-        parts.append(str(self.clustering.currentData()))
-        parts.append(f"k{int(self.k_combo.currentData())}")
-        if self.clustering.currentData() != "piece_count":
-            if self.dispatcher_type.currentData() == "mlp":
-                parts.append(f"mlp{int(self.dispatcher_hidden.currentData())}")
-            else:
-                parts.append("linear")
-        parts.append(f"ep{self.expert_epochs.value()}")
+        if self.technique.currentData() == "switch":
+            parts.append("switch")
+            parts.append(f"k{int(self.switch_k_combo.currentData())}")
+            parts.append(f"a{self.switch_alpha.value():g}")
+            parts.append(f"ep{self.switch_epochs.value()}")
+            parts.append(f"lr{self.switch_lr.value():g}")
+        else:
+            parts.append(str(self.clustering.currentData()))
+            parts.append(f"k{int(self.k_combo.currentData())}")
+            if self.clustering.currentData() != "piece_count":
+                if self.dispatcher_type.currentData() == "mlp":
+                    parts.append(f"mlp{int(self.dispatcher_hidden.currentData())}")
+                else:
+                    parts.append("linear")
+            parts.append(f"ep{self.expert_epochs.value()}")
         parts.append(f"{self.max_rows.value()}M_{self.max_test.value()}k")
         name = "_".join(parts)
         return re.sub(r"[^A-Za-z0-9._-]", "_", name)
@@ -439,7 +498,14 @@ class MainWindow(QMainWindow):
         self.run_name_label.setText(self._auto_run_name())
 
     def _collect_config(self) -> TrainingConfig:
+        technique = self.technique.currentData()
+        k = (
+            int(self.switch_k_combo.currentData())
+            if technique == "switch"
+            else int(self.k_combo.currentData())
+        )
         return TrainingConfig(
+            technique=technique,
             base_source="new" if self.base_source.currentIndex() == 1 else "load",
             base_checkpoint=self.checkpoint.currentData() or "",
             h=self.h_spin.value(),
@@ -448,7 +514,7 @@ class MainWindow(QMainWindow):
             max_rows=self.max_rows.value() * 1_000_000,
             max_test=self.max_test.value() * 1_000,
             clustering=self.clustering.currentData(),
-            k=int(self.k_combo.currentData()),
+            k=k,
             dispatcher_type=self.dispatcher_type.currentData(),
             dispatcher_hidden=int(self.dispatcher_hidden.currentData()),
             dispatcher_epochs=self.dispatcher_epochs.value(),
@@ -457,6 +523,9 @@ class MainWindow(QMainWindow):
             expert_lr=float(self.expert_lr.value()),
             expert_lr_end=float(self.expert_lr_end.value()),
             l1_frozen=self.l1_frozen.isChecked(),
+            switch_alpha=float(self.switch_alpha.value()),
+            switch_epochs=self.switch_epochs.value(),
+            switch_lr=float(self.switch_lr.value()),
             device=self.device.currentData(),
             run_name=self._auto_run_name(),
         )
@@ -500,11 +569,13 @@ class MainWindow(QMainWindow):
         self.run_btn.setEnabled(not running)
         self.stop_btn.setEnabled(running)
         for widget in (
-            self.base_source, self.checkpoint, self.h_spin, self.H_spin,
-            self.base_epochs, self.max_rows, self.max_test, self.clustering,
-            self.k_combo, self.dispatcher_type, self.dispatcher_hidden,
-            self.dispatcher_epochs, self.dispatcher_lr, self.expert_epochs,
-            self.expert_lr, self.expert_lr_end, self.l1_frozen, self.device,
+            self.technique, self.base_source, self.checkpoint, self.h_spin,
+            self.H_spin, self.base_epochs, self.max_rows, self.max_test,
+            self.clustering, self.k_combo, self.dispatcher_type,
+            self.dispatcher_hidden, self.dispatcher_epochs, self.dispatcher_lr,
+            self.expert_epochs, self.expert_lr, self.expert_lr_end,
+            self.l1_frozen, self.switch_k_combo, self.switch_alpha,
+            self.switch_epochs, self.switch_lr, self.device,
         ):
             widget.setEnabled(False if running else True)
         if not running:
@@ -653,6 +724,29 @@ class MainWindow(QMainWindow):
                 row.set_progress(1.0)
             return
 
+        if stage == "switch":
+            row = self.stage_rows["switch"]
+            if event == "start":
+                row.set_progress(0.0)
+                row.set_metric(f"K={ev.get('k')} · α={ev.get('alpha')}")
+            elif event == "epoch":
+                row.set_progress(ev.get("progress"))
+                row.set_metric(
+                    f"epoch {ev.get('epoch')}/{ev.get('epochs')} · "
+                    f"train {ev.get('train_ce'):.4f} · test {ev.get('test_ce'):.4f}"
+                )
+                self._add_live_point(
+                    "switch", "Switch top-1", "CE", "train",
+                    float(ev.get("epoch")), float(ev.get("train_ce")),
+                )
+                self._add_live_point(
+                    "switch", "Switch top-1", "CE", "test",
+                    float(ev.get("epoch")), float(ev.get("test_ce")),
+                )
+            elif event == "done":
+                row.set_progress(1.0)
+            return
+
         if stage == "eval":
             row = self.stage_rows["eval"]
             if event == "start":
@@ -664,10 +758,12 @@ class MainWindow(QMainWindow):
                     row.set_metric(str(ev.get("msg")))
             elif event == "done":
                 row.set_progress(1.0)
-                row.set_metric(
-                    f"base {ev.get('base_ce'):.5f} · moe {ev.get('moe_ce'):.5f} · "
-                    f"perfect {ev.get('perfect_ce'):.5f} · best {ev.get('best_expert_ce'):.5f}"
-                )
+                parts = [f"base {ev.get('base_ce'):.5f}", f"moe {ev.get('moe_ce'):.5f}"]
+                if ev.get("perfect_ce") is not None:
+                    parts.append(f"perfect {ev.get('perfect_ce'):.5f}")
+                if ev.get("best_expert_ce") is not None:
+                    parts.append(f"best {ev.get('best_expert_ce'):.5f}")
+                row.set_metric(" · ".join(parts))
                 self._show_plot(ev)
             return
 
@@ -682,12 +778,15 @@ class MainWindow(QMainWindow):
             return ""
         base = m.get("base_ce", float("nan"))
         moe = m.get("moe_ce", float("nan"))
-        perfect = m.get("perfect_ce", float("nan"))
-        best = m.get("best_expert_ce", float("nan"))
         diff = moe - base if isinstance(moe, float) and isinstance(base, float) else float("nan")
         arrow = "↓" if diff < 0 else "↑"
+        line1 = f"base {base:.5f}   ·   MoE {moe:.5f}"
+        if m.get("perfect_ce") is not None:
+            line1 += f"   ·   perfect {m['perfect_ce']:.5f}"
+        if m.get("best_expert_ce") is not None:
+            line1 += f"   ·   best expert {m['best_expert_ce']:.5f}"
         return (
-            f"base {base:.5f}   ·   MoE {moe:.5f}   ·   perfect {perfect:.5f}   ·   best expert {best:.5f}\n"
+            f"{line1}\n"
             f"base MAE {m.get('base_mae', float('nan')):.5f}   ·   "
             f"MoE MAE {m.get('moe_mae', float('nan')):.5f}\n"
             f"ΔCE {diff:+.5f} {arrow} vs base"
@@ -770,16 +869,20 @@ class MainWindow(QMainWindow):
         self.plot_label.setPixmap(QPixmap.fromImage(QImage.fromData(buf.getvalue(), "PNG")))
 
     def _render_bar_plot(self, metrics: dict) -> QPixmap | None:
-        labels = ["Base model", "MoE", "Perfect dispatcher", "Best expert"]
-        values = [
-            metrics.get("base_ce"),
-            metrics.get("moe_ce"),
-            metrics.get("perfect_ce"),
-            metrics.get("best_expert_ce"),
+        entries = [
+            ("base_ce", "Base model", "#5b8dd9"),
+            ("moe_ce", "MoE", "#e0a24b"),
+            ("perfect_ce", "Perfect dispatcher", "#6cc07a"),
+            ("best_expert_ce", "Best expert", "#c678dd"),
         ]
-        if all(v is None for v in values):
+        labels, values, colors = [], [], []
+        for key, label, color in entries:
+            if metrics.get(key) is not None:
+                labels.append(label)
+                values.append(metrics[key])
+                colors.append(color)
+        if not values:
             return None
-        colors = ["#5b8dd9", "#e0a24b", "#6cc07a", "#c678dd"]
         fig, ax = plt.subplots(figsize=(7, 3.2), dpi=100)
         fig.patch.set_facecolor("#121418")
         ax.set_facecolor("#121418")

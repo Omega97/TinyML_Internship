@@ -49,6 +49,7 @@ from tinymlinternship.nnue.moe import (
     DualHiddenMoE,
     LinearDispatcher,
     MLPDispatcher,
+    SoftGatedMoE,
     load_dual_hidden_checkpoint,
 )
 from tinymlinternship.nnue.moe_data import (
@@ -81,6 +82,7 @@ CLUSTER_CHUNK = 1_000_000
 DISPATCHER_BATCH = 4096
 EXPERT_BATCH = 2048
 EVAL_BATCH = 4096
+SWITCH_BATCH = 2048
 PIECE_COUNT_BUCKETS_K = 8
 
 
@@ -106,6 +108,8 @@ class CancelToken:
 
 @dataclasses.dataclass
 class TrainingConfig:
+    # technique
+    technique: str = "hard_moe"  # "hard_moe" | "switch"
     # base model
     base_source: str = "load"  # "load" | "new"
     base_checkpoint: str = str(DEFAULT_CHECKPOINT)
@@ -115,19 +119,23 @@ class TrainingConfig:
     # data
     max_rows: int = 2_000_000
     max_test: int = 50_000
-    # clustering
+    # clustering (hard MoE)
     clustering: str = "gradient"  # "gradient" | "l1" | "piece_count"
     k: int = 8
-    # dispatcher
+    # dispatcher (hard MoE)
     dispatcher_type: str = "mlp"  # "mlp" | "linear"
     dispatcher_hidden: int = 64
     dispatcher_epochs: int = 8
     dispatcher_lr: float = 1e-2
-    # experts
+    # experts (hard MoE)
     expert_epochs: int = 2
     expert_lr: float = 1e-3
     expert_lr_end: float = 1e-4
     l1_frozen: bool = True
+    # switch (end-to-end top-1)
+    switch_alpha: float = 0.01
+    switch_epochs: int = 5
+    switch_lr: float = 1e-3
     # misc
     device: str = "auto"
     run_name: str = "ui_run"
@@ -793,6 +801,177 @@ def _evaluate(
 
 
 # --------------------------------------------------------------------------- #
+# Switch (end-to-end sparse top-1 MoE)
+# --------------------------------------------------------------------------- #
+def _load_balance_loss(gate_probs: torch.Tensor, topk_idx: torch.Tensor, n_experts: int) -> torch.Tensor:
+    b = max(int(gate_probs.shape[0]), 1)
+    f = torch.zeros(n_experts, device=gate_probs.device, dtype=gate_probs.dtype)
+    idx = topk_idx.reshape(-1)
+    f = f.scatter_add(0, idx, torch.ones_like(idx, dtype=gate_probs.dtype)) / b
+    p = gate_probs.mean(dim=0)
+    return float(n_experts) * (f * p).sum()
+
+
+@torch.inference_mode()
+def _switch_eval(
+    base: DualHiddenNNUE,
+    moe: SoftGatedMoE,
+    folders: list[Path],
+    cfg: TrainingConfig,
+    device: torch.device,
+    cancel: CancelToken,
+    *,
+    full: bool = True,
+    emit: EmitFn | None = None,
+) -> dict:
+    planned = plan_split_indices(folders, 0.01, seed=0)
+    test_parts = subsample_parts([p[2] for p in planned], cfg.max_test, seed=1)
+    base_ce = base_mae = moe_ce = moe_mae = 0.0
+    best_expert_ce = best_expert_mae = 0.0
+    entropy = 0.0
+    load = np.zeros(moe.n_experts, dtype=np.float64)
+    w_sum = 0.0
+    n_rows = 0
+    total = int(sum(int(np.asarray(p).size) for p in test_parts))
+    base.eval()
+    moe.eval()
+    for (folder, _tr, _te), rows in zip(planned, test_parts):
+        rows = np.asarray(rows, dtype=np.int64)
+        if rows.size == 0:
+            continue
+        ds = FenValueVisitsDataset(folder, progress=False)
+        for start in range(0, int(rows.size), EVAL_BATCH):
+            cancel.check()
+            idx = rows[start : start + EVAL_BATCH]
+            batch = batches_to_device(ds.gather(idx), device)
+            target = batch["target"].float()
+            weight = batch["weight"]
+            moe_logits, gate_probs, topk_idx = moe(
+                batch["white_idx"], batch["black_idx"], batch["stm_white"],
+                batch["white_mask"], batch["black_mask"],
+            )
+            mce, mmae, w = ce_and_mae(moe_logits, target, weight)
+            moe_ce += float(mce.item())
+            moe_mae += float(mmae.item())
+            w_sum += float(w.item())
+            n_rows += int(idx.size)
+            ent = -(gate_probs * (gate_probs + 1e-8).log()).sum(dim=-1).mean()
+            entropy += float(ent.item()) * int(idx.size)
+            for e in topk_idx.reshape(-1).cpu().numpy():
+                load[int(e)] += 1.0
+            if full:
+                base_logits = base(
+                    batch["white_idx"], batch["black_idx"], batch["stm_white"],
+                    batch["white_mask"], batch["black_mask"],
+                )
+                bce, bmae, _ = ce_and_mae(base_logits, target, weight)
+                base_ce += float(bce.item())
+                base_mae += float(bmae.item())
+                h = moe.l1_concat(
+                    batch["white_idx"], batch["black_idx"], batch["stm_white"],
+                    batch["white_mask"], batch["black_mask"],
+                )
+                stacked = moe.all_expert_logits_from_h(h)
+                log_p = F.log_softmax(stacked.float(), dim=-1)
+                nll_e = -(target[:, None, :] * log_p).sum(dim=-1)
+                best_ids = nll_e.argmin(dim=-1)
+                rows_t = torch.arange(int(idx.size), device=device)
+                best_logits = stacked[rows_t, best_ids, :]
+                ece, emae, _ = ce_and_mae(best_logits, target, weight)
+                best_expert_ce += float(ece.item())
+                best_expert_mae += float(emae.item())
+            if emit is not None:
+                emit(
+                    {
+                        "stage": "eval",
+                        "event": "progress",
+                        "msg": f"evaluating {n_rows:,}/{total:,}",
+                        "progress": n_rows / max(total, 1),
+                    }
+                )
+        del ds
+    denom = max(w_sum, 1e-8)
+    load = load / max(float(load.sum()), 1.0)
+    metrics: dict = {
+        "n_test": n_rows,
+        "moe_ce": moe_ce / denom,
+        "moe_mae": moe_mae / denom,
+        "gate_entropy": entropy / max(n_rows, 1),
+        "load_distribution": [round(float(x), 5) for x in load],
+        "load_variance": float(np.var(load)),
+        "load_max_min_ratio": float(load.max() / max(load.min(), 1e-9)),
+    }
+    if full:
+        metrics["base_ce"] = base_ce / denom
+        metrics["base_mae"] = base_mae / denom
+        metrics["best_expert_ce"] = best_expert_ce / denom
+        metrics["best_expert_mae"] = best_expert_mae / denom
+    return metrics
+
+
+def _train_switch(
+    base: DualHiddenNNUE,
+    pack,
+    folders: list[Path],
+    cfg: TrainingConfig,
+    device: torch.device,
+    emit: EmitFn,
+    cancel: CancelToken,
+) -> tuple[SoftGatedMoE, float]:
+    n = len(pack)
+    moe = SoftGatedMoE(base, n_experts=cfg.k, top_k=1).to(device)
+    moe.freeze_l1()
+    opt = torch.optim.Adam([p for p in moe.parameters() if p.requires_grad], lr=cfg.switch_lr)
+    rng = np.random.RandomState(0)
+    best_test = float("inf")
+    best_state = None
+    for epoch in range(1, cfg.switch_epochs + 1):
+        cancel.check()
+        moe.train()
+        perm = rng.permutation(n).astype(np.int64)
+        ce_acc = 0.0
+        lb_acc = 0.0
+        n_batches = 0
+        for start in range(0, n, SWITCH_BATCH):
+            cancel.check()
+            idx = perm[start : start + SWITCH_BATCH]
+            batch = batches_to_device(pack.gather(torch.from_numpy(idx)), device)
+            opt.zero_grad(set_to_none=True)
+            logits, gate_probs, topk_idx = moe(
+                batch["white_idx"], batch["black_idx"], batch["stm_white"],
+                batch["white_mask"], batch["black_mask"],
+            )
+            ce, _mae, w = ce_and_mae(logits, batch["target"], batch["weight"])
+            ce_loss = ce / w.clamp_min(1e-8)
+            lb = _load_balance_loss(gate_probs, topk_idx, moe.n_experts)
+            (ce_loss + cfg.switch_alpha * lb).backward()
+            opt.step()
+            ce_acc += float(ce_loss.item())
+            lb_acc += float(lb.item())
+            n_batches += 1
+        test = _switch_eval(base, moe, folders, cfg, device, cancel, full=False)
+        emit(
+            {
+                "stage": "switch",
+                "event": "epoch",
+                "epoch": epoch,
+                "epochs": cfg.switch_epochs,
+                "train_ce": ce_acc / max(n_batches, 1),
+                "lb": lb_acc / max(n_batches, 1),
+                "test_ce": test["moe_ce"],
+                "gate_entropy": test.get("gate_entropy"),
+                "progress": epoch / cfg.switch_epochs,
+            }
+        )
+        if test["moe_ce"] < best_test:
+            best_test = test["moe_ce"]
+            best_state = {kk: v.detach().cpu().clone() for kk, v in moe.state_dict().items()}
+    if best_state is not None:
+        moe.load_state_dict(best_state)
+    return moe, best_test
+
+
+# --------------------------------------------------------------------------- #
 # Top-level pipeline
 # --------------------------------------------------------------------------- #
 def run_moe_training(cfg: TrainingConfig, emit: EmitFn, cancel: CancelToken) -> dict:
@@ -854,6 +1033,39 @@ def run_moe_training(cfg: TrainingConfig, emit: EmitFn, cancel: CancelToken) -> 
         _train_new_base(base, pack, cfg, device, emit, cancel)
         del pack
         emit({"stage": "base", "event": "done", "source": "new", "h": cfg.h, "H": cfg.H})
+
+    # -- switch (end-to-end sparse top-1 MoE) --------------------------------
+    if cfg.technique == "switch":
+        pack, _s, _l = load_train_pack(pack_dir)
+        emit(
+            {
+                "stage": "switch",
+                "event": "start",
+                "k": cfg.k,
+                "alpha": cfg.switch_alpha,
+                "epochs": cfg.switch_epochs,
+            }
+        )
+        moe, best_test = _train_switch(base, pack, folders, cfg, device, emit, cancel)
+        moe.save(work_dir / "moe.pt")
+        del pack
+        emit({"stage": "switch", "event": "done"})
+
+        emit({"stage": "eval", "event": "start"})
+        metrics = _switch_eval(base, moe, folders, cfg, device, cancel, full=True, emit=emit)
+        (work_dir / "eval.json").write_text(json.dumps(metrics, indent=2), encoding="utf-8")
+        emit({"stage": "eval", "event": "done", **metrics})
+
+        summary = {
+            "run_name": cfg.run_name,
+            "technique": cfg.technique,
+            "config": cfg.to_dict(),
+            "metrics": metrics,
+            "best_test_ce": best_test,
+        }
+        (work_dir / "summary.json").write_text(json.dumps(summary, indent=2), encoding="utf-8")
+        emit({"stage": "done", "summary": summary})
+        return metrics
 
     # -- cluster -------------------------------------------------------------
     emit({"stage": "cluster", "event": "start", "clustering": cfg.clustering, "k": cfg.k})
@@ -933,6 +1145,7 @@ def run_moe_training(cfg: TrainingConfig, emit: EmitFn, cancel: CancelToken) -> 
 
     summary = {
         "run_name": cfg.run_name,
+        "technique": cfg.technique,
         "config": cfg.to_dict(),
         "metrics": metrics,
         "dispatcher_val_acc": best_val_acc,
