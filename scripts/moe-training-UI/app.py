@@ -12,8 +12,10 @@ Run it from the repo root::
 from __future__ import annotations
 
 import io
+import re
 import sys
 import threading
+import time
 import traceback
 from pathlib import Path
 
@@ -24,8 +26,8 @@ import matplotlib
 matplotlib.use("Agg")
 from matplotlib import pyplot as plt
 
-from PyQt6.QtCore import QObject, Qt, pyqtSignal
-from PyQt6.QtGui import QColor, QImage, QPalette, QPixmap
+from PyQt6.QtCore import QObject, Qt, QUrl, pyqtSignal
+from PyQt6.QtGui import QColor, QDesktopServices, QImage, QPalette, QPixmap
 from PyQt6.QtWidgets import (
     QApplication,
     QCheckBox,
@@ -35,7 +37,6 @@ from PyQt6.QtWidgets import (
     QGroupBox,
     QHBoxLayout,
     QLabel,
-    QLineEdit,
     QMainWindow,
     QPlainTextEdit,
     QProgressBar,
@@ -49,13 +50,25 @@ from PyQt6.QtWidgets import (
 
 from runner import CancelToken, CancelledError, TrainingConfig, iter_checkpoints, run_moe_training
 
-STAGE_NAMES = ["base", "loading", "cluster", "dispatcher", "experts", "eval"]
+STAGE_NAMES = ["loading", "base", "cluster", "dispatcher", "experts", "eval"]
+
+PROJECT_ROOT = Path(__file__).resolve().parent.parent.parent
 
 
 class _Relay(QObject):
     event = pyqtSignal(object)
     finished = pyqtSignal(object)
     failed = pyqtSignal(str)
+
+
+def _fmt_eta(seconds: float) -> str:
+    if seconds < 60:
+        return f"ETA {max(1, int(seconds))}s"
+    if seconds < 3600:
+        m, s = divmod(int(seconds), 60)
+        return f"ETA {m}m {s:02d}s"
+    h, rem = divmod(int(seconds), 3600)
+    return f"ETA {h}h {rem // 60:02d}m"
 
 
 class _StageRow(QWidget):
@@ -71,9 +84,14 @@ class _StageRow(QWidget):
         title.setMinimumWidth(90)
         self.metric = QLabel("—")
         self.metric.setStyleSheet("color: #9aa6b8;")
+        self.eta = QLabel("")
+        self.eta.setStyleSheet("color: #6a7384;")
+        self.eta.setAlignment(Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter)
+        self.eta.setMinimumWidth(92)
         top.addWidget(title)
         top.addStretch(1)
         top.addWidget(self.metric)
+        top.addWidget(self.eta)
         layout.addLayout(top)
 
         self.bar = QProgressBar()
@@ -82,12 +100,37 @@ class _StageRow(QWidget):
         self.bar.setTextVisible(True)
         layout.addWidget(self.bar)
 
+        self._start_time: float | None = None
+
     def set_progress(self, fraction: float | None) -> None:
         if fraction is None:
             self.bar.setRange(0, 0)
+            self._clear_eta()
         else:
             self.bar.setRange(0, 100)
             self.bar.setValue(int(round(100.0 * max(0.0, min(1.0, fraction)))))
+            self._update_eta(float(fraction))
+
+    def _update_eta(self, fraction: float) -> None:
+        if fraction <= 0.0:
+            self._start_time = time.perf_counter()
+            self.eta.setText("")
+            return
+        if fraction >= 1.0:
+            self.eta.setText("")
+            return
+        if self._start_time is None:
+            self._start_time = time.perf_counter()
+        elapsed = time.perf_counter() - self._start_time
+        if elapsed < 1.0:
+            self.eta.setText("")
+            return
+        remaining = elapsed * (1.0 - fraction) / fraction
+        self.eta.setText(_fmt_eta(remaining))
+
+    def _clear_eta(self) -> None:
+        self._start_time = None
+        self.eta.setText("")
 
     def set_metric(self, text: str) -> None:
         self.metric.setText(text)
@@ -106,6 +149,12 @@ class MainWindow(QMainWindow):
 
         self._cancel = CancelToken()
         self._thread: threading.Thread | None = None
+        self._last_run_name: str | None = None
+        self._live_key: str | None = None
+        self._live_title = ""
+        self._live_ylabel = ""
+        self._live_series: dict[str, list[tuple[float, float]]] = {}
+        self._plots: dict[str, QPixmap] = {}
 
         central = QWidget()
         split = QSplitter(Qt.Orientation.Horizontal)
@@ -160,12 +209,13 @@ class MainWindow(QMainWindow):
         data_group = QGroupBox("Data")
         df = QFormLayout(data_group)
         self.max_rows = QSpinBox()
-        self.max_rows.setRange(10_000, 100_000_000)
-        self.max_rows.setSingleStep(100_000)
-        self.max_rows.setValue(2_000_000)
+        self.max_rows.setRange(1, 100)
+        self.max_rows.setSuffix(" M")
+        self.max_rows.setValue(2)
         self.max_test = QSpinBox()
-        self.max_test.setRange(1_000, 500_000)
-        self.max_test.setValue(50_000)
+        self.max_test.setRange(1, 500)
+        self.max_test.setSuffix(" k")
+        self.max_test.setValue(50)
         df.addRow("Train rows", self.max_rows)
         df.addRow("Test rows", self.max_test)
         layout.addWidget(data_group)
@@ -239,10 +289,24 @@ class MainWindow(QMainWindow):
         self.device.addItem("auto", "auto")
         self.device.addItem("cuda", "cuda")
         self.device.addItem("cpu", "cpu")
-        self.run_name = QLineEdit("ui_run")
+        self.run_name_label = QLabel("")
+        self.run_name_label.setWordWrap(True)
+        self.run_name_label.setStyleSheet("color: #9aa6b8;")
         mf.addRow("Device", self.device)
-        mf.addRow("Run name", self.run_name)
+        mf.addRow("Run name", self.run_name_label)
         layout.addWidget(misc_group)
+
+        for w in (
+            self.base_source, self.checkpoint, self.clustering, self.k_combo,
+            self.dispatcher_type, self.dispatcher_hidden,
+        ):
+            w.currentIndexChanged.connect(self._refresh_run_name)
+        for w in (
+            self.h_spin, self.H_spin, self.base_epochs, self.max_rows,
+            self.max_test, self.expert_epochs,
+        ):
+            w.valueChanged.connect(self._refresh_run_name)
+        self._refresh_run_name()
 
         layout.addStretch(1)
         scroll.setWidget(host)
@@ -257,17 +321,29 @@ class MainWindow(QMainWindow):
         top_split.addWidget(self._build_console_panel())
         top_split.setStretchFactor(0, 1)
         top_split.setStretchFactor(1, 1)
-        top_split.setSizes([440, 440])
-        layout.addWidget(top_split, 3)
+        top_split.setSizes([440, 308])
+        top_split.setChildrenCollapsible(False)
 
         plot_group = QGroupBox("Results — CE comparison")
         pl = QVBoxLayout(plot_group)
+        self.plot_combo = QComboBox()
+        self.plot_combo.setEnabled(False)
+        self.plot_combo.currentIndexChanged.connect(self._on_plot_selected)
+        pl.addWidget(self.plot_combo)
         self.plot_label = QLabel("Run a training to see the CE comparison")
         self.plot_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
         self.plot_label.setScaledContents(True)
-        self.plot_label.setMinimumHeight(220)
+        self.plot_label.setMinimumHeight(330)
         pl.addWidget(self.plot_label)
-        layout.addWidget(plot_group, 2)
+
+        vertical = QSplitter(Qt.Orientation.Vertical)
+        vertical.addWidget(top_split)
+        vertical.addWidget(plot_group)
+        vertical.setStretchFactor(0, 3)
+        vertical.setStretchFactor(1, 2)
+        vertical.setSizes([360, 330])
+        vertical.setChildrenCollapsible(False)
+        layout.addWidget(vertical)
 
         return host
 
@@ -298,8 +374,12 @@ class MainWindow(QMainWindow):
         self.stop_btn = QPushButton("STOP")
         self.stop_btn.setEnabled(False)
         self.stop_btn.clicked.connect(self._stop)
+        self.open_results_btn = QPushButton("Open results folder")
+        self.open_results_btn.setVisible(False)
+        self.open_results_btn.clicked.connect(self._open_results)
         buttons.addWidget(self.run_btn)
         buttons.addWidget(self.stop_btn)
+        buttons.addWidget(self.open_results_btn)
         buttons.addStretch(1)
         layout.addLayout(buttons)
         layout.addStretch(1)
@@ -334,6 +414,30 @@ class MainWindow(QMainWindow):
         self.dispatcher_epochs.setEnabled(not piece)
         self.dispatcher_lr.setEnabled(not piece)
 
+    def _auto_run_name(self) -> str:
+        parts: list[str] = []
+        if self.base_source.currentIndex() == 1:
+            parts.append(
+                f"new_h{self.h_spin.value()}_H{self.H_spin.value()}_be{self.base_epochs.value()}"
+            )
+        else:
+            ckpt = self.checkpoint.currentText().strip()
+            parts.append(f"load_{ckpt}" if ckpt else "load")
+        parts.append(str(self.clustering.currentData()))
+        parts.append(f"k{int(self.k_combo.currentData())}")
+        if self.clustering.currentData() != "piece_count":
+            if self.dispatcher_type.currentData() == "mlp":
+                parts.append(f"mlp{int(self.dispatcher_hidden.currentData())}")
+            else:
+                parts.append("linear")
+        parts.append(f"ep{self.expert_epochs.value()}")
+        parts.append(f"{self.max_rows.value()}M_{self.max_test.value()}k")
+        name = "_".join(parts)
+        return re.sub(r"[^A-Za-z0-9._-]", "_", name)
+
+    def _refresh_run_name(self, *_args) -> None:
+        self.run_name_label.setText(self._auto_run_name())
+
     def _collect_config(self) -> TrainingConfig:
         return TrainingConfig(
             base_source="new" if self.base_source.currentIndex() == 1 else "load",
@@ -341,8 +445,8 @@ class MainWindow(QMainWindow):
             h=self.h_spin.value(),
             H=self.H_spin.value(),
             base_epochs=self.base_epochs.value(),
-            max_rows=self.max_rows.value(),
-            max_test=self.max_test.value(),
+            max_rows=self.max_rows.value() * 1_000_000,
+            max_test=self.max_test.value() * 1_000,
             clustering=self.clustering.currentData(),
             k=int(self.k_combo.currentData()),
             dispatcher_type=self.dispatcher_type.currentData(),
@@ -354,7 +458,7 @@ class MainWindow(QMainWindow):
             expert_lr_end=float(self.expert_lr_end.value()),
             l1_frozen=self.l1_frozen.isChecked(),
             device=self.device.currentData(),
-            run_name=self.run_name.text().strip() or "ui_run",
+            run_name=self._auto_run_name(),
         )
 
     # ---------------------------------------------------------------- run
@@ -362,6 +466,7 @@ class MainWindow(QMainWindow):
         if self._thread is not None and self._thread.is_alive():
             return
         cfg = self._collect_config()
+        self._last_run_name = cfg.run_name
         self._reset_stages()
         self._cancel = CancelToken()
         self._set_running(True)
@@ -383,6 +488,14 @@ class MainWindow(QMainWindow):
         self.status.showMessage("Stopping…")
         self._log("stop requested")
 
+    def _open_results(self) -> None:
+        if not self._last_run_name:
+            return
+        path = PROJECT_ROOT / "RESULTS" / "moe" / self._last_run_name
+        if not path.is_dir():
+            path = path.parent
+        QDesktopServices.openUrl(QUrl.fromLocalFile(str(path)))
+
     def _set_running(self, running: bool) -> None:
         self.run_btn.setEnabled(not running)
         self.stop_btn.setEnabled(running)
@@ -392,7 +505,6 @@ class MainWindow(QMainWindow):
             self.k_combo, self.dispatcher_type, self.dispatcher_hidden,
             self.dispatcher_epochs, self.dispatcher_lr, self.expert_epochs,
             self.expert_lr, self.expert_lr_end, self.l1_frozen, self.device,
-            self.run_name,
         ):
             widget.setEnabled(False if running else True)
         if not running:
@@ -405,6 +517,14 @@ class MainWindow(QMainWindow):
         self.result_label.setText("")
         self.plot_label.setPixmap(QPixmap())
         self.plot_label.setText("Run a training to see the CE comparison")
+        self.open_results_btn.setVisible(False)
+        self._live_key = None
+        self._live_title = ""
+        self._live_ylabel = ""
+        self._live_series = {}
+        self._plots = {}
+        self.plot_combo.clear()
+        self.plot_combo.setEnabled(False)
 
     def _log(self, text: str) -> None:
         self.log.appendPlainText(text)
@@ -429,6 +549,10 @@ class MainWindow(QMainWindow):
             elif event == "epoch":
                 row.set_progress(ev.get("progress"))
                 row.set_metric(f"epoch {ev.get('epoch')}/{ev.get('epochs')} · CE {ev.get('ce'):.4f}")
+                self._add_live_point(
+                    "base", "Base model", "CE", "CE",
+                    float(ev.get("epoch")), float(ev.get("ce")),
+                )
             elif event == "done":
                 row.set_progress(1.0)
                 row.set_metric(ev.get("msg", f"W{ev.get('h')}_H{ev.get('H')}"))
@@ -474,6 +598,10 @@ class MainWindow(QMainWindow):
                     f"epoch {ev.get('epoch')}/{ev.get('epochs')} · "
                     f"train {ev.get('train_acc'):.3f} · val {ev.get('val_acc'):.3f}"
                 )
+                self._add_live_point(
+                    "dispatcher", "Dispatcher", "val acc", "val acc",
+                    float(ev.get("epoch")), float(ev.get("val_acc")),
+                )
             elif event == "done":
                 row.set_progress(1.0)
                 row.set_metric(f"val_acc {ev.get('best_val_acc'):.4f}")
@@ -490,9 +618,22 @@ class MainWindow(QMainWindow):
             overall = (eid + frac) / max(k, 1)
             row.set_progress(overall)
             if event == "epoch":
+                epoch = int(ev.get("epoch"))
+                hold_ce = float(ev.get("hold_ce"))
+                base_ce = float(ev.get("base_hold_ce"))
+                pct = (hold_ce / base_ce * 100.0) if base_ce > 0.0 else 0.0
                 row.set_metric(
-                    f"expert {eid}/{k} · epoch {ev.get('epoch')}/{ev.get('epochs')} · "
-                    f"hold {ev.get('hold_ce'):.4f} (base {ev.get('base_hold_ce'):.4f})"
+                    f"expert {eid}/{k} · epoch {epoch}/{ev.get('epochs')} · "
+                    f"{pct:.1f}% of base"
+                )
+                if epoch == 1:
+                    self._add_live_point(
+                        "experts", "Experts fine-tune", "hold CE (% of base)",
+                        f"expert {eid}", 0.0, 100.0,
+                    )
+                self._add_live_point(
+                    "experts", "Experts fine-tune", "hold CE (% of base)",
+                    f"expert {eid}", float(epoch), pct,
                 )
             elif event == "done":
                 row.set_metric(
@@ -549,6 +690,81 @@ class MainWindow(QMainWindow):
         )
 
     # ---------------------------------------------------------------- plot
+    def _add_live_point(
+        self, key: str, title: str, ylabel: str, series: str, epoch: float, value: float
+    ) -> None:
+        if key != self._live_key:
+            self._finalize_live_plot()
+            self._live_key = key
+            self._live_title = title
+            self._live_ylabel = ylabel
+            self._live_series = {}
+        self._live_series.setdefault(series, []).append((epoch, value))
+        self._render_live_plot()
+
+    def _finalize_live_plot(self) -> None:
+        if not self._live_title:
+            return
+        self._register_plot(self._live_title, self.plot_label.pixmap())
+
+    def _register_plot(self, name: str, pixmap: QPixmap) -> None:
+        if pixmap is None or pixmap.isNull():
+            return
+        if name in self._plots:
+            self._plots[name] = pixmap
+            idx = self.plot_combo.findData(name)
+            if idx >= 0:
+                self.plot_combo.setCurrentIndex(idx)
+            return
+        self._plots[name] = pixmap
+        self.plot_combo.addItem(name, name)
+        self.plot_combo.setEnabled(True)
+        self.plot_combo.setCurrentIndex(self.plot_combo.count() - 1)
+
+    def _on_plot_selected(self, index: int) -> None:
+        name = self.plot_combo.itemData(index)
+        if isinstance(name, str) and name in self._plots:
+            self.plot_label.setPixmap(self._plots[name])
+
+    def _render_live_plot(self) -> None:
+        if not self._live_series:
+            return
+        fig, ax = plt.subplots(figsize=(7, 3.2), dpi=100)
+        fig.patch.set_facecolor("#121418")
+        ax.set_facecolor("#121418")
+        ax.spines["top"].set_visible(False)
+        ax.spines["right"].set_visible(False)
+        ax.spines["left"].set_color("#3a4454")
+        ax.spines["bottom"].set_color("#3a4454")
+        ax.tick_params(colors="#9aa6b8")
+        ax.set_xlabel("epoch", color="#e8edf4")
+        ax.set_ylabel(self._live_ylabel, color="#e8edf4")
+        ax.set_title(self._live_title, color="#e8edf4")
+        colors = [
+            "#ff9f43", "#5b8dd9", "#6cc07a", "#c678dd",
+            "#e06c75", "#56b6c2", "#e0a24b", "#98c379",
+        ]
+        for i, (name, points) in enumerate(self._live_series.items()):
+            if not points:
+                continue
+            xs = [p[0] for p in points]
+            ys = [p[1] for p in points]
+            ax.plot(
+                xs, ys,
+                color=colors[i % len(colors)], linewidth=1.5, linestyle="-", label=name,
+            )
+        if len(self._live_series) > 1:
+            ax.legend(
+                facecolor="#1b1f27", edgecolor="#3a4454",
+                labelcolor="#e8edf4", fontsize=9, loc="best",
+            )
+        fig.tight_layout()
+        buf = io.BytesIO()
+        fig.savefig(buf, format="png")
+        plt.close(fig)
+        buf.seek(0)
+        self.plot_label.setPixmap(QPixmap.fromImage(QImage.fromData(buf.getvalue(), "PNG")))
+
     def _render_bar_plot(self, metrics: dict) -> QPixmap | None:
         base = metrics.get("base_ce")
         moe = metrics.get("moe_ce")
@@ -588,14 +804,17 @@ class MainWindow(QMainWindow):
         return QPixmap.fromImage(QImage.fromData(buf.getvalue(), "PNG"))
 
     def _show_plot(self, metrics: dict) -> None:
+        self._finalize_live_plot()
         pixmap = self._render_bar_plot(metrics)
         if pixmap is not None:
             self.plot_label.setPixmap(pixmap)
+            self._register_plot("CE comparison", pixmap)
 
     def _on_finished(self, metrics: dict) -> None:
         self._set_running(False)
         self.status.showMessage("Done")
         self._log("run finished")
+        self.open_results_btn.setVisible(True)
 
     def _on_failed(self, err: str) -> None:
         self._set_running(False)
@@ -621,6 +840,20 @@ class MainWindow(QMainWindow):
                 border: 1px solid #3a4454; border-radius: 4px; padding: 3px 6px;
             }
             QComboBox QAbstractItemView { background: #1b1f27; color: #e8edf4; }
+            QComboBox:disabled {
+                background: rgba(128, 136, 148, 0.30);
+                color: #6a7384;
+                border: 1px solid #2a3140;
+            }
+            QSpinBox:disabled, QDoubleSpinBox:disabled {
+                background: rgba(128, 136, 148, 0.30);
+                color: #6a7384;
+                border: 1px solid #2a3140;
+            }
+            QSpinBox:disabled::lineEdit, QDoubleSpinBox:disabled::lineEdit {
+                background: transparent;
+                color: #6a7384;
+            }
             QPushButton {
                 background: #2f3948; color: #e8edf4; border: 1px solid #3a4454;
                 border-radius: 4px; padding: 6px 16px;

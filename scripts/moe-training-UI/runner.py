@@ -471,12 +471,14 @@ def _fine_tune_experts(
     device: torch.device,
     emit: EmitFn,
     cancel: CancelToken,
+    dispatcher: LinearDispatcher | MLPDispatcher | None = None,
 ) -> DualHiddenMoE:
     in_dim = base.hidden_dim * 2
-    if cfg.dispatcher_type == "mlp":
-        dispatcher = MLPDispatcher(in_dim, cfg.k, hidden_dim=cfg.dispatcher_hidden)
-    else:
-        dispatcher = LinearDispatcher(in_dim, cfg.k)
+    if dispatcher is None:
+        if cfg.dispatcher_type == "mlp":
+            dispatcher = MLPDispatcher(in_dim, cfg.k, hidden_dim=cfg.dispatcher_hidden)
+        else:
+            dispatcher = LinearDispatcher(in_dim, cfg.k)
     moe = DualHiddenMoE.from_base(base, cfg.k, dispatcher=dispatcher).to(device)
     if cfg.l1_frozen:
         moe.freeze_l1()
@@ -703,7 +705,18 @@ def run_moe_training(cfg: TrainingConfig, emit: EmitFn, cancel: CancelToken) -> 
     if not folders:
         raise RuntimeError(f"no slice folders in {slices_dir}")
 
-    pack_dir = UI_PACK_ROOT / f"moe_ui_{cfg.run_name}"
+    # -- resolve the base model up front so the gradient-cache directory can be
+    # keyed by the actual architecture + row count. Otherwise a new arch / row
+    # count would reuse (and clash with) a stale cache from a previous run.
+    if cfg.base_source == "load":
+        ckpt = Path(cfg.base_checkpoint)
+        base = load_dual_hidden_checkpoint(ckpt, device=device)
+        h_actual, H_actual = base.hidden_dim, base.hidden2_dim
+    else:
+        base = DualHiddenNNUE(hidden_dim=cfg.h, hidden2_dim=cfg.H).to(device)
+        h_actual, H_actual = cfg.h, cfg.H
+
+    pack_dir = UI_PACK_ROOT / f"moe_ui_{cfg.run_name}_h{h_actual}_H{H_actual}_n{cfg.max_rows}"
     pack_dir.mkdir(parents=True, exist_ok=True)
     work_dir = PROJECT_ROOT / "RESULTS" / "moe" / cfg.run_name
     work_dir.mkdir(parents=True, exist_ok=True)
@@ -715,8 +728,6 @@ def run_moe_training(cfg: TrainingConfig, emit: EmitFn, cancel: CancelToken) -> 
     # -- base model ----------------------------------------------------------
     emit({"stage": "base", "event": "start"})
     if cfg.base_source == "load":
-        ckpt = Path(cfg.base_checkpoint)
-        base = load_dual_hidden_checkpoint(ckpt, device=device)
         emit(
             {
                 "stage": "base",
@@ -729,7 +740,6 @@ def run_moe_training(cfg: TrainingConfig, emit: EmitFn, cancel: CancelToken) -> 
             }
         )
     else:
-        base = DualHiddenNNUE(hidden_dim=cfg.h, hidden2_dim=cfg.H).to(device)
         emit(
             {
                 "stage": "base",
@@ -785,6 +795,7 @@ def run_moe_training(cfg: TrainingConfig, emit: EmitFn, cancel: CancelToken) -> 
     if cfg.clustering == "piece_count":
         disp_labels = labels
         best_val_acc = None
+        disp = None
         emit({"stage": "dispatcher", "event": "skip", "msg": "piece-count rule (no training)"})
     else:
         pack, _s, _l = load_train_pack(pack_dir)
@@ -810,7 +821,7 @@ def run_moe_training(cfg: TrainingConfig, emit: EmitFn, cancel: CancelToken) -> 
     # -- experts -------------------------------------------------------------
     pack, _s, _l = load_train_pack(pack_dir)
     emit({"stage": "experts", "event": "start", "k": cfg.k})
-    moe = _fine_tune_experts(base, disp_labels, pack, cfg, device, emit, cancel)
+    moe = _fine_tune_experts(base, disp_labels, pack, cfg, device, emit, cancel, dispatcher=disp)
     moe.save(work_dir / "moe.pt")
     emit({"stage": "experts", "event": "done"})
 
