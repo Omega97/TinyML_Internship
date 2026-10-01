@@ -12,7 +12,7 @@ Events share a ``"stage"`` key. The UI-visible stages are:
 * ``cluster``    — bucket assignment (gradient / L1 k-means / piece-count rule)
 * ``dispatcher`` — router training (epoch / val-acc)
 * ``experts``    — per-expert fine-tune (epoch / holdout CE)
-* ``eval``       — full-MoE evaluation (base CE vs MoE CE vs oracle)
+* ``eval``       — full-MoE evaluation (base / MoE / perfect-routing / best-expert)
 * ``done``       — terminal summary
 """
 
@@ -38,6 +38,7 @@ from tinymlinternship.data.board_store import BOARD_EVAL_DIR_NAME, FEN_VALUE_VIS
 from tinymlinternship.features import piece_square_count
 from tinymlinternship.nnue.clustering_eval import piece_count_labels, piece_counts_from_indices
 from tinymlinternship.nnue.cluster import (
+    assign_to_centroids,
     cluster_diagnostics,
     fit_minibatch_kmeans,
     save_cluster_run,
@@ -60,9 +61,15 @@ from tinymlinternship.nnue.moe_data import (
     subsample_parts,
 )
 from tinymlinternship.nnue.moe_pipeline import (
+    DEFAULT_REDUCE_DIM,
     ce_and_mae,
     compute_gradients,
     configure_torch,
+)
+from tinymlinternship.nnue.sample_gradients import (
+    head_parameter_dim,
+    make_projection_matrix,
+    sample_head_gradients,
 )
 
 DEFAULT_SLICES = PROCESSED_DATA_DIR / BOARD_EVAL_DIR_NAME / FEN_VALUE_VISITS_DIR_NAME
@@ -160,6 +167,35 @@ def _train_new_base(
         opt, start_factor=1.0, end_factor=1e-3 / 1e-2, total_iters=max(cfg.base_epochs, 1)
     )
     n_train = max(1, int(n * 0.9))
+
+    base.eval()
+    running0 = 0.0
+    count0 = 0
+    with torch.inference_mode():
+        for start in range(0, n_train, EXPERT_BATCH):
+            cancel.check()
+            end = min(start + EXPERT_BATCH, n_train)
+            batch = batches_to_device(
+                pack.gather(torch.arange(start, end, dtype=torch.long)), device
+            )
+            logits = base(
+                batch["white_idx"], batch["black_idx"], batch["stm_white"],
+                batch["white_mask"], batch["black_mask"],
+            )
+            ce, _mae, w = ce_and_mae(logits, batch["target"], batch["weight"])
+            running0 += float(ce.item())
+            count0 += int(w.item())
+    emit(
+        {
+            "stage": "base",
+            "event": "epoch",
+            "epoch": 0,
+            "epochs": cfg.base_epochs,
+            "ce": running0 / max(count0, 1e-8),
+            "progress": 0.0,
+        }
+    )
+
     for epoch in range(1, cfg.base_epochs + 1):
         cancel.check()
         base.train()
@@ -396,6 +432,37 @@ def _train_dispatcher(
     n_train = int(train_idx.shape[0])
     n_val_v = int(val_idx.shape[0])
 
+    disp.eval()
+    train_correct0 = 0
+    with torch.no_grad():
+        for start in range(0, n_train, DISPATCHER_BATCH):
+            end = min(start + DISPATCHER_BATCH, n_train)
+            x = torch.from_numpy(
+                np.ascontiguousarray(l1[train_idx[start:end]], dtype=np.float32)
+            ).to(device)
+            y = y_train[start:end]
+            train_correct0 += int((disp(x).argmax(dim=-1) == y).sum().item())
+    val_correct0 = 0
+    with torch.no_grad():
+        for start in range(0, n_val_v, DISPATCHER_BATCH):
+            end = min(start + DISPATCHER_BATCH, n_val_v)
+            x = torch.from_numpy(
+                np.ascontiguousarray(l1[val_idx[start:end]], dtype=np.float32)
+            ).to(device)
+            y = y_val[start:end]
+            val_correct0 += int((disp(x).argmax(dim=-1) == y).sum().item())
+    emit(
+        {
+            "stage": "dispatcher",
+            "event": "epoch",
+            "epoch": 0,
+            "epochs": cfg.dispatcher_epochs,
+            "train_acc": train_correct0 / max(n_train, 1),
+            "val_acc": val_correct0 / max(n_val_v, 1),
+            "progress": 0.0,
+        }
+    )
+
     for epoch in range(1, cfg.dispatcher_epochs + 1):
         cancel.check()
         disp.train()
@@ -613,11 +680,22 @@ def _evaluate(
     device: torch.device,
     emit: EmitFn,
     cancel: CancelToken,
+    centroids: np.ndarray | None = None,
 ) -> dict:
     planned = plan_split_indices(folders, 0.01, seed=0)
     test_parts = subsample_parts([p[2] for p in planned], cfg.max_test, seed=1)
     limit = _n_active_features()
-    base_ce = base_mae = moe_ce = moe_mae = oracle_ce = oracle_mae = 0.0
+    projection = None
+    if cfg.clustering == "gradient" and centroids is not None:
+        projection = make_projection_matrix(
+            head_parameter_dim(base.hidden_dim, base.hidden2_dim),
+            DEFAULT_REDUCE_DIM,
+            seed=0,
+            device=device,
+            dtype=torch.float32,
+        )
+    base_ce = base_mae = moe_ce = moe_mae = 0.0
+    perfect_ce = perfect_mae = best_expert_ce = best_expert_mae = 0.0
     w_sum = 0.0
     n_rows = 0
     total = int(sum(int(np.asarray(p).size) for p in test_parts))
@@ -653,22 +731,42 @@ def _evaluate(
                 batch["white_idx"], batch["black_idx"], batch["stm_white"],
                 batch["white_mask"], batch["black_mask"],
             )
+
+            # Perfect dispatcher: route each row to its true cluster.
+            if cfg.clustering == "l1" and centroids is not None:
+                perfect_ids = assign_to_centroids(h.detach().cpu().numpy(), centroids)
+                perfect_logits, _ = moe.route_from_h(
+                    h, expert_ids=torch.from_numpy(perfect_ids.astype(np.int64)).to(device)
+                )
+            elif cfg.clustering == "gradient" and projection is not None and centroids is not None:
+                grads = sample_head_gradients(base, batch, projection)
+                perfect_ids = assign_to_centroids(grads.detach().cpu().numpy(), centroids)
+                perfect_logits, _ = moe.route_from_h(
+                    h, expert_ids=torch.from_numpy(perfect_ids.astype(np.int64)).to(device)
+                )
+            else:
+                perfect_logits = moe_logits
+
+            # Best expert: per-row argmin CE over all experts (upper bound).
             stacked = moe.all_expert_logits_from_h(h)
             log_p = F.log_softmax(stacked.float(), dim=-1)
             nll_e = -(target[:, None, :] * log_p).sum(dim=-1)
-            oracle_ids = nll_e.argmin(dim=-1)
+            best_expert_ids = nll_e.argmin(dim=-1)
             rows_t = torch.arange(int(idx.size), device=device)
-            oracle_logits = stacked[rows_t, oracle_ids, :]
+            best_expert_logits = stacked[rows_t, best_expert_ids, :]
 
             bce, bmae, w = ce_and_mae(base_logits, target, weight)
             mce, mmae, _ = ce_and_mae(moe_logits, target, weight)
-            oce, omae, _ = ce_and_mae(oracle_logits, target, weight)
+            pce, pmae, _ = ce_and_mae(perfect_logits, target, weight)
+            ece, emae, _ = ce_and_mae(best_expert_logits, target, weight)
             base_ce += float(bce.item())
             base_mae += float(bmae.item())
             moe_ce += float(mce.item())
             moe_mae += float(mmae.item())
-            oracle_ce += float(oce.item())
-            oracle_mae += float(omae.item())
+            perfect_ce += float(pce.item())
+            perfect_mae += float(pmae.item())
+            best_expert_ce += float(ece.item())
+            best_expert_mae += float(emae.item())
             w_sum += float(w.item())
             n_rows += int(idx.size)
             emit(
@@ -687,8 +785,10 @@ def _evaluate(
         "base_mae": base_mae / denom,
         "moe_ce": moe_ce / denom,
         "moe_mae": moe_mae / denom,
-        "oracle_ce": oracle_ce / denom,
-        "oracle_mae": oracle_mae / denom,
+        "perfect_ce": perfect_ce / denom,
+        "perfect_mae": perfect_mae / denom,
+        "best_expert_ce": best_expert_ce / denom,
+        "best_expert_mae": best_expert_mae / denom,
     }
 
 
@@ -827,7 +927,7 @@ def run_moe_training(cfg: TrainingConfig, emit: EmitFn, cancel: CancelToken) -> 
 
     # -- eval ----------------------------------------------------------------
     emit({"stage": "eval", "event": "start"})
-    metrics = _evaluate(base, moe, folders, cfg, device, emit, cancel)
+    metrics = _evaluate(base, moe, folders, cfg, device, emit, cancel, centroids=centroids)
     (work_dir / "eval.json").write_text(json.dumps(metrics, indent=2), encoding="utf-8")
     emit({"stage": "eval", "event": "done", **metrics})
 

@@ -664,7 +664,10 @@ class MainWindow(QMainWindow):
                     row.set_metric(str(ev.get("msg")))
             elif event == "done":
                 row.set_progress(1.0)
-                row.set_metric(f"base {ev.get('base_ce'):.5f} · moe {ev.get('moe_ce'):.5f}")
+                row.set_metric(
+                    f"base {ev.get('base_ce'):.5f} · moe {ev.get('moe_ce'):.5f} · "
+                    f"perfect {ev.get('perfect_ce'):.5f} · best {ev.get('best_expert_ce'):.5f}"
+                )
                 self._show_plot(ev)
             return
 
@@ -679,11 +682,12 @@ class MainWindow(QMainWindow):
             return ""
         base = m.get("base_ce", float("nan"))
         moe = m.get("moe_ce", float("nan"))
-        oracle = m.get("oracle_ce", float("nan"))
+        perfect = m.get("perfect_ce", float("nan"))
+        best = m.get("best_expert_ce", float("nan"))
         diff = moe - base if isinstance(moe, float) and isinstance(base, float) else float("nan")
         arrow = "↓" if diff < 0 else "↑"
         return (
-            f"base CE {base:.5f}   ·   MoE CE {moe:.5f}   ·   oracle CE {oracle:.5f}\n"
+            f"base {base:.5f}   ·   MoE {moe:.5f}   ·   perfect {perfect:.5f}   ·   best expert {best:.5f}\n"
             f"base MAE {m.get('base_mae', float('nan')):.5f}   ·   "
             f"MoE MAE {m.get('moe_mae', float('nan')):.5f}\n"
             f"ΔCE {diff:+.5f} {arrow} vs base"
@@ -766,14 +770,16 @@ class MainWindow(QMainWindow):
         self.plot_label.setPixmap(QPixmap.fromImage(QImage.fromData(buf.getvalue(), "PNG")))
 
     def _render_bar_plot(self, metrics: dict) -> QPixmap | None:
-        base = metrics.get("base_ce")
-        moe = metrics.get("moe_ce")
-        oracle = metrics.get("oracle_ce")
-        if base is None and moe is None and oracle is None:
+        labels = ["Base model", "MoE", "Perfect dispatcher", "Best expert"]
+        values = [
+            metrics.get("base_ce"),
+            metrics.get("moe_ce"),
+            metrics.get("perfect_ce"),
+            metrics.get("best_expert_ce"),
+        ]
+        if all(v is None for v in values):
             return None
-        labels = ["Base CE", "MoE CE (dispatcher)", "Oracle CE (100%)"]
-        values = [base, moe, oracle]
-        colors = ["#5b8dd9", "#e0a24b", "#6cc07a"]
+        colors = ["#5b8dd9", "#e0a24b", "#6cc07a", "#c678dd"]
         fig, ax = plt.subplots(figsize=(7, 3.2), dpi=100)
         fig.patch.set_facecolor("#121418")
         ax.set_facecolor("#121418")
@@ -783,7 +789,7 @@ class MainWindow(QMainWindow):
         ax.spines["bottom"].set_color("#3a4454")
         ax.tick_params(colors="#9aa6b8")
         ax.set_ylabel("Cross-entropy", color="#e8edf4")
-        ax.set_title("MoE vs base vs oracle", color="#e8edf4")
+        ax.set_title("CE comparison", color="#e8edf4")
         bars = ax.bar(labels, values, color=colors)
         for bar, value in zip(bars, values):
             if value is not None:

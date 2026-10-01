@@ -1,38 +1,40 @@
 {
-  "run_name": "ui_run",
+  "run_name": "ui_run_20",
   "config": {
     "base_source": "load",
     "base_checkpoint": "/home/omar/jupyterlab/TinyML_Internship/models/checkpoints/nnue/dual_h128_H128_512x8198_e1000/best.pt",
     "h": 128,
     "H": 256,
     "base_epochs": 20,
-    "max_rows": 2000000,
+    "max_rows": 5000000,
     "max_test": 50000,
     "clustering": "gradient",
-    "k": 2,
+    "k": 4,
     "dispatcher_type": "linear",
     "dispatcher_hidden": 64,
-    "dispatcher_epochs": 30,
-    "dispatcher_lr": 0.01,
+    "dispatcher_epochs": 100,
+    "dispatcher_lr": 0.005,
     "expert_epochs": 30,
     "expert_lr": 0.001,
     "expert_lr_end": 0.0001,
     "l1_frozen": true,
     "device": "auto",
-    "run_name": "ui_run"
+    "run_name": "ui_run_20"
   },
   "metrics": {
     "n_test": 50000,
     "base_ce": 0.6538687062543631,
     "base_mae": 0.15583289743602277,
-    "moe_ce": 0.6577071409350633,
-    "moe_mae": 0.16279901961952448,
-    "oracle_ce": 0.6392064211052656,
-    "oracle_mae": 0.13931379957914353
+    "moe_ce": 0.7507097217655182,
+    "moe_mae": 0.19606937190055848,
+    "oracle_ce": 0.6257670406830311,
+    "oracle_mae": 0.12226671823948622
   },
-  "dispatcher_val_acc": 0.653095,
+  "dispatcher_val_acc": 0.558598,
   "cluster_sizes": [
-    880543,
-    1119457
+    1412514,
+    1204411,
+    1020815,
+    1362260
   ]
 }
