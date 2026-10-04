@@ -95,6 +95,8 @@
 
 ---
 
+#todo scheda con steps?
+
 ## 3.3 Step 1: Train the Base Model
 
 <span style="color: #808080;">[Base Model]</span> The first step of our method is to train a **base evaluation model** that will serve as the foundation for all subsequent steps. This model provides two essential functions: it supplies the reference point from which the sample gradients are computed, and it provides the frozen L1 representation used by the dispatcher at inference time.
@@ -115,7 +117,10 @@ $$\mathcal{L} = -\frac{1}{N} \sum_{i=1}^N \left[ \hat{P}_i(W) \log P_i(W) + \hat
 
 ### 3.3.3 Training Protocol
 
-<span style="color: #808080;">[Training Protocol]</span> The base model is trained on the full dataset of approximately [dataset_size] positions using the Adam optimiser with a learning rate of [lr_start], linearly decayed to [lr_end] over the course of training. We use a batch size of [batch_size] and train until convergence on the held-out test set ([test_fraction] of the total dataset). All training is performed in PyTorch on a DGX Nvidia Spark GPU.
+<span style="color: #808080;">[Training Protocol]</span> The base model is trained on the full dataset of approximately [dataset_size] positions using the Adam optimiser with a learning rate of [lr_start], linearly decayed to [lr_end] over the course of training. We use a batch size of [batch_size] and train until convergence on the held-out test set ([test_fraction] of the total dataset). All training is performed in PyTorch on a DGX Nvidia Spark GPU. 
+
+#todo describe dataset
+#todo make sure formatting correct in LaTeX 
 
 ### 3.3.4 The Role of the Base Model
 
@@ -156,7 +161,11 @@ where:
 
 <span style="color: #808080;">[Implementation]</span> In practice, the gradient computation leverages PyTorch's `torch.autograd.grad` function, which efficiently computes sample gradients for an entire batch of inputs in a single operation. Crucially, these gradients are computed only with respect to the head parameters—namely $(W_{L2}, W_{out})$​—while the L1 accumulator weights remain excluded from this differentiation.
 
+#todo check `torch.autograd.grad` formatting in LaTeX
+
 <span style="color: #808080;">[Forward then Grad]</span> The workflow begins with a forward pass through the model for a batch of positions, producing WDL predictions that are then compared against teacher labels via cross-entropy loss. Calling `torch.autograd.grad(loss, head_parameters, retain_graph=False)` yields the desired gradients, which are subsequently detached from the computation graph and flattened into a single vector representation for each position. This entire computation runs fully parallelised on the GPU and completes in a single pass over the dataset, with the resulting gradient tensors persisted to disk for use in the downstream clustering stage.
+
+#todo check  `torch.autograd.grad(loss, head_parameters, retain_graph=False)` formatting in LaTeX
 
 ### 3.4.3 Normalisation
 
@@ -213,7 +222,7 @@ where $\mu_k = \frac{1}{|\mathcal{C}_k|} \sum_{i \in \mathcal{C}_k} \Delta_i$ is
 #todo Disadvantages:
 - **Sensitivity to initialisation**: While k-means++ mitigates this, K-Means can still converge to local optima.
 - **Assumption of spherical clusters**: K-Means performs best when clusters are roughly spherical and of similar size. Our gradient space may not satisfy this assumption.
-- **Fixed $B$ is a hyperparameter**: The choice of $B$ is critical and must be determined separately (see Section 3.5.4).
+- **Fixed** $B$ **is a hyperparameter**: The choice of $B$ is critical and must be determined separately (see Section 3.5.4).
 - **Outlier sensitivity**: K-Means can be influenced by outliers, which may distort centroids.
 
 ### 3.5.3 Density-Based Algorithms
@@ -230,7 +239,7 @@ where $\mu_k = \frac{1}{|\mathcal{C}_k|} \sum_{i \in \mathcal{C}_k} \Delta_i$ is
 
 #todo Disadvantages:
 - **Parameter sensitivity**: The algorithm requires choosing a distance cutoff (for density estimation) and a threshold for the distance to higher-density points. These parameters can significantly affect the number of clusters.
-- **Computational cost**: Computing pairwise distances for [dataset_size] points is prohibitive (O(N²)). We would need to use approximations (e.g., approximate nearest neighbours) or subsample the data.
+- **Computational cost**: Computing pairwise distances for the whole dataset can be prohibitive (O(N²)). We would need to use approximations (e.g., approximate nearest neighbours) or subsample the data.
 - **Cluster size imbalance**: Density-based methods may produce clusters of very different sizes, which can be problematic for expert fine-tuning (some experts would have too little data).
 - **Unstable number of clusters**: The number of clusters can vary with the parameters or with slight perturbations in the data, complicating the design of a fixed-architecture MoE.
 
@@ -254,7 +263,7 @@ where $\mu_k = \frac{1}{|\mathcal{C}_k|} \sum_{i \in \mathcal{C}_k} \Delta_i$ is
 
 #todo maybe not necessary?
 
-<span style="color: #808080;">[Silhouette Score]</span> The **silhouette score** (*Rousseeuw*, 1987) measures how similar each point is to its own cluster compared to the nearest neighbouring cluster. For a point $i$, the coefficient is defined as
+<span style="color: #808080;">[Silhouette Score]</span> The **silhouette score** (Rousseeuw, 1987) measures how similar each point is to its own cluster compared to the nearest neighbouring cluster. For a point $i$, the coefficient is defined as
 
 $$s_i=b_i−a_i \max⁡(a_i,b_i)$$​
 
@@ -290,6 +299,7 @@ This design ensures that routing adds only a matrix-vector multiplication and a 
 
 <span style="color: #808080;">[The linear model is enough]</span> A more expressive dispatcher, such as a multi-layer perceptron with hidden layers, could potentially achieve higher classification accuracy. However, the additional parameters and non-linearities would increase both memory footprint and inference cost. Given the extreme efficiency requirements of the target hardware, we prioritize simplicity and speed over marginal gains in routing accuracy. As we discuss in Section 3.6.4, the linear dispatcher is sufficient to capture the coarse structure of the partition.
 
+#todo how much? results
 #todo can a complex dispatcher compromise the expert selection process at inference time?
 #todo check reference to 3.6.4
 

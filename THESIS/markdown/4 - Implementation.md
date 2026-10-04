@@ -23,8 +23,9 @@
 
 ## 4.1 Dataset and Teacher
 
-<span style="color: #808080;">[Data Overview]</span> The quality of an NNUE evaluation function depends critically on the dataset used for training. For this work, we constructed a dataset of approximately [dataset_size] chess positions extracted from human games and labeled with high-quality value estimates from a strong teacher network, **Leela Chess Zero** (Lc0), the *spiritual* successor of *AlphaZero*.
+<span style="color: #808080;">[Data Overview]</span> The quality of an NNUE evaluation function depends critically on the dataset used for training. For this work, we constructed a dataset of approximately [dataset_size] chess positions extracted from human games and labeled with high-quality value estimates from a strong teacher network, **Leela Chess Zero** (Lc0), the *spiritual* successor of AlphaZero.
 
+#todo reference to Lc0
 #todo update hyperparameters
 
 ### 4.1.1 Dataset Construction
@@ -60,7 +61,7 @@
 
 ### 4.1.4 Teacher Model: Lc0
 
-<span style="color: #808080;">[Teacher]</span> To provide accurate target labels, we use **Lc0** (Leela Chess Zero) as the teacher model. Lc0 is a *convolutional neural network* trained via self‑play reinforcement learning, following the AlphaZero paradigm. Its value head outputs a probability distribution over the three possible game outcomes—Win, Draw, Loss—from the perspective of the side‑to‑move:
+<span style="color: #808080;">[Teacher]</span> To provide accurate target labels, we use Lc0 as the teacher model. Lc0 is a *convolutional neural network* trained via self‑play reinforcement learning, following the AlphaZero paradigm. Its value head outputs a probability distribution over the three possible game outcomes—Win, Draw, Loss—from the perspective of the side‑to‑move:
 
 $$p_{\text{WDL}}(s) = \text{softmax}(\text{logits}(s)) = (p_W, p_D, p_L)$$
 
@@ -106,6 +107,9 @@ where $x_{\text{own}}, x_{\text{opp}} \in \{0,1\}^{[d_in]}$ are the sparse featu
     <img src="THESIS/thesis-plots/sardine_nnue_architecture.png" width="600">
 </div>
 
+#todo make the plots large in LaTeX
+#todo plot description
+
 ### 4.2.2 Shared L1 Accumulator
 
 <span style="color: #808080;">[Accumulator]</span> The L1 layer, often referred to as the accumulator, is the defining component of the NNUE architecture. Its weight matrix $W_{\text{L1}}$ is shared between the two perspectives, enabling the network to learn a common representation of board structure while retaining perspective‑specific information through the different input features. The sparsity of the input features allows the accumulator to be updated efficiently: rather than recomputing the entire matrix‑vector product for each new position, the network maintains the accumulator vector incrementally, adding or subtracting the contributions of features that change as pieces move.
@@ -119,6 +123,8 @@ $$
 
 This clipping is essential for integer quantization, as it bounds the dynamic range of the accumulator values and allows the use of low‑precision integer arithmetic during inference.
 
+#todo reference to CReLU?
+
 ### 4.2.3 Side‑to‑Move Reorder
 
 <span style="color: #808080;">[STM Reorder]</span> Before concatenating the two accumulator vectors, we apply a 
@@ -127,16 +133,20 @@ This clipping is essential for integer quantization, as it bounds the dynamic ra
 $$
 h_{\text{first}} =
 \begin{cases}
-a_{\text{own}}, & \text{if } \text{stm\_white} = 1, \\
-a_{\text{opp}}, & \text{otherwise},
-\end{cases}
-\qquad
-h_{\text{second}} =
-\begin{cases}
-a_{\text{opp}}, & \text{if } \text{stm\_white} = 1, \\
-a_{\text{own}}, & \text{otherwise}.
+a_{\text{own}}, & \text{if } \text{stm\_white} = 1 \\
+a_{\text{opp}}, & \text{otherwise}
 \end{cases}
 $$
+
+$$
+h_{\text{second}} =
+\begin{cases}
+a_{\text{opp}}, & \text{if } \text{stm\_white} = 1 \\
+a_{\text{own}}, & \text{otherwise}
+\end{cases}
+$$
+
+#note: on LaTeX these two have to be displayed one after the other like this 
 
 <span style="color: #808080;">[Concatenation]</span> The two vectors are then concatenated to form the input to the L2 layer:
 
@@ -179,6 +189,8 @@ $$
 $$
 
 The outer sum averages the loss over the batch, while the inner sum accumulates the contribution of each outcome for a given position.
+
+#todo reference to soft cross-entropy
 
 <span style="color: #808080;">[Why this loss]</span> This loss is well-suited to the task because the teacher labels are probability distributions rather than point estimates. Soft cross-entropy encourages the model to match the full outcome distribution, not merely its scalar expected reward, and therefore provides a richer training signal. The loss also handles the non-linearity introduced by the softmax in a principled way, and its gradient does not saturate at extreme values, unlike the squared error on the scalar evaluation $v = P(W) - P(L)$.
 
@@ -335,7 +347,7 @@ where $\|\Delta_i\|$ is the Euclidean norm of the flattened gradient and $\epsil
 
 ## 4.8 Cfish as the Host Engine
 
-<span style="color: #808080;">[Deploying our NNUE with Cfish]</span> The Mixture-of-Experts NNUE developed in this chapter is not intended to run as a standalone evaluator. It is designed to replace the evaluation component of an existing chess engine, so that its behaviour can be assessed within the full search pipeline, and so that its cost can be measured against the constraints of the target hardware. The host engine selected for this purpose is Cfish, a port of Stockfish written in plain C by Ronald de Man and first published on GitHub in July 2016. Cfish shares the same search and evaluation logic as its C++ counterpart, but compiles to a smaller and more portable binary, which makes it a natural fit for embedded targets. Since August 2020, Cfish has included the NNUE evaluation ported from Stockfish, together with SIMD-optimised code paths for AVX2 and AVX-512.
+<span style="color: #808080;">[Deploying our NNUE with Cfish]</span> The Mixture-of-Experts NNUE developed in this chapter is not intended to run as a standalone evaluator. It is designed to replace the evaluation component of an existing chess engine, so that its behaviour can be assessed within the full search pipeline, and so that its cost can be measured against the constraints of the target hardware. The host engine selected for this purpose is Cfish, a port of Stockfish written in plain C by Ronald de Man and first published on GitHub in July 2016. Cfish shares the same search and evaluation logic as its C++ counterpart, but compiles to a smaller and more portable binary, which makes it a natural fit for embedded targets. Since August 2020, Cfish has included the NNUE evaluation ported from Stockfish, together with SIMD-optimised code paths for AVX2 and AVX-512. #todo link
 
 <span style="color: #808080;">[The evaluation function and search in Cfish]</span> The evaluation function in Cfish follows the *HalfKP* feature set, in which the active inputs are the positions of the non-king pieces relative to the square of the friendly king. The accumulator is updated incrementally as moves are made, and the network output is a scalar value in centipawns from the side-to-move perspective. The search is an alpha-beta variant with iterative deepening, move ordering, and a transposition table, and it calls the evaluation function at every leaf node. The integration described in the following section replaces the single NNUE head with the MoE architecture, while leaving the search tree, the move generation, and the transposition table unchanged.
 
