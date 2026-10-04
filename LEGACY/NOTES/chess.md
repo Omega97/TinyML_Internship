@@ -99,4 +99,4 @@ A single bug in any of these can cause illegal moves or miss legal ones. **Perft
 
 ---
 
-[← Back to Notes index](_notes.md)
+[← Back to Notes index](LEGACY/NOTES/_notes.md)

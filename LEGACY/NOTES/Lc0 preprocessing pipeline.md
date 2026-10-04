@@ -302,4 +302,4 @@ SARDINE **non** usa l’input 768 HalfKP di Stockfish. Piano:
 
 ---
 
-[← Indice Notes](_notes.md)
+[← Indice Notes](LEGACY/NOTES/_notes.md)

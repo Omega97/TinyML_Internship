@@ -99,4 +99,4 @@ Older export-pipeline notes: [Commands.md](Commands.md).
 
 ---
 
-[← Back to Notes index](_notes.md)
+[← Back to Notes index](LEGACY/NOTES/_notes.md)

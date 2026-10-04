@@ -337,4 +337,4 @@ Short bundles if you want a starting point before mixing options:
 
 ---
 
-[[SARDINE Engine Blueprint]] · [← Notes index](_notes.md)
+[[SARDINE Engine Blueprint]] · [← Notes index](LEGACY/NOTES/_notes.md)

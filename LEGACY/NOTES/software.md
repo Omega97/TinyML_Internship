@@ -150,4 +150,4 @@ TorchScript is a way to intermediate between PyTorch and a high-performance envi
 
 ---
 
-[← Back to Notes index](_notes.md)
+[← Back to Notes index](LEGACY/NOTES/_notes.md)

@@ -185,4 +185,4 @@ More setup notes: [arduino.md](Arduino.md).
 
 ---
 
-[← Back to Notes index](_notes.md)
+[← Back to Notes index](LEGACY/NOTES/_notes.md)

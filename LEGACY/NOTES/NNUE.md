@@ -191,4 +191,4 @@ See also: [PROJECT.md](../PROJECT.md) (Small NNUE target), [Models.md](Models.md
 
 ---
 
-[← Back to Notes index](_notes.md)
+[← Back to Notes index](LEGACY/NOTES/_notes.md)
