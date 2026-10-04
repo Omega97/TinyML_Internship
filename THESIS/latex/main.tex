@@ -1,0 +1,60 @@
+\documentclass[a4paper,11pt,oneside,openany]{book}
+
+\usepackage{fontspec}
+\setmainfont{DejaVu Serif}
+\setmonofont{DejaVu Sans Mono}
+
+\usepackage{amsmath,amssymb,amsfonts}
+\usepackage{graphicx}
+\usepackage{booktabs}
+\usepackage{longtable}
+\usepackage{array}
+\usepackage{multirow}
+\usepackage{float}
+\usepackage{xcolor}
+\usepackage{hyperref}
+\usepackage{fancyhdr}
+\usepackage{textcomp}
+\usepackage{csquotes}
+
+\graphicspath{{../../}}
+
+\hypersetup{
+    colorlinks=true,
+    linkcolor=blue,
+    citecolor=blue,
+    urlcolor=blue,
+    pdftitle={Unsupervised State Bucketing for Mixture of Experts in Resource-Constrained Chess Engines},
+    pdfauthor={Omar Cusma Fait}
+}
+
+\setlength{\headheight}{30pt}
+\pagestyle{fancy}
+\fancyhf{}
+\chead{\leftmark}
+\rhead{\thepage}
+\renewcommand{\headrulewidth}{0.4pt}
+
+\title{Unsupervised State Bucketing for Mixture of Experts in Resource-Constrained Chess Engines}
+\author{Omar Cusma Fait}
+
+\begin{document}
+\maketitle
+\tableofcontents
+
+\frontmatter
+\input{chapters/abstract}
+
+\mainmatter
+\input{chapters/introduction}
+\input{chapters/background}
+\input{chapters/method}
+\input{chapters/implementation}
+\input{chapters/results}
+\input{chapters/discussion}
+\input{chapters/conclusion}
+
+\appendix
+\input{chapters/appendix}
+
+\end{document}

@@ -1,0 +1,25 @@
+{
+  "n_clusters": 2,
+  "n_rows": 200000,
+  "sizes": [
+    93110,
+    106890
+  ],
+  "empty": 0,
+  "min_size": 93110,
+  "max_size": 106890,
+  "inertia": 146441.5,
+  "centroid_cosine_mean_offdiag": -0.969034385328198,
+  "centroid_cosine_min_offdiag": -0.969034385328198,
+  "centroid_cosine": [
+    [
+      0.9999999999999998,
+      -0.969034385328198
+    ],
+    [
+      -0.969034385328198,
+      1.0
+    ]
+  ],
+  "representation": "head_gradient_48d"
+}

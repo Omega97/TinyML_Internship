@@ -485,6 +485,7 @@ def fine_tune_experts(
     epochs: int = 2,
     batch_size: int = 2048,
     lr: float = 1e-3,
+    lr_end: float | None = None,
     holdout_fraction: float = 0.10,
     seed: int = 0,
     dispatcher_kind: str = "linear",
@@ -539,6 +540,11 @@ def fine_tune_experts(
             [p for p in expert.parameters() if p.requires_grad],
             lr=float(lr),
         )
+        sched = None
+        if lr_end is not None and int(epochs) > 1:
+            sched = torch.optim.lr_scheduler.CosineAnnealingLR(
+                opt, T_max=int(epochs), eta_min=float(lr_end)
+            )
 
         def _batches(positions: np.ndarray):
             if positions.size == 0:
@@ -584,6 +590,8 @@ def fine_tune_experts(
                 loss = ce / w.clamp_min(1e-8)
                 loss.backward()
                 opt.step()
+            if sched is not None:
+                sched.step()
             hold_ce = _eval(hold_pos)
             if log:
                 log(
@@ -606,6 +614,8 @@ def fine_tune_experts(
                 "skipped": 0,
             }
         )
+        moe.save(work_dir / "moe.pt")
+        _write_json(work_dir / "expert_metrics.json", {"expert_labels": expert_labels, "buckets": per_bucket})
 
     moe.save(work_dir / "moe.pt")
     _write_json(work_dir / "expert_metrics.json", {"expert_labels": expert_labels, "buckets": per_bucket})
