@@ -33,7 +33,7 @@ import torch.nn.functional as F
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent.parent / "src"))
 
-from tinymlinternship.config.settings import NNUE_CHECKPOINTS_DIR, PROCESSED_DATA_DIR, PROJECT_ROOT
+from tinymlinternship.config.settings import NNUE_CHECKPOINTS_DIR, PROCESSED_DATA_DIR, PROJECT_ROOT, SARDINE_MODELS_DIR
 from tinymlinternship.data.board_store import BOARD_EVAL_DIR_NAME, FEN_VALUE_VISITS_DIR_NAME
 from tinymlinternship.features import piece_square_count
 from tinymlinternship.nnue.clustering_eval import piece_count_labels, piece_counts_from_indices
@@ -50,8 +50,13 @@ from tinymlinternship.nnue.moe import (
     LinearDispatcher,
     MLPDispatcher,
     SoftGatedMoE,
+    checkpoint_encoder_info,
+    dispatcher_checkpoint_info,
+    load_dispatcher,
     load_dual_hidden_checkpoint,
+    save_dispatcher,
 )
+from tinymlinternship.nnue.world_model import train_world_model_encoder
 from tinymlinternship.nnue.moe_data import (
     batches_to_device,
     load_train_pack,
@@ -67,6 +72,7 @@ from tinymlinternship.nnue.moe_pipeline import (
     compute_gradients,
     configure_torch,
 )
+from tinymlinternship.nnue.optimizers import Rprop
 from tinymlinternship.nnue.sample_gradients import (
     head_parameter_dim,
     make_projection_matrix,
@@ -76,6 +82,7 @@ from tinymlinternship.nnue.sample_gradients import (
 DEFAULT_SLICES = PROCESSED_DATA_DIR / BOARD_EVAL_DIR_NAME / FEN_VALUE_VISITS_DIR_NAME
 DEFAULT_CHECKPOINT = NNUE_CHECKPOINTS_DIR / "dual_h128_H256_e200_bpe512_bs10000" / "best.pt"
 UI_PACK_ROOT = PROCESSED_DATA_DIR / BOARD_EVAL_DIR_NAME / "moe"
+DISPATCHER_CHECKPOINTS_DIR = SARDINE_MODELS_DIR / "checkpoints" / "dispatchers"
 
 L1_CHUNK = 16_384
 CLUSTER_CHUNK = 1_000_000
@@ -116,6 +123,16 @@ class TrainingConfig:
     h: int = 128
     H: int = 256
     base_epochs: int = 20
+    # encoder (L1): standard accumulator vs self-supervised world model
+    encoder: str = "standard"  # "standard" | "world_model"
+    world_model_source: str = "train"  # "train" | "load"
+    wm_checkpoint: str = ""
+    wm_loss: str = "infonce"  # "infonce" | "vicreg"
+    wm_tau: float = 0.1
+    wm_epochs: int = 5
+    wm_lr: float = 1e-3
+    wm_normalize: bool = True
+    wm_vicreg_gamma: float = 1.0
     # data
     max_rows: int = 2_000_000
     max_test: int = 50_000
@@ -127,10 +144,13 @@ class TrainingConfig:
     dispatcher_hidden: int = 64
     dispatcher_epochs: int = 8
     dispatcher_lr: float = 1e-2
+    dispatcher_source: str = "train"  # "train" | "load"
+    dispatcher_checkpoint: str = ""
     # experts (hard MoE)
     expert_epochs: int = 2
     expert_lr: float = 1e-3
     expert_lr_end: float = 1e-4
+    expert_optimizer: str = "adam"  # "adam" | "sgd" | "rprop"
     l1_frozen: bool = True
     # switch (end-to-end top-1)
     switch_alpha: float = 0.01
@@ -167,10 +187,19 @@ def _train_new_base(
     device: torch.device,
     emit: EmitFn,
     cancel: CancelToken,
+    *,
+    freeze_l1: bool = False,
 ) -> None:
-    """Mini base-model training (all parameters) on the packed rows."""
+    """Mini base-model training (all parameters) on the packed rows.
+
+    When ``freeze_l1`` is set the L1 layer is frozen and only ``l2`` + ``head``
+    are trained (used after contrastive world-model L1 training).
+    """
+    if freeze_l1:
+        for param in base.l1.parameters():
+            param.requires_grad = False
     n = len(pack)
-    opt = torch.optim.Adam(base.parameters(), lr=1e-2)
+    opt = torch.optim.Adam([p for p in base.parameters() if p.requires_grad], lr=1e-2)
     sched = torch.optim.lr_scheduler.LinearLR(
         opt, start_factor=1.0, end_factor=1e-3 / 1e-2, total_iters=max(cfg.base_epochs, 1)
     )
@@ -586,12 +615,22 @@ def _fine_tune_experts(
         if cfg.l1_frozen:
             for param in expert.l1.parameters():
                 param.requires_grad = False
-        opt = torch.optim.Adam([p for p in expert.parameters() if p.requires_grad], lr=cfg.expert_lr)
+        params = [p for p in expert.parameters() if p.requires_grad]
+        if cfg.expert_optimizer == "sgd":
+            opt = torch.optim.SGD(params, lr=cfg.expert_lr)
+        elif cfg.expert_optimizer == "rprop":
+            opt = Rprop(params, lr=cfg.expert_lr)
+        else:
+            opt = torch.optim.Adam(params, lr=cfg.expert_lr)
         sched = None
-        if cfg.expert_lr_end is not None and cfg.expert_epochs > 1:
+        if cfg.expert_optimizer != "rprop" and cfg.expert_lr_end is not None and cfg.expert_epochs > 1:
             sched = torch.optim.lr_scheduler.CosineAnnealingLR(
                 opt, T_max=cfg.expert_epochs, eta_min=cfg.expert_lr_end
             )
+        # Rprop needs the noiseless full-dataset gradient (sign-based updates
+        # are unstable on mini-batch noise), so it accumulates gradients over the
+        # whole bucket and steps once per epoch. Adam/SGD keep per-batch steps.
+        full_batch = cfg.expert_optimizer == "rprop"
 
         def _batches(positions: np.ndarray):
             for start in range(0, int(positions.size), EXPERT_BATCH):
@@ -614,11 +653,16 @@ def _fine_tune_experts(
             return float((ce_sum / w_sum.clamp_min(1e-8)).item())
 
         base_hold = _eval(hold_pos)
-        best_ce = float("inf")
+        best_ce = base_hold
         best_state = {k: v.detach().cpu().clone() for k, v in expert.state_dict().items()}
+        prev_hold = base_hold
         for epoch in range(1, cfg.expert_epochs + 1):
             cancel.check()
             expert.train()
+            if full_batch:
+                # snapshot weights before the step for loss-based backtracking
+                prev_state = {k: v.detach().cpu().clone() for k, v in expert.state_dict().items()}
+            opt.zero_grad(set_to_none=True)
             for batch in _batches(train_pos):
                 logits = expert(
                     batch["white_idx"], batch["black_idx"], batch["stm_white"],
@@ -626,12 +670,25 @@ def _fine_tune_experts(
                 )
                 ce, _mae, w = ce_and_mae(logits, batch["target"], batch["weight"])
                 loss = ce / w.clamp_min(1e-8)
-                opt.zero_grad(set_to_none=True)
                 loss.backward()
+                if not full_batch:
+                    opt.step()
+                    opt.zero_grad(set_to_none=True)
+            if full_batch:
                 opt.step()
             if sched is not None:
                 sched.step()
             hold_ce = _eval(hold_pos)
+            if full_batch and hold_ce > prev_hold:
+                # Loss went up on the noiseless full-batch step: backtrack to
+                # the previous weights and reduce the step sizes so it can only
+                # go back down (guaranteed non-increasing holdout CE).
+                expert.load_state_dict(prev_state)
+                opt.shrink_step_sizes()
+                opt.reset_tracking()
+                hold_ce = prev_hold
+            else:
+                prev_hold = hold_ce
             emit(
                 {
                     "stage": "expert",
@@ -677,6 +734,58 @@ def _piece_ids(batch: dict, limit: int) -> np.ndarray:
     white_mask = batch["white_mask"].cpu().numpy()
     counts = piece_counts_from_indices(white_idx, white_mask.sum(axis=1), limit=limit)
     return piece_count_labels(counts).astype(np.int64)
+
+
+@torch.inference_mode()
+def _evaluate_base(
+    base: DualHiddenNNUE,
+    folders: list[Path],
+    cfg: TrainingConfig,
+    device: torch.device,
+    emit: EmitFn,
+    cancel: CancelToken,
+) -> dict:
+    """Test-set CE/MAE for the base model alone (K=1, no MoE)."""
+    planned = plan_split_indices(folders, 0.01, seed=0)
+    test_parts = subsample_parts([p[2] for p in planned], cfg.max_test, seed=1)
+    base_ce = base_mae = 0.0
+    w_sum = 0.0
+    n_rows = 0
+    total = int(sum(int(np.asarray(p).size) for p in test_parts))
+    base.eval()
+    for (folder, _tr, _te), rows in zip(planned, test_parts):
+        rows = np.asarray(rows, dtype=np.int64)
+        if rows.size == 0:
+            continue
+        ds = FenValueVisitsDataset(folder, progress=False)
+        for start in range(0, int(rows.size), EVAL_BATCH):
+            cancel.check()
+            idx = rows[start : start + EVAL_BATCH]
+            batch = batches_to_device(ds.gather(idx), device)
+            logits = base(
+                batch["white_idx"], batch["black_idx"], batch["stm_white"],
+                batch["white_mask"], batch["black_mask"],
+            )
+            bce, bmae, w = ce_and_mae(logits, batch["target"].float(), batch["weight"])
+            base_ce += float(bce.item())
+            base_mae += float(bmae.item())
+            w_sum += float(w.item())
+            n_rows += int(idx.size)
+            emit(
+                {
+                    "stage": "eval",
+                    "event": "progress",
+                    "msg": f"evaluating {n_rows:,}/{total:,}",
+                    "progress": n_rows / max(total, 1),
+                }
+            )
+        del ds
+    denom = max(w_sum, 1e-8)
+    return {
+        "n_test": n_rows,
+        "base_ce": base_ce / denom,
+        "base_mae": base_mae / denom,
+    }
 
 
 @torch.inference_mode()
@@ -987,7 +1096,16 @@ def run_moe_training(cfg: TrainingConfig, emit: EmitFn, cancel: CancelToken) -> 
     # -- resolve the base model up front so the gradient-cache directory can be
     # keyed by the actual architecture + row count. Otherwise a new arch / row
     # count would reuse (and clash with) a stale cache from a previous run.
-    if cfg.base_source == "load":
+    use_world_model = cfg.encoder == "world_model"
+    if use_world_model and cfg.world_model_source == "load":
+        wm_ckpt = Path(cfg.wm_checkpoint)
+        base = load_dual_hidden_checkpoint(wm_ckpt, device=device)
+        if not base.is_world_model:
+            raise ValueError(
+                f"{wm_ckpt.name} is not a world-model checkpoint (encoder={base.encoder!r})"
+            )
+        h_actual, H_actual = base.hidden_dim, base.hidden2_dim
+    elif cfg.base_source == "load":
         ckpt = Path(cfg.base_checkpoint)
         base = load_dual_hidden_checkpoint(ckpt, device=device)
         h_actual, H_actual = base.hidden_dim, base.hidden2_dim
@@ -1001,12 +1119,81 @@ def run_moe_training(cfg: TrainingConfig, emit: EmitFn, cancel: CancelToken) -> 
     work_dir.mkdir(parents=True, exist_ok=True)
 
     # -- loading: pack the training rows ------------------------------------
-    emit({"stage": "loading", "event": "start", "msg": f"packing {cfg.max_rows:,} rows"})
-    _build_pack(folders, pack_dir, cfg, emit, cancel)
+    # A pack is only needed to (re)train the base or to run any MoE stage; a
+    # base-only run that loads a checkpoint can skip it entirely.
+    needs_pack = (
+        cfg.base_source == "new"
+        or (use_world_model and cfg.world_model_source == "train")
+        or int(cfg.k) > 1
+    )
+    if needs_pack:
+        emit({"stage": "loading", "event": "start", "msg": f"packing {cfg.max_rows:,} rows"})
+        _build_pack(folders, pack_dir, cfg, emit, cancel)
+    else:
+        emit({"stage": "loading", "event": "skip", "msg": "base-only (no pack)"})
 
     # -- base model ----------------------------------------------------------
     emit({"stage": "base", "event": "start"})
-    if cfg.base_source == "load":
+    if use_world_model and cfg.world_model_source == "load":
+        emit(
+            {
+                "stage": "base",
+                "event": "done",
+                "source": "world_model",
+                "h": base.hidden_dim,
+                "H": base.hidden2_dim,
+                "params": int(sum(p.numel() for p in base.parameters())),
+                "msg": f"loaded world model {wm_ckpt.name} (W{base.hidden_dim}_H{base.hidden2_dim})",
+            }
+        )
+    elif use_world_model and cfg.world_model_source == "train":
+        emit(
+            {
+                "stage": "base",
+                "event": "start_train",
+                "h": h_actual,
+                "H": H_actual,
+                "epochs": cfg.base_epochs,
+                "params": int(sum(p.numel() for p in base.parameters())),
+                "world_model": True,
+            }
+        )
+        pack, _s, _l = load_train_pack(pack_dir)
+        train_world_model_encoder(base, pack, cfg, device, emit, cancel)
+        _train_new_base(base, pack, cfg, device, emit, cancel, freeze_l1=True)
+        del pack
+        # persist the world-model base so it can be loaded again later
+        wm_dir = NNUE_CHECKPOINTS_DIR / f"worldmodel_h{h_actual}_H{H_actual}"
+        base.save(wm_dir / "best.pt")
+        (wm_dir / "config.json").write_text(
+            json.dumps(
+                {
+                    "hidden_dim": h_actual,
+                    "hidden2_dim": H_actual,
+                    "encoder": "world_model",
+                    "normalize_l1": base.normalize_l1,
+                    "wm_loss": cfg.wm_loss,
+                    "wm_tau": cfg.wm_tau,
+                    "wm_epochs": cfg.wm_epochs,
+                    "wm_lr": cfg.wm_lr,
+                    "base_epochs": cfg.base_epochs,
+                },
+                indent=2,
+            ),
+            encoding="utf-8",
+        )
+        emit(
+            {
+                "stage": "base",
+                "event": "done",
+                "source": "world_model",
+                "h": h_actual,
+                "H": H_actual,
+                "saved": str(wm_dir / "best.pt"),
+                "msg": f"trained world model → {wm_dir.name} (W{h_actual}_H{H_actual})",
+            }
+        )
+    elif cfg.base_source == "load":
         emit(
             {
                 "stage": "base",
@@ -1015,7 +1202,11 @@ def run_moe_training(cfg: TrainingConfig, emit: EmitFn, cancel: CancelToken) -> 
                 "h": base.hidden_dim,
                 "H": base.hidden2_dim,
                 "params": int(sum(p.numel() for p in base.parameters())),
-                "msg": f"loaded {ckpt.name} (W{base.hidden_dim}_H{base.hidden2_dim})",
+                "world_model": base.is_world_model,
+                "msg": (
+                    f"loaded {ckpt.name} (W{base.hidden_dim}_H{base.hidden2_dim}"
+                    f"{', world model' if base.is_world_model else ''})"
+                ),
             }
         )
     else:
@@ -1033,6 +1224,22 @@ def run_moe_training(cfg: TrainingConfig, emit: EmitFn, cancel: CancelToken) -> 
         _train_new_base(base, pack, cfg, device, emit, cancel)
         del pack
         emit({"stage": "base", "event": "done", "source": "new", "h": cfg.h, "H": cfg.H})
+
+    # -- base-only (K=1, no MoE) --------------------------------------------
+    if int(cfg.k) <= 1:
+        emit({"stage": "eval", "event": "start"})
+        metrics = _evaluate_base(base, folders, cfg, device, emit, cancel)
+        (work_dir / "eval.json").write_text(json.dumps(metrics, indent=2), encoding="utf-8")
+        emit({"stage": "eval", "event": "done", **metrics})
+        summary = {
+            "run_name": cfg.run_name,
+            "technique": "base",
+            "config": cfg.to_dict(),
+            "metrics": metrics,
+        }
+        (work_dir / "summary.json").write_text(json.dumps(summary, indent=2), encoding="utf-8")
+        emit({"stage": "done", "summary": summary})
+        return metrics
 
     # -- switch (end-to-end sparse top-1 MoE) --------------------------------
     if cfg.technique == "switch":
@@ -1108,14 +1315,43 @@ def run_moe_training(cfg: TrainingConfig, emit: EmitFn, cancel: CancelToken) -> 
         disp_labels = labels
         best_val_acc = None
         disp = None
-        emit({"stage": "dispatcher", "event": "skip", "msg": "piece-count rule (no training)"})
+        emit({"stage": "dispatcher", "event": "skip", "msg": "piece-count rule (no dispatcher)"})
     else:
         pack, _s, _l = load_train_pack(pack_dir)
         l1 = build_l1(pack, base, device, cancel, emit)
-        emit({"stage": "dispatcher", "event": "start", "type": cfg.dispatcher_type})
-        disp, info = _train_dispatcher(l1, labels, cfg, device, emit, cancel)
-        best_val_acc = info["best_val_acc"]
-        disp_labels = _predict_labels(disp, l1, device, cancel)
+        if cfg.dispatcher_source == "load":
+            # A dispatcher is independent of the clustering algorithm: it only
+            # needs its input dim and bucket count to match the current base and
+            # K. The experts then train on whatever partitions it produces.
+            disp = load_dispatcher(cfg.dispatcher_checkpoint, device=device)
+            in_dim = int(base.hidden_dim) * 2
+            if disp.in_dim != in_dim:
+                raise ValueError(
+                    f"dispatcher input dim {disp.in_dim} != base L1 concat {in_dim} "
+                    f"(load a dispatcher trained on W={base.hidden_dim})"
+                )
+            if disp.n_clusters != cfg.k:
+                raise ValueError(
+                    f"dispatcher buckets {disp.n_clusters} != Heads K {cfg.k} "
+                    f"(set Heads K to {disp.n_clusters})"
+                )
+            disp_labels = _predict_labels(disp, l1, device, cancel)
+            best_val_acc = None
+            emit(
+                {
+                    "stage": "dispatcher",
+                    "event": "start",
+                    "type": "load",
+                    "checkpoint": Path(cfg.dispatcher_checkpoint).parent.name,
+                }
+            )
+        else:
+            emit({"stage": "dispatcher", "event": "start", "type": cfg.dispatcher_type})
+            disp, info = _train_dispatcher(l1, labels, cfg, device, emit, cancel)
+            best_val_acc = info["best_val_acc"]
+            disp_labels = _predict_labels(disp, l1, device, cancel)
+            # persist the trained dispatcher so it can be loaded in later runs
+            save_dispatcher(disp, DISPATCHER_CHECKPOINTS_DIR / cfg.run_name / "dispatcher.pt")
         del l1
         del pack
         emit(
@@ -1164,4 +1400,53 @@ def iter_checkpoints() -> list[Path]:
     out: list[Path] = []
     for best in sorted(root.glob("*/best.pt")):
         out.append(best)
+    return out
+
+
+def iter_checkpoints_info() -> list[dict]:
+    """List base checkpoints with their encoder type and widths.
+
+    Each entry: ``{path, name, encoder, is_world_model, hidden_dim, hidden2_dim}``.
+    ``encoder`` is read from the checkpoint payload (defaults to ``"standard"``
+    for legacy checkpoints without the flag).
+    """
+    root = NNUE_CHECKPOINTS_DIR
+    if not root.is_dir():
+        return []
+    out: list[dict] = []
+    for best in sorted(root.glob("*/best.pt")):
+        info = checkpoint_encoder_info(best) or {}
+        out.append(
+            {
+                "path": str(best),
+                "name": best.parent.name,
+                "encoder": info.get("encoder", "standard"),
+                "is_world_model": info.get("encoder", "standard") == "world_model",
+                "hidden_dim": info.get("hidden_dim", -1),
+                "hidden2_dim": info.get("hidden2_dim", -1),
+            }
+        )
+    return out
+
+
+def iter_dispatchers() -> list[dict]:
+    """List saved dispatcher checkpoints for the UI dropdown.
+
+    Each entry: ``{path, name, dispatcher_type, in_dim, n_clusters}``.
+    """
+    root = DISPATCHER_CHECKPOINTS_DIR
+    if not root.is_dir():
+        return []
+    out: list[dict] = []
+    for p in sorted(root.glob("*/dispatcher.pt")):
+        info = dispatcher_checkpoint_info(p) or {}
+        out.append(
+            {
+                "path": str(p),
+                "name": p.parent.name,
+                "dispatcher_type": info.get("dispatcher_type", "mlp"),
+                "in_dim": info.get("in_dim", -1),
+                "n_clusters": info.get("n_clusters", -1),
+            }
+        )
     return out

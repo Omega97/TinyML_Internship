@@ -1,0 +1,46 @@
+{
+  "run_name": "load_dual_h128_H256_e200_bpe512_bs10000_switch_k2_a0.01_ep5_lr0.001_10M_50k",
+  "technique": "switch",
+  "config": {
+    "technique": "switch",
+    "base_source": "load",
+    "base_checkpoint": "/home/omar/jupyterlab/TinyML_Internship/models/checkpoints/nnue/dual_h128_H256_e200_bpe512_bs10000/best.pt",
+    "h": 128,
+    "H": 256,
+    "base_epochs": 20,
+    "max_rows": 10000000,
+    "max_test": 50000,
+    "clustering": "gradient",
+    "k": 2,
+    "dispatcher_type": "mlp",
+    "dispatcher_hidden": 64,
+    "dispatcher_epochs": 8,
+    "dispatcher_lr": 0.01,
+    "expert_epochs": 3,
+    "expert_lr": 0.01,
+    "expert_lr_end": 0.0001,
+    "l1_frozen": true,
+    "switch_alpha": 0.01,
+    "switch_epochs": 5,
+    "switch_lr": 0.001,
+    "device": "auto",
+    "run_name": "load_dual_h128_H256_e200_bpe512_bs10000_switch_k2_a0.01_ep5_lr0.001_10M_50k"
+  },
+  "metrics": {
+    "n_test": 50000,
+    "moe_ce": 0.6303560614740849,
+    "moe_mae": 0.13306696045547725,
+    "gate_entropy": 0.607182563521266,
+    "load_distribution": [
+      0.49342,
+      0.50658
+    ],
+    "load_variance": 4.3296400000000035e-05,
+    "load_max_min_ratio": 1.026670990231446,
+    "base_ce": 0.6302555877256394,
+    "base_mae": 0.13261923822283744,
+    "best_expert_ce": 0.6219738815844059,
+    "best_expert_mae": 0.12145509876817465
+  },
+  "best_test_ce": 0.6303560614740849
+}

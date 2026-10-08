@@ -10,7 +10,7 @@ import torch.nn as nn
 import torch.nn.functional as F
 
 from tinymlinternship.features import FEATURE_DIM
-from tinymlinternship.nnue.model import DualHiddenNNUE, crelu
+from tinymlinternship.nnue.model import DualHiddenNNUE, crelu, l1_activation
 from tinymlinternship.nnue.sample_gradients import head_parameter_dim
 
 
@@ -30,9 +30,34 @@ def load_dual_hidden_checkpoint(
         w = int(hidden_dim)
     if hidden2_dim is not None:
         h2 = int(hidden2_dim)
-    model = DualHiddenNNUE(feature_dim=FEATURE_DIM, hidden_dim=w, hidden2_dim=h2)
+    encoder = str(payload.get("encoder", "standard"))
+    normalize_l1 = bool(payload.get("normalize_l1", False))
+    model = DualHiddenNNUE(
+        feature_dim=FEATURE_DIM,
+        hidden_dim=w,
+        hidden2_dim=h2,
+        encoder=encoder,
+        normalize_l1=normalize_l1,
+    )
     model.load_state_dict(payload["model_state_dict"])
     return model.to(device)
+
+
+def checkpoint_encoder_info(path: Path | str) -> dict[str, Any] | None:
+    """Read ``encoder`` / ``normalize_l1`` / widths from a checkpoint without the weights."""
+    try:
+        payload = torch.load(Path(path), map_location="cpu", weights_only=False)
+    except Exception:
+        return None
+    if not isinstance(payload, dict) or "model_state_dict" not in payload:
+        return None
+    return {
+        "encoder": str(payload.get("encoder", "standard")),
+        "normalize_l1": bool(payload.get("normalize_l1", False)),
+        "hidden_dim": int(payload.get("hidden_dim", -1)),
+        "hidden2_dim": int(payload.get("hidden2_dim", -1)),
+        "architecture": payload.get("architecture"),
+    }
 
 
 def _clone_linear(src: nn.Linear) -> nn.Linear:
@@ -84,6 +109,66 @@ class MLPDispatcher(nn.Module):
         return self.forward(h).argmax(dim=-1)
 
 
+def save_dispatcher(disp: nn.Module, path: Path | str) -> None:
+    """Persist a trained dispatcher (linear or MLP) so it can be loaded later.
+
+    The dispatcher is stored independently of any clustering algorithm: it only
+    records its own type, input dim, and output buckets. Experts trained from it
+    use whatever partitions it produces, regardless of how it was obtained.
+    """
+    path = Path(path)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    if isinstance(disp, LinearDispatcher):
+        payload: dict[str, Any] = {
+            "dispatcher_type": "linear",
+            "in_dim": int(disp.in_dim),
+            "n_clusters": int(disp.n_clusters),
+            "model_state_dict": disp.state_dict(),
+        }
+    else:
+        payload = {
+            "dispatcher_type": "mlp",
+            "in_dim": int(disp.in_dim),
+            "n_clusters": int(disp.n_clusters),
+            "hidden_dim": int(disp.hidden_dim),
+            "model_state_dict": disp.state_dict(),
+        }
+    torch.save(payload, path)
+
+
+def load_dispatcher(
+    path: Path | str,
+    *,
+    device: torch.device | str = "cpu",
+) -> LinearDispatcher | MLPDispatcher:
+    """Load a dispatcher saved with :func:`save_dispatcher`."""
+    payload = torch.load(Path(path), map_location="cpu", weights_only=False)
+    in_dim = int(payload["in_dim"])
+    n_clusters = int(payload["n_clusters"])
+    if payload.get("dispatcher_type") == "linear":
+        disp: LinearDispatcher | MLPDispatcher = LinearDispatcher(in_dim, n_clusters)
+    else:
+        disp = MLPDispatcher(in_dim, n_clusters, hidden_dim=int(payload.get("hidden_dim", 64)))
+    disp.load_state_dict(payload["model_state_dict"])
+    return disp.to(device)
+
+
+def dispatcher_checkpoint_info(path: Path | str) -> dict[str, Any] | None:
+    """Read dispatcher metadata (type / dims / buckets) without the weights."""
+    try:
+        payload = torch.load(Path(path), map_location="cpu", weights_only=False)
+    except Exception:
+        return None
+    if not isinstance(payload, dict) or "model_state_dict" not in payload:
+        return None
+    return {
+        "dispatcher_type": payload.get("dispatcher_type", "mlp"),
+        "in_dim": int(payload.get("in_dim", -1)),
+        "n_clusters": int(payload.get("n_clusters", -1)),
+        "hidden_dim": int(payload.get("hidden_dim", -1)),
+    }
+
+
 class DualHiddenMoE(nn.Module):
     """Shared frozen L1 + linear dispatcher + ``B`` expert (L2, head) blocks."""
 
@@ -104,6 +189,8 @@ class DualHiddenMoE(nn.Module):
         self.hidden_dim = base.hidden_dim
         self.hidden2_dim = base.hidden2_dim
         self.crelu_clip = base.crelu_clip
+        self.encoder = getattr(base, "encoder", "standard")
+        self.normalize_l1 = getattr(base, "normalize_l1", False)
         self.n_experts = n_experts
         self.l1 = _clone_linear(base.l1)
         self.experts_l2 = nn.ModuleList(_clone_linear(base.l2) for _ in range(n_experts))
@@ -131,7 +218,7 @@ class DualHiddenMoE(nn.Module):
         self.experts_head[int(expert_id)].load_state_dict(base.head.state_dict())
 
     def l1_dense(self, features: torch.Tensor) -> torch.Tensor:
-        return crelu(self.l1(features), self.crelu_clip)
+        return l1_activation(self.l1(features), self.encoder, self.crelu_clip, self.normalize_l1)
 
     def l1_sparse(self, indices: torch.Tensor, mask: torch.Tensor) -> torch.Tensor:
         safe = indices.long().clamp(min=0, max=self.feature_dim - 1)
@@ -142,7 +229,7 @@ class DualHiddenMoE(nn.Module):
             dtype=self.l1.weight.dtype,
         )
         features.scatter_add_(1, safe, mask.to(dtype=features.dtype))
-        return crelu(self.l1(features), self.crelu_clip)
+        return l1_activation(self.l1(features), self.encoder, self.crelu_clip, self.normalize_l1)
 
     def stm_concat(
         self,
@@ -229,6 +316,8 @@ class DualHiddenMoE(nn.Module):
             "hidden_dim": self.hidden_dim,
             "hidden2_dim": self.hidden2_dim,
             "n_experts": self.n_experts,
+            "encoder": self.encoder,
+            "normalize_l1": self.normalize_l1,
             "model_state_dict": self.state_dict(),
             "head_parameter_dim": head_parameter_dim(self.hidden_dim, self.hidden2_dim),
         }
@@ -244,7 +333,12 @@ class DualHiddenMoE(nn.Module):
         hidden_dim = int(payload["hidden_dim"])
         hidden2_dim = int(payload["hidden2_dim"])
         n_experts = int(payload["n_experts"])
-        base = DualHiddenNNUE(hidden_dim=hidden_dim, hidden2_dim=hidden2_dim)
+        base = DualHiddenNNUE(
+            hidden_dim=hidden_dim,
+            hidden2_dim=hidden2_dim,
+            encoder=str(payload.get("encoder", "standard")),
+            normalize_l1=bool(payload.get("normalize_l1", False)),
+        )
         moe = cls(base, n_experts)
         moe.load_state_dict(payload["model_state_dict"])
         return moe.to(device)
@@ -281,6 +375,8 @@ class SoftGatedMoE(nn.Module):
         self.hidden_dim = base.hidden_dim
         self.hidden2_dim = base.hidden2_dim
         self.crelu_clip = base.crelu_clip
+        self.encoder = getattr(base, "encoder", "standard")
+        self.normalize_l1 = getattr(base, "normalize_l1", False)
         self.n_experts = n_experts
         self.top_k = top_k
         self.l1 = _clone_linear(base.l1)
@@ -313,7 +409,7 @@ class SoftGatedMoE(nn.Module):
             dtype=self.l1.weight.dtype,
         )
         features.scatter_add_(1, safe, mask.to(dtype=features.dtype))
-        return crelu(self.l1(features), self.crelu_clip)
+        return l1_activation(self.l1(features), self.encoder, self.crelu_clip, self.normalize_l1)
 
     def l1_concat(
         self,
@@ -382,6 +478,8 @@ class SoftGatedMoE(nn.Module):
                 "hidden2_dim": self.hidden2_dim,
                 "n_experts": self.n_experts,
                 "top_k": self.top_k,
+                "encoder": self.encoder,
+                "normalize_l1": self.normalize_l1,
                 "model_state_dict": self.state_dict(),
             },
             path,

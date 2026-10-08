@@ -12,6 +12,7 @@ Run it from the repo root::
 from __future__ import annotations
 
 import io
+import math
 import re
 import sys
 import threading
@@ -26,8 +27,8 @@ import matplotlib
 matplotlib.use("Agg")
 from matplotlib import pyplot as plt
 
-from PyQt6.QtCore import QObject, Qt, QUrl, pyqtSignal
-from PyQt6.QtGui import QColor, QDesktopServices, QImage, QPalette, QPixmap
+from PyQt6.QtCore import QObject, QSettings, Qt, QUrl, pyqtSignal
+from PyQt6.QtGui import QCloseEvent, QColor, QDesktopServices, QImage, QPalette, QPixmap, QWheelEvent
 from PyQt6.QtWidgets import (
     QApplication,
     QCheckBox,
@@ -48,9 +49,16 @@ from PyQt6.QtWidgets import (
     QWidget,
 )
 
-from runner import CancelToken, CancelledError, TrainingConfig, iter_checkpoints, run_moe_training
+from runner import (
+    CancelToken,
+    CancelledError,
+    TrainingConfig,
+    iter_checkpoints_info,
+    iter_dispatchers,
+    run_moe_training,
+)
 
-STAGE_NAMES = ["loading", "base", "cluster", "dispatcher", "experts", "switch", "eval"]
+STAGE_NAMES = ["loading", "base", "world_model", "cluster", "dispatcher", "experts", "switch", "eval"]
 
 PROJECT_ROOT = Path(__file__).resolve().parent.parent.parent
 
@@ -69,6 +77,19 @@ def _fmt_eta(seconds: float) -> str:
         return f"ETA {m}m {s:02d}s"
     h, rem = divmod(int(seconds), 3600)
     return f"ETA {h}h {rem // 60:02d}m"
+
+
+class _LogStepDoubleSpinBox(QDoubleSpinBox):
+    """Double spin box whose mouse-wheel scroll multiplies/divides by 10."""
+
+    def wheelEvent(self, event: QWheelEvent) -> None:
+        delta = event.angleDelta().y()
+        if delta == 0:
+            super().wheelEvent(event)
+            return
+        factor = 10.0 if delta > 0 else 0.1
+        self.setValue(self.value() * factor)
+        event.accept()
 
 
 class _StageRow(QWidget):
@@ -171,8 +192,15 @@ class MainWindow(QMainWindow):
         self.status = self.statusBar()
         self.status.showMessage("Ready")
 
+        self.settings = QSettings("tinymlinternship", "moe_training_ui")
         self._apply_theme()
+        self._load_settings()
         self._sync_enabled_state()
+        self._refresh_run_name()
+
+    def closeEvent(self, event: QCloseEvent) -> None:
+        self._save_settings()
+        super().closeEvent(event)
 
     # ---------------------------------------------------------------- config
     def _build_config(self) -> QWidget:
@@ -188,8 +216,15 @@ class MainWindow(QMainWindow):
         self.technique.addItem("Hard MoE (cluster + router)", "hard_moe")
         self.technique.addItem("Switch (end-to-end top-1)", "switch")
         self.technique.currentIndexChanged.connect(self._sync_enabled_state)
+        self.k_combo = QComboBox()
+        self.k_combo.addItem("1 (no MoE)", 1)
+        for k in (2, 4, 8, 16):
+            self.k_combo.addItem(str(k), k)
+        self.k_combo.setCurrentIndex(3)  # 8
         tf.addRow("Method", self.technique)
+        tf.addRow("Heads K", self.k_combo)
         layout.addWidget(tech_group)
+        self.tech_group = tech_group
 
         # Base model
         base_group = QGroupBox("Base model")
@@ -215,6 +250,55 @@ class MainWindow(QMainWindow):
         bf.addRow("Base epochs", self.base_epochs)
         layout.addWidget(base_group)
 
+        # Encoder (L1): standard accumulator vs self-supervised world model
+        enc_group = QGroupBox("Encoder (L1)")
+        enf = QFormLayout(enc_group)
+        self.enc_layout = enf
+        self.encoder = QComboBox()
+        self.encoder.addItem("Standard L1 accumulator", "standard")
+        self.encoder.addItem("World model (self-supervised)", "world_model")
+        self.encoder.currentIndexChanged.connect(self._sync_enabled_state)
+        self.world_model_source = QComboBox()
+        self.world_model_source.addItem("Train", "train")
+        self.world_model_source.addItem("Load", "load")
+        self.world_model_source.currentIndexChanged.connect(self._sync_enabled_state)
+        self.wm_checkpoint = QComboBox()
+        self._refresh_world_models()
+        self.wm_loss = QComboBox()
+        self.wm_loss.addItem("InfoNCE", "infonce")
+        self.wm_loss.addItem("VICReg", "vicreg")
+        self.wm_tau = _LogStepDoubleSpinBox()
+        self.wm_tau.setDecimals(3)
+        self.wm_tau.setRange(0.01, 1.0)
+        self.wm_tau.setValue(0.1)
+        self.wm_epochs = QSpinBox()
+        self.wm_epochs.setRange(1, 200)
+        self.wm_epochs.setValue(5)
+        self.wm_lr = _LogStepDoubleSpinBox()
+        self.wm_lr.setDecimals(4)
+        self.wm_lr.setRange(1e-5, 1.0)
+        self.wm_lr.setValue(1e-3)
+        self.wm_normalize = QCheckBox("Unit-hypersphere normalize")
+        self.wm_normalize.setChecked(True)
+        self.wm_vicreg_gamma = QDoubleSpinBox()
+        self.wm_vicreg_gamma.setDecimals(2)
+        self.wm_vicreg_gamma.setRange(0.1, 5.0)
+        self.wm_vicreg_gamma.setValue(1.0)
+        enf.addRow("Type", self.encoder)
+        enf.addRow("Source", self.world_model_source)
+        enf.addRow("World model", self.wm_checkpoint)
+        enf.addRow("Loss", self.wm_loss)
+        enf.addRow("Temperature τ", self.wm_tau)
+        enf.addRow("Epochs", self.wm_epochs)
+        enf.addRow("LR", self.wm_lr)
+        enf.addRow("", self.wm_normalize)
+        enf.addRow("VICReg γ", self.wm_vicreg_gamma)
+        self.refresh_models_btn = QPushButton("Refresh model list")
+        self.refresh_models_btn.clicked.connect(self._refresh_models)
+        enf.addRow("", self.refresh_models_btn)
+        layout.addWidget(enc_group)
+        self.enc_group = enc_group
+
         # Data
         data_group = QGroupBox("Data")
         df = QFormLayout(data_group)
@@ -238,18 +322,20 @@ class MainWindow(QMainWindow):
         self.clustering.addItem("L1 activations (256-d)", "l1")
         self.clustering.addItem("Piece count (rule)", "piece_count")
         self.clustering.currentIndexChanged.connect(self._sync_enabled_state)
-        self.k_combo = QComboBox()
-        for k in (2, 4, 8, 16):
-            self.k_combo.addItem(str(k), k)
-        self.k_combo.setCurrentIndex(2)  # 8
         cf.addRow("Representation", self.clustering)
-        cf.addRow("Buckets K", self.k_combo)
         layout.addWidget(cluster_group)
         self.cluster_group = cluster_group
 
         # Dispatcher
         disp_group = QGroupBox("Dispatcher")
         pf = QFormLayout(disp_group)
+        self.disp_layout = pf
+        self.dispatcher_source = QComboBox()
+        self.dispatcher_source.addItem("Train", "train")
+        self.dispatcher_source.addItem("Load", "load")
+        self.dispatcher_source.currentIndexChanged.connect(self._sync_enabled_state)
+        self.dispatcher_checkpoint = QComboBox()
+        self._refresh_dispatchers()
         self.dispatcher_type = QComboBox()
         self.dispatcher_type.addItem("MLP", "mlp")
         self.dispatcher_type.addItem("Linear", "linear")
@@ -261,10 +347,12 @@ class MainWindow(QMainWindow):
         self.dispatcher_epochs = QSpinBox()
         self.dispatcher_epochs.setRange(1, 1000)
         self.dispatcher_epochs.setValue(8)
-        self.dispatcher_lr = QDoubleSpinBox()
+        self.dispatcher_lr = _LogStepDoubleSpinBox()
         self.dispatcher_lr.setDecimals(4)
         self.dispatcher_lr.setRange(1e-5, 1.0)
         self.dispatcher_lr.setValue(1e-2)
+        pf.addRow("Source", self.dispatcher_source)
+        pf.addRow("Dispatcher", self.dispatcher_checkpoint)
         pf.addRow("Type", self.dispatcher_type)
         pf.addRow("Hidden width", self.dispatcher_hidden)
         pf.addRow("Epochs", self.dispatcher_epochs)
@@ -278,19 +366,25 @@ class MainWindow(QMainWindow):
         self.expert_epochs = QSpinBox()
         self.expert_epochs.setRange(1, 1000)
         self.expert_epochs.setValue(2)
-        self.expert_lr = QDoubleSpinBox()
+        self.expert_lr = _LogStepDoubleSpinBox()
         self.expert_lr.setDecimals(4)
         self.expert_lr.setRange(1e-5, 1.0)
         self.expert_lr.setValue(1e-3)
-        self.expert_lr_end = QDoubleSpinBox()
+        self.expert_lr_end = _LogStepDoubleSpinBox()
         self.expert_lr_end.setDecimals(5)
         self.expert_lr_end.setRange(0.0, 1.0)
         self.expert_lr_end.setValue(1e-4)
+        self.expert_optimizer = QComboBox()
+        self.expert_optimizer.addItem("Adam", "adam")
+        self.expert_optimizer.addItem("SGD", "sgd")
+        self.expert_optimizer.addItem("Rprop", "rprop")
+        self.expert_optimizer.currentIndexChanged.connect(self._sync_enabled_state)
         self.l1_frozen = QCheckBox("Freeze L1")
         self.l1_frozen.setChecked(True)
         ef.addRow("Epochs", self.expert_epochs)
         ef.addRow("LR", self.expert_lr)
         ef.addRow("LR end", self.expert_lr_end)
+        ef.addRow("Optimizer", self.expert_optimizer)
         ef.addRow("", self.l1_frozen)
         layout.addWidget(exp_group)
         self.exp_group = exp_group
@@ -298,10 +392,6 @@ class MainWindow(QMainWindow):
         # Switch (end-to-end top-1)
         switch_group = QGroupBox("Switch (top-1)")
         sf = QFormLayout(switch_group)
-        self.switch_k_combo = QComboBox()
-        for k in (2, 4, 8, 16):
-            self.switch_k_combo.addItem(str(k), k)
-        self.switch_k_combo.setCurrentIndex(2)  # 8
         self.switch_alpha = QDoubleSpinBox()
         self.switch_alpha.setDecimals(4)
         self.switch_alpha.setRange(0.0, 1.0)
@@ -309,11 +399,10 @@ class MainWindow(QMainWindow):
         self.switch_epochs = QSpinBox()
         self.switch_epochs.setRange(1, 100)
         self.switch_epochs.setValue(5)
-        self.switch_lr = QDoubleSpinBox()
+        self.switch_lr = _LogStepDoubleSpinBox()
         self.switch_lr.setDecimals(4)
         self.switch_lr.setRange(1e-5, 1.0)
         self.switch_lr.setValue(1e-3)
-        sf.addRow("Experts K", self.switch_k_combo)
         sf.addRow("Load-balancing α", self.switch_alpha)
         sf.addRow("Epochs", self.switch_epochs)
         sf.addRow("LR", self.switch_lr)
@@ -336,16 +425,19 @@ class MainWindow(QMainWindow):
 
         for w in (
             self.technique, self.base_source, self.checkpoint, self.clustering,
-            self.k_combo, self.dispatcher_type, self.dispatcher_hidden,
-            self.switch_k_combo,
+            self.k_combo, self.dispatcher_source, self.dispatcher_checkpoint,
+            self.dispatcher_type, self.dispatcher_hidden,
+            self.expert_optimizer,
+            self.encoder, self.world_model_source, self.wm_checkpoint, self.wm_loss,
         ):
             w.currentIndexChanged.connect(self._refresh_run_name)
         for w in (
             self.h_spin, self.H_spin, self.base_epochs, self.max_rows,
             self.max_test, self.expert_epochs, self.switch_epochs,
+            self.wm_epochs, self.wm_vicreg_gamma,
         ):
             w.valueChanged.connect(self._refresh_run_name)
-        for w in (self.switch_alpha, self.switch_lr):
+        for w in (self.switch_alpha, self.switch_lr, self.wm_tau, self.wm_lr):
             w.valueChanged.connect(self._refresh_run_name)
         self._refresh_run_name()
 
@@ -439,57 +531,268 @@ class MainWindow(QMainWindow):
     # ---------------------------------------------------------------- helpers
     def _refresh_checkpoints(self) -> None:
         self.checkpoint.clear()
-        for best in iter_checkpoints():
-            self.checkpoint.addItem(str(best.parent.name), str(best))
+        for info in iter_checkpoints_info():
+            badge = " [world model]" if info["is_world_model"] else ""
+            self.checkpoint.addItem(info["name"] + badge, info["path"])
+
+    def _refresh_world_models(self) -> None:
+        self.wm_checkpoint.clear()
+        for info in iter_checkpoints_info():
+            if info["is_world_model"]:
+                dims = f"W{info['hidden_dim']}_H{info['hidden2_dim']}" if info["hidden_dim"] > 0 else "?"
+                self.wm_checkpoint.addItem(f"{info['name']} ({dims})", info["path"])
+
+    def _refresh_dispatchers(self) -> None:
+        self.dispatcher_checkpoint.clear()
+        for info in iter_dispatchers():
+            label = (
+                f"{info['name']} ({info['dispatcher_type']}, "
+                f"in{info['in_dim']}, K{info['n_clusters']})"
+            )
+            self.dispatcher_checkpoint.addItem(label, info["path"])
+
+    def _refresh_models(self) -> None:
+        self._refresh_checkpoints()
+        self._refresh_world_models()
+        self._refresh_dispatchers()
+
+    # ---------------------------------------------------------------- settings
+    def _save_settings(self) -> None:
+        s = self.settings
+        s.setValue("technique", self.technique.currentData())
+        s.setValue("base_source", self.base_source.currentIndex())
+        s.setValue("checkpoint", self.checkpoint.currentData() or "")
+        s.setValue("h", self.h_spin.value())
+        s.setValue("H", self.H_spin.value())
+        s.setValue("base_epochs", self.base_epochs.value())
+        s.setValue("encoder", self.encoder.currentData())
+        s.setValue("world_model_source", self.world_model_source.currentData())
+        s.setValue("wm_checkpoint", self.wm_checkpoint.currentData() or "")
+        s.setValue("wm_loss", self.wm_loss.currentData())
+        s.setValue("wm_tau", self.wm_tau.value())
+        s.setValue("wm_epochs", self.wm_epochs.value())
+        s.setValue("wm_lr", self.wm_lr.value())
+        s.setValue("wm_normalize", self.wm_normalize.isChecked())
+        s.setValue("wm_vicreg_gamma", self.wm_vicreg_gamma.value())
+        s.setValue("max_rows", self.max_rows.value())
+        s.setValue("max_test", self.max_test.value())
+        s.setValue("clustering", self.clustering.currentData())
+        s.setValue("k", self.k_combo.currentData())
+        s.setValue("dispatcher_source", self.dispatcher_source.currentData())
+        s.setValue("dispatcher_checkpoint", self.dispatcher_checkpoint.currentData() or "")
+        s.setValue("dispatcher_type", self.dispatcher_type.currentData())
+        s.setValue("dispatcher_hidden", self.dispatcher_hidden.currentData())
+        s.setValue("dispatcher_epochs", self.dispatcher_epochs.value())
+        s.setValue("dispatcher_lr", self.dispatcher_lr.value())
+        s.setValue("expert_epochs", self.expert_epochs.value())
+        s.setValue("expert_lr", self.expert_lr.value())
+        s.setValue("expert_lr_end", self.expert_lr_end.value())
+        s.setValue("expert_optimizer", self.expert_optimizer.currentData())
+        s.setValue("l1_frozen", self.l1_frozen.isChecked())
+        s.setValue("switch_alpha", self.switch_alpha.value())
+        s.setValue("switch_epochs", self.switch_epochs.value())
+        s.setValue("switch_lr", self.switch_lr.value())
+        s.setValue("device", self.device.currentData())
+
+    def _restore_combo_data(self, combo: QComboBox, value) -> None:
+        if value is None:
+            return
+        idx = combo.findData(value)
+        if idx >= 0:
+            combo.setCurrentIndex(idx)
+
+    def _restore_spin(self, spin: QSpinBox, value) -> None:
+        if value is None:
+            return
+        try:
+            spin.setValue(int(value))
+        except (TypeError, ValueError):
+            pass
+
+    def _restore_double(self, spin: QDoubleSpinBox, value) -> None:
+        if value is None:
+            return
+        try:
+            spin.setValue(float(value))
+        except (TypeError, ValueError):
+            pass
+
+    def _load_settings(self) -> None:
+        s = self.settings
+        self._restore_combo_data(self.technique, s.value("technique"))
+        base_source = s.value("base_source")
+        if isinstance(base_source, int) and 0 <= base_source < self.base_source.count():
+            self.base_source.setCurrentIndex(base_source)
+        self._restore_combo_data(self.checkpoint, s.value("checkpoint"))
+        self._restore_spin(self.h_spin, s.value("h"))
+        self._restore_spin(self.H_spin, s.value("H"))
+        self._restore_spin(self.base_epochs, s.value("base_epochs"))
+        self._restore_combo_data(self.encoder, s.value("encoder"))
+        self._restore_combo_data(self.world_model_source, s.value("world_model_source"))
+        self._restore_combo_data(self.wm_checkpoint, s.value("wm_checkpoint"))
+        self._restore_combo_data(self.wm_loss, s.value("wm_loss"))
+        self._restore_double(self.wm_tau, s.value("wm_tau"))
+        self._restore_spin(self.wm_epochs, s.value("wm_epochs"))
+        self._restore_double(self.wm_lr, s.value("wm_lr"))
+        normalize = s.value("wm_normalize")
+        if normalize is not None:
+            self.wm_normalize.setChecked(normalize in (True, "true", "1", 1))
+        self._restore_double(self.wm_vicreg_gamma, s.value("wm_vicreg_gamma"))
+        self._restore_spin(self.max_rows, s.value("max_rows"))
+        self._restore_spin(self.max_test, s.value("max_test"))
+        self._restore_combo_data(self.clustering, s.value("clustering"))
+        self._restore_combo_data(self.k_combo, s.value("k"))
+        self._restore_combo_data(self.dispatcher_source, s.value("dispatcher_source"))
+        self._restore_combo_data(self.dispatcher_checkpoint, s.value("dispatcher_checkpoint"))
+        self._restore_combo_data(self.dispatcher_type, s.value("dispatcher_type"))
+        self._restore_combo_data(self.dispatcher_hidden, s.value("dispatcher_hidden"))
+        self._restore_spin(self.dispatcher_epochs, s.value("dispatcher_epochs"))
+        self._restore_double(self.dispatcher_lr, s.value("dispatcher_lr"))
+        self._restore_spin(self.expert_epochs, s.value("expert_epochs"))
+        self._restore_double(self.expert_lr, s.value("expert_lr"))
+        self._restore_double(self.expert_lr_end, s.value("expert_lr_end"))
+        self._restore_combo_data(self.expert_optimizer, s.value("expert_optimizer"))
+        frozen = s.value("l1_frozen")
+        if frozen is not None:
+            self.l1_frozen.setChecked(frozen in (True, "true", "1", 1))
+        self._restore_double(self.switch_alpha, s.value("switch_alpha"))
+        self._restore_spin(self.switch_epochs, s.value("switch_epochs"))
+        self._restore_double(self.switch_lr, s.value("switch_lr"))
+        self._restore_combo_data(self.device, s.value("device"))
 
     def _sync_enabled_state(self) -> None:
         is_switch = self.technique.currentData() == "switch"
+        is_world_model = self.encoder.currentData() == "world_model"
+        wm_load = is_world_model and self.world_model_source.currentData() == "load"
+        eff_k = int(self.k_combo.currentData())
+        no_moe = eff_k <= 1
 
-        self.cluster_group.setVisible(not is_switch)
-        self.disp_group.setVisible(not is_switch)
-        self.exp_group.setVisible(not is_switch)
-        self.switch_group.setVisible(is_switch)
+        show_moe = not no_moe
+        self.cluster_group.setVisible(show_moe and not is_switch)
+        self.disp_group.setVisible(show_moe and not is_switch)
+        self.exp_group.setVisible(show_moe and not is_switch)
+        self.switch_group.setVisible(show_moe and is_switch)
 
         for name in ("cluster", "dispatcher", "experts"):
-            self.stage_rows[name].setVisible(not is_switch)
-        self.stage_rows["switch"].setVisible(is_switch)
+            self.stage_rows[name].setVisible(show_moe and not is_switch)
+        self.stage_rows["switch"].setVisible(show_moe and is_switch)
+        self.stage_rows["world_model"].setVisible(is_world_model and not wm_load)
 
-        training_new = self.base_source.currentIndex() == 1
-        self.checkpoint.setEnabled(not training_new)
-        self.h_spin.setEnabled(training_new)
-        self.H_spin.setEnabled(training_new)
-        self.base_epochs.setEnabled(training_new)
+        # Encoder group: world-model controls
+        self._set_row_visible(self.wm_checkpoint, wm_load)
+        wm_train = is_world_model and not wm_load
+        for w in (self.wm_loss, self.wm_tau, self.wm_epochs, self.wm_lr, self.wm_normalize, self.wm_vicreg_gamma):
+            self._set_row_visible(w, wm_train)
+
+        # Base model group: when loading a world model, the checkpoint decides
+        # the architecture, so the base source / dims are irrelevant.
+        if wm_load:
+            self.base_source.setEnabled(False)
+            self.checkpoint.setEnabled(False)
+            self.h_spin.setEnabled(False)
+            self.H_spin.setEnabled(False)
+            self.base_epochs.setEnabled(False)
+        else:
+            training_new = self.base_source.currentIndex() == 1
+            self.checkpoint.setEnabled(not training_new)
+            self.h_spin.setEnabled(training_new)
+            self.H_spin.setEnabled(training_new)
+            self.base_epochs.setEnabled(training_new)
 
         piece = self.clustering.currentData() == "piece_count"
-        self.dispatcher_type.setEnabled(not piece)
-        self.dispatcher_hidden.setEnabled(not piece and self.dispatcher_type.currentData() == "mlp")
-        self.dispatcher_epochs.setEnabled(not piece)
-        self.dispatcher_lr.setEnabled(not piece)
+        if piece and not no_moe:
+            self.k_combo.setCurrentIndex(3)  # lock to K=8
+        # Heads K stays editable in every mode so the user can always switch
+        # between "1 (no MoE)" and a real MoE; only piece-count pins it to 8.
+        self.k_combo.setEnabled(not piece)
+
+        # Dispatcher: piece-count is rule-based (no dispatcher), so hide the
+        # whole group; otherwise show the load-vs-train source toggle.
+        self.disp_group.setVisible(show_moe and not is_switch and not piece)
+        disp_active = show_moe and not is_switch and not piece
+        disp_load = self.dispatcher_source.currentData() == "load"
+        self._set_row_visible(self.dispatcher_checkpoint, disp_load, self.disp_layout)
+        for w in (self.dispatcher_type, self.dispatcher_hidden, self.dispatcher_epochs, self.dispatcher_lr):
+            self._set_row_visible(w, not disp_load, self.disp_layout)
+        self.dispatcher_source.setEnabled(disp_active)
+        self.dispatcher_checkpoint.setEnabled(disp_active and disp_load)
+        self.dispatcher_type.setEnabled(disp_active and not disp_load)
+        self.dispatcher_hidden.setEnabled(
+            disp_active and not disp_load and self.dispatcher_type.currentData() == "mlp"
+        )
+        self.dispatcher_epochs.setEnabled(disp_active and not disp_load)
+        self.dispatcher_lr.setEnabled(disp_active and not disp_load)
+
+        # Rprop has no learning-rate schedule, so "LR end" is irrelevant.
+        self.expert_lr_end.setEnabled(self.expert_optimizer.currentData() != "rprop")
+
+    def _set_row_visible(self, widget: QWidget, visible: bool, layout: QFormLayout | None = None) -> None:
+        layout = layout if layout is not None else self.enc_layout
+        layout.setRowVisible(widget, visible)
+        widget.setVisible(visible)
+
+    def _checkpoint_name(self) -> str:
+        data = self.checkpoint.currentData()
+        return Path(data).parent.name if data else ""
+
+    def _wm_name(self) -> str:
+        data = self.wm_checkpoint.currentData()
+        return Path(data).parent.name if data else ""
+
+    def _dispatcher_name(self) -> str:
+        data = self.dispatcher_checkpoint.currentData()
+        return Path(data).parent.name if data else ""
 
     def _auto_run_name(self) -> str:
         parts: list[str] = []
-        if self.base_source.currentIndex() == 1:
-            parts.append(
-                f"new_h{self.h_spin.value()}_H{self.H_spin.value()}_be{self.base_epochs.value()}"
-            )
-        else:
-            ckpt = self.checkpoint.currentText().strip()
-            parts.append(f"load_{ckpt}" if ckpt else "load")
-        if self.technique.currentData() == "switch":
-            parts.append("switch")
-            parts.append(f"k{int(self.switch_k_combo.currentData())}")
-            parts.append(f"a{self.switch_alpha.value():g}")
-            parts.append(f"ep{self.switch_epochs.value()}")
-            parts.append(f"lr{self.switch_lr.value():g}")
-        else:
-            parts.append(str(self.clustering.currentData()))
-            parts.append(f"k{int(self.k_combo.currentData())}")
-            if self.clustering.currentData() != "piece_count":
-                if self.dispatcher_type.currentData() == "mlp":
-                    parts.append(f"mlp{int(self.dispatcher_hidden.currentData())}")
+        if self.encoder.currentData() == "world_model":
+            parts.append("wm")
+            if self.world_model_source.currentData() == "load":
+                wm = self._wm_name()
+                parts.append(f"load_{wm}" if wm else "load")
+            else:
+                parts.append(self.wm_loss.currentData())
+                parts.append(f"tau{self.wm_tau.value():g}")
+                parts.append(f"ep{self.wm_epochs.value()}")
+                if self.base_source.currentIndex() == 1:
+                    parts.append(f"h{self.h_spin.value()}_H{self.H_spin.value()}_be{self.base_epochs.value()}")
                 else:
-                    parts.append("linear")
-            parts.append(f"ep{self.expert_epochs.value()}")
+                    ckpt = self._checkpoint_name()
+                    parts.append(f"from_{ckpt}" if ckpt else "from_base")
+        else:
+            if self.base_source.currentIndex() == 1:
+                parts.append(
+                    f"new_h{self.h_spin.value()}_H{self.H_spin.value()}_be{self.base_epochs.value()}"
+                )
+            else:
+                ckpt = self._checkpoint_name()
+                parts.append(f"load_{ckpt}" if ckpt else "load")
+        if self.technique.currentData() == "switch":
+            if int(self.k_combo.currentData()) <= 1:
+                parts.append("base")
+            else:
+                parts.append("switch")
+                parts.append(f"k{int(self.k_combo.currentData())}")
+                parts.append(f"a{self.switch_alpha.value():g}")
+                parts.append(f"ep{self.switch_epochs.value()}")
+                parts.append(f"lr{self.switch_lr.value():g}")
+        else:
+            if int(self.k_combo.currentData()) <= 1:
+                parts.append("base")
+            else:
+                parts.append(str(self.clustering.currentData()))
+                parts.append(f"k{int(self.k_combo.currentData())}")
+                if self.clustering.currentData() != "piece_count":
+                    if self.dispatcher_source.currentData() == "load":
+                        disp = self._dispatcher_name()
+                        parts.append(f"disp_{disp}" if disp else "disp_load")
+                    else:
+                        if self.dispatcher_type.currentData() == "mlp":
+                            parts.append(f"mlp{int(self.dispatcher_hidden.currentData())}")
+                        else:
+                            parts.append("linear")
+                parts.append(f"ep{self.expert_epochs.value()}")
+                parts.append(str(self.expert_optimizer.currentData()))
         parts.append(f"{self.max_rows.value()}M_{self.max_test.value()}k")
         name = "_".join(parts)
         return re.sub(r"[^A-Za-z0-9._-]", "_", name)
@@ -499,11 +802,7 @@ class MainWindow(QMainWindow):
 
     def _collect_config(self) -> TrainingConfig:
         technique = self.technique.currentData()
-        k = (
-            int(self.switch_k_combo.currentData())
-            if technique == "switch"
-            else int(self.k_combo.currentData())
-        )
+        k = int(self.k_combo.currentData())
         return TrainingConfig(
             technique=technique,
             base_source="new" if self.base_source.currentIndex() == 1 else "load",
@@ -511,10 +810,21 @@ class MainWindow(QMainWindow):
             h=self.h_spin.value(),
             H=self.H_spin.value(),
             base_epochs=self.base_epochs.value(),
+            encoder=self.encoder.currentData(),
+            world_model_source=self.world_model_source.currentData(),
+            wm_checkpoint=self.wm_checkpoint.currentData() or "",
+            wm_loss=self.wm_loss.currentData(),
+            wm_tau=float(self.wm_tau.value()),
+            wm_epochs=self.wm_epochs.value(),
+            wm_lr=float(self.wm_lr.value()),
+            wm_normalize=self.wm_normalize.isChecked(),
+            wm_vicreg_gamma=float(self.wm_vicreg_gamma.value()),
             max_rows=self.max_rows.value() * 1_000_000,
             max_test=self.max_test.value() * 1_000,
             clustering=self.clustering.currentData(),
             k=k,
+            dispatcher_source=self.dispatcher_source.currentData(),
+            dispatcher_checkpoint=self.dispatcher_checkpoint.currentData() or "",
             dispatcher_type=self.dispatcher_type.currentData(),
             dispatcher_hidden=int(self.dispatcher_hidden.currentData()),
             dispatcher_epochs=self.dispatcher_epochs.value(),
@@ -522,6 +832,7 @@ class MainWindow(QMainWindow):
             expert_epochs=self.expert_epochs.value(),
             expert_lr=float(self.expert_lr.value()),
             expert_lr_end=float(self.expert_lr_end.value()),
+            expert_optimizer=self.expert_optimizer.currentData(),
             l1_frozen=self.l1_frozen.isChecked(),
             switch_alpha=float(self.switch_alpha.value()),
             switch_epochs=self.switch_epochs.value(),
@@ -536,6 +847,7 @@ class MainWindow(QMainWindow):
             return
         cfg = self._collect_config()
         self._last_run_name = cfg.run_name
+        self._save_settings()
         self._reset_stages()
         self._cancel = CancelToken()
         self._set_running(True)
@@ -571,11 +883,17 @@ class MainWindow(QMainWindow):
         for widget in (
             self.technique, self.base_source, self.checkpoint, self.h_spin,
             self.H_spin, self.base_epochs, self.max_rows, self.max_test,
-            self.clustering, self.k_combo, self.dispatcher_type,
+            self.encoder, self.world_model_source, self.wm_checkpoint,
+            self.wm_loss, self.wm_tau, self.wm_epochs, self.wm_lr,
+            self.wm_normalize, self.wm_vicreg_gamma,
+            self.clustering, self.k_combo, self.dispatcher_source,
+            self.dispatcher_checkpoint, self.dispatcher_type,
             self.dispatcher_hidden, self.dispatcher_epochs, self.dispatcher_lr,
             self.expert_epochs, self.expert_lr, self.expert_lr_end,
-            self.l1_frozen, self.switch_k_combo, self.switch_alpha,
+            self.expert_optimizer,
+            self.l1_frozen, self.switch_alpha,
             self.switch_epochs, self.switch_lr, self.device,
+            self.refresh_models_btn,
         ):
             widget.setEnabled(False if running else True)
         if not running:
@@ -602,6 +920,16 @@ class MainWindow(QMainWindow):
 
     # ---------------------------------------------------------------- events
     def _on_event(self, ev: dict) -> None:
+        # Any unhandled exception inside a Qt slot aborts the whole process
+        # (SIGABRT), which surfaces as a "frozen" window. Catch it and keep the
+        # UI alive instead.
+        try:
+            self._dispatch_event(ev)
+        except Exception:  # noqa: BLE001
+            self.status.showMessage("Error handling event")
+            self._log("ERROR in UI event handler:\n" + traceback.format_exc())
+
+    def _dispatch_event(self, ev: dict) -> None:
         stage = str(ev.get("stage", ""))
         event = str(ev.get("event", ""))
 
@@ -629,6 +957,26 @@ class MainWindow(QMainWindow):
                 row.set_metric(ev.get("msg", f"W{ev.get('h')}_H{ev.get('H')}"))
             return
 
+        if stage == "world_model":
+            row = self.stage_rows["world_model"]
+            if event == "start":
+                row.set_progress(0.0)
+                row.set_metric(f"{ev.get('loss')} · normalize={ev.get('normalize')}")
+            elif event == "epoch":
+                row.set_progress(ev.get("progress"))
+                row.set_metric(
+                    f"epoch {ev.get('epoch')}/{ev.get('epochs')} · loss {ev.get('loss'):.4f}"
+                )
+                self._add_live_point(
+                    "world_model", "World model (L1)", "loss", "loss",
+                    float(ev.get("epoch")), float(ev.get("loss")),
+                )
+            elif event == "done":
+                row.set_progress(1.0)
+                diag = ev.get("diagnostics") or {}
+                row.set_metric(f"eff. rank {diag.get('effective_rank', 'n/a')}")
+            return
+
         if stage == "loading":
             row = self.stage_rows["loading"]
             if event == "start":
@@ -641,6 +989,9 @@ class MainWindow(QMainWindow):
             elif event == "pack_done":
                 row.set_progress(1.0)
                 row.set_metric(f"{ev.get('rows'):,} rows")
+            elif event == "skip":
+                row.set_progress(1.0)
+                row.set_metric(ev.get("msg", "skipped"))
             return
 
         if stage == "cluster":
@@ -662,7 +1013,10 @@ class MainWindow(QMainWindow):
             row = self.stage_rows["dispatcher"]
             if event == "start":
                 row.set_progress(0.0)
-                row.set_metric(f"type {ev.get('type')}")
+                if ev.get("type") == "load":
+                    row.set_metric(f"load {ev.get('checkpoint', '')}")
+                else:
+                    row.set_metric(f"type {ev.get('type')}")
             elif event == "epoch":
                 row.set_progress(ev.get("progress"))
                 row.set_metric(
@@ -675,7 +1029,10 @@ class MainWindow(QMainWindow):
                 )
             elif event == "done":
                 row.set_progress(1.0)
-                row.set_metric(f"val_acc {ev.get('best_val_acc'):.4f}")
+                if ev.get("best_val_acc") is not None:
+                    row.set_metric(f"val_acc {ev.get('best_val_acc'):.4f}")
+                else:
+                    row.set_metric("loaded")
             elif event == "skip":
                 row.set_progress(1.0)
                 row.set_metric(ev.get("msg", "rule-based"))
@@ -758,11 +1115,15 @@ class MainWindow(QMainWindow):
                     row.set_metric(str(ev.get("msg")))
             elif event == "done":
                 row.set_progress(1.0)
-                parts = [f"base {ev.get('base_ce'):.5f}", f"moe {ev.get('moe_ce'):.5f}"]
-                if ev.get("perfect_ce") is not None:
-                    parts.append(f"perfect {ev.get('perfect_ce'):.5f}")
-                if ev.get("best_expert_ce") is not None:
-                    parts.append(f"best {ev.get('best_expert_ce'):.5f}")
+                parts = []
+                for key, label in (
+                    ("base_ce", "base"),
+                    ("moe_ce", "moe"),
+                    ("perfect_ce", "perfect"),
+                    ("best_expert_ce", "best"),
+                ):
+                    if ev.get(key) is not None:
+                        parts.append(f"{label} {ev.get(key):.5f}")
                 row.set_metric(" · ".join(parts))
                 self._show_plot(ev)
             return
@@ -772,6 +1133,20 @@ class MainWindow(QMainWindow):
             metrics = summary.get("metrics", {})
             self.result_label.setText(self._format_result(metrics))
             return
+
+    def _moe_score(self, m: dict) -> float:
+        base = m.get("base_ce")
+        moe = m.get("moe_ce")
+        best = m.get("best_expert_ce")
+        if (
+            isinstance(base, (int, float))
+            and isinstance(moe, (int, float))
+            and isinstance(best, (int, float))
+        ):
+            denom = base - best
+            if denom != 0.0:
+                return (base - moe) / denom
+        return float("nan")
 
     def _format_result(self, m: dict) -> str:
         if not m:
@@ -785,11 +1160,13 @@ class MainWindow(QMainWindow):
             line1 += f"   ·   perfect {m['perfect_ce']:.5f}"
         if m.get("best_expert_ce") is not None:
             line1 += f"   ·   best expert {m['best_expert_ce']:.5f}"
+        score = self._moe_score(m)
+        score_txt = f"{score * 100.0:.1f}%" if math.isfinite(score) else "n/a"
         return (
             f"{line1}\n"
             f"base MAE {m.get('base_mae', float('nan')):.5f}   ·   "
             f"MoE MAE {m.get('moe_mae', float('nan')):.5f}\n"
-            f"ΔCE {diff:+.5f} {arrow} vs base"
+            f"ΔCE {diff:+.5f} {arrow} vs base   ·   MoE score {score_txt}"
         )
 
     # ---------------------------------------------------------------- plot
@@ -912,12 +1289,54 @@ class MainWindow(QMainWindow):
         buf.seek(0)
         return QPixmap.fromImage(QImage.fromData(buf.getvalue(), "PNG"))
 
+    def _render_score_plot(self, metrics: dict) -> QPixmap | None:
+        score = self._moe_score(metrics)
+        if not math.isfinite(score):
+            return None
+        pct = score * 100.0
+        fig, ax = plt.subplots(figsize=(7, 3.2), dpi=100)
+        fig.patch.set_facecolor("#121418")
+        ax.set_facecolor("#121418")
+        ax.spines["top"].set_visible(False)
+        ax.spines["right"].set_visible(False)
+        ax.spines["left"].set_visible(False)
+        ax.spines["bottom"].set_color("#3a4454")
+        ax.tick_params(colors="#9aa6b8")
+        ax.set_title("MoE score", color="#e8edf4")
+        ax.set_xlabel("MoE score (%)", color="#e8edf4")
+        color = "#6cc07a" if pct >= 0.0 else "#e06c75"
+        ax.barh(0, pct, color=color, height=0.5, left=0.0)
+        ax.axvline(0.0, color="#e8edf4", linewidth=1.0)
+        ax.axvline(100.0, color="#e8edf4", linewidth=0.8, linestyle="--", alpha=0.4)
+        lim = max(abs(pct), 100.0) * 1.15
+        ax.set_xlim(-lim, lim)
+        ax.set_yticks([])
+        xpad = 0.03 * lim
+        ax.text(
+            pct + (xpad if pct >= 0 else -xpad),
+            0.0,
+            f"{pct:+.1f}%",
+            va="center",
+            ha="left" if pct >= 0 else "right",
+            color="#e8edf4",
+            fontsize=9,
+        )
+        fig.tight_layout()
+        buf = io.BytesIO()
+        fig.savefig(buf, format="png")
+        plt.close(fig)
+        buf.seek(0)
+        return QPixmap.fromImage(QImage.fromData(buf.getvalue(), "PNG"))
+
     def _show_plot(self, metrics: dict) -> None:
         self._finalize_live_plot()
         pixmap = self._render_bar_plot(metrics)
         if pixmap is not None:
             self.plot_label.setPixmap(pixmap)
             self._register_plot("CE comparison", pixmap)
+        score_pixmap = self._render_score_plot(metrics)
+        if score_pixmap is not None:
+            self._register_plot("MoE score", score_pixmap)
 
     def _on_finished(self, metrics: dict) -> None:
         self._set_running(False)
@@ -958,10 +1377,6 @@ class MainWindow(QMainWindow):
                 background: rgba(128, 136, 148, 0.30);
                 color: #6a7384;
                 border: 1px solid #2a3140;
-            }
-            QSpinBox:disabled::lineEdit, QDoubleSpinBox:disabled::lineEdit {
-                background: transparent;
-                color: #6a7384;
             }
             QPushButton {
                 background: #2f3948; color: #e8edf4; border: 1px solid #3a4454;
