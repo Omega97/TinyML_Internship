@@ -30,6 +30,7 @@ from matplotlib import pyplot as plt
 from PyQt6.QtCore import QObject, QSettings, Qt, QUrl, pyqtSignal
 from PyQt6.QtGui import QCloseEvent, QColor, QDesktopServices, QImage, QPalette, QPixmap, QWheelEvent
 from PyQt6.QtWidgets import (
+    QAbstractItemView,
     QApplication,
     QCheckBox,
     QComboBox,
@@ -37,14 +38,20 @@ from PyQt6.QtWidgets import (
     QFormLayout,
     QGroupBox,
     QHBoxLayout,
+    QHeaderView,
     QLabel,
     QMainWindow,
+    QMenu,
+    QMessageBox,
     QPlainTextEdit,
     QProgressBar,
     QPushButton,
     QScrollArea,
     QSpinBox,
     QSplitter,
+    QTabWidget,
+    QTableWidget,
+    QTableWidgetItem,
     QVBoxLayout,
     QWidget,
 )
@@ -53,8 +60,10 @@ from runner import (
     CancelToken,
     CancelledError,
     TrainingConfig,
+    delete_run,
     iter_checkpoints_info,
     iter_dispatchers,
+    iter_history,
     run_moe_training,
 )
 
@@ -184,9 +193,19 @@ class MainWindow(QMainWindow):
         split.setStretchFactor(0, 0)
         split.setStretchFactor(1, 1)
         split.setSizes([420, 640])
+
+        training_host = QWidget()
+        training_layout = QVBoxLayout(training_host)
+        training_layout.setContentsMargins(0, 0, 0, 0)
+        training_layout.addWidget(split)
+
+        self.tabs = QTabWidget()
+        self.tabs.addTab(training_host, "Training")
+        self.tabs.addTab(self._build_history(), "History")
+
         root = QVBoxLayout(central)
         root.setContentsMargins(8, 8, 8, 8)
-        root.addWidget(split)
+        root.addWidget(self.tabs)
         self.setCentralWidget(central)
 
         self.status = self.statusBar()
@@ -381,11 +400,22 @@ class MainWindow(QMainWindow):
         self.expert_optimizer.currentIndexChanged.connect(self._sync_enabled_state)
         self.l1_frozen = QCheckBox("Freeze L1")
         self.l1_frozen.setChecked(True)
+        self.expert_min_ce_decrease = QDoubleSpinBox()
+        self.expert_min_ce_decrease.setDecimals(4)
+        self.expert_min_ce_decrease.setRange(0.0, 100.0)
+        self.expert_min_ce_decrease.setSingleStep(0.01)
+        self.expert_min_ce_decrease.setValue(0.01)
+        self.expert_min_ce_decrease.setToolTip(
+            "Stop an expert early when the holdout CE decreases by less than "
+            "this amount (percent, relative) for 10 consecutive iterations "
+            "(0 = off)."
+        )
         ef.addRow("Epochs", self.expert_epochs)
         ef.addRow("LR", self.expert_lr)
         ef.addRow("LR end", self.expert_lr_end)
         ef.addRow("Optimizer", self.expert_optimizer)
         ef.addRow("", self.l1_frozen)
+        ef.addRow("Min CE decrease (%)", self.expert_min_ce_decrease)
         layout.addWidget(exp_group)
         self.exp_group = exp_group
 
@@ -510,9 +540,12 @@ class MainWindow(QMainWindow):
         self.open_results_btn = QPushButton("Open results folder")
         self.open_results_btn.setVisible(False)
         self.open_results_btn.clicked.connect(self._open_results)
+        self.history_btn = QPushButton("History")
+        self.history_btn.clicked.connect(self._show_history)
         buttons.addWidget(self.run_btn)
         buttons.addWidget(self.stop_btn)
         buttons.addWidget(self.open_results_btn)
+        buttons.addWidget(self.history_btn)
         buttons.addStretch(1)
         layout.addLayout(buttons)
         layout.addStretch(1)
@@ -527,6 +560,142 @@ class MainWindow(QMainWindow):
         self.log.setMaximumBlockCount(2000)
         layout.addWidget(self.log, 1)
         return host
+
+    # ---------------------------------------------------------------- history
+    _HISTORY_COLUMNS = [
+        ("timestamp", "Timestamp"),
+        ("run_name", "Run name"),
+        ("technique", "Technique"),
+        ("k", "K"),
+        ("clustering", "Clustering"),
+        ("optimizer", "Optimizer"),
+        ("rows", "Rows"),
+        ("base_ce", "Base CE"),
+        ("moe_ce", "MoE CE"),
+    ]
+
+    def _build_history(self) -> QWidget:
+        host = QWidget()
+        layout = QVBoxLayout(host)
+        layout.setContentsMargins(0, 0, 0, 0)
+
+        bar = QHBoxLayout()
+        refresh_btn = QPushButton("Refresh")
+        refresh_btn.clicked.connect(self._refresh_history)
+        self.history_hint = QLabel("Right-click a run to open its folder or delete it.")
+        self.history_hint.setStyleSheet("color: #6a7384;")
+        bar.addWidget(refresh_btn)
+        bar.addWidget(self.history_hint)
+        bar.addStretch(1)
+        layout.addLayout(bar)
+
+        self.history_table = QTableWidget(0, len(self._HISTORY_COLUMNS))
+        self.history_table.setHorizontalHeaderLabels([c[1] for c in self._HISTORY_COLUMNS])
+        self.history_table.setEditTriggers(QAbstractItemView.EditTrigger.NoEditTriggers)
+        self.history_table.setSelectionBehavior(QAbstractItemView.SelectionBehavior.SelectRows)
+        self.history_table.setSelectionMode(QAbstractItemView.SelectionMode.SingleSelection)
+        self.history_table.setAlternatingRowColors(True)
+        self.history_table.verticalHeader().setVisible(False)
+        self.history_table.setContextMenuPolicy(Qt.ContextMenuPolicy.CustomContextMenu)
+        self.history_table.customContextMenuRequested.connect(self._history_context_menu)
+        header = self.history_table.horizontalHeader()
+        header.setSectionResizeMode(QHeaderView.ResizeMode.Interactive)
+        header.setStretchLastSection(False)
+        self.history_table.setColumnWidth(0, 150)  # timestamp
+        self.history_table.setColumnWidth(1, 420)  # run name
+        layout.addWidget(self.history_table, 1)
+        return host
+
+    def _show_history(self) -> None:
+        self._refresh_history()
+        self.tabs.setCurrentIndex(1)
+
+    def _refresh_history(self) -> None:
+        if not hasattr(self, "history_table"):
+            return
+
+        def _s(value) -> str:
+            return "" if value is None else str(value)
+
+        self.history_table.setRowCount(0)
+        for run in iter_history():
+            row = self.history_table.rowCount()
+            self.history_table.insertRow(row)
+            cfg = run.get("config") or {}
+            metrics = run.get("metrics") or {}
+            clustering = cfg.get("clustering")
+            if run.get("technique") == "switch":
+                clustering = "switch"
+            values = [
+                run.get("timestamp", ""),
+                run.get("run_name", ""),
+                run.get("technique", ""),
+                _s(cfg.get("k")),
+                _s(clustering),
+                _s(cfg.get("expert_optimizer")),
+                self._fmt_rows(cfg.get("max_rows")),
+                self._fmt_ce(metrics.get("base_ce")),
+                self._fmt_ce(metrics.get("moe_ce")),
+            ]
+            for col, value in enumerate(values):
+                item = QTableWidgetItem("" if value is None else value)
+                if col == 1:
+                    item.setToolTip(run.get("path", ""))
+                self.history_table.setItem(row, col, item)
+
+    @staticmethod
+    def _fmt_rows(rows) -> str:
+        try:
+            n = int(rows)
+        except (TypeError, ValueError):
+            return ""
+        if n >= 1_000_000:
+            return f"{n / 1_000_000:g}M"
+        if n >= 1_000:
+            return f"{n / 1_000:g}k"
+        return str(n)
+
+    @staticmethod
+    def _fmt_ce(value) -> str:
+        if value is None:
+            return ""
+        try:
+            return f"{float(value):.5f}"
+        except (TypeError, ValueError):
+            return ""
+
+    def _history_context_menu(self, pos) -> None:
+        index = self.history_table.indexAt(pos)
+        if not index.isValid():
+            return
+        row = index.row()
+        run_name = self.history_table.item(row, 1).text()
+        path = self.history_table.item(row, 1).toolTip()
+
+        menu = QMenu(self)
+        open_action = menu.addAction("Open folder")
+        delete_action = menu.addAction("Delete run")
+        action = menu.exec(self.history_table.viewport().mapToGlobal(pos))
+        if action is open_action and path:
+            QDesktopServices.openUrl(QUrl.fromLocalFile(path))
+        elif action is delete_action:
+            self._delete_history_run(run_name)
+
+    def _delete_history_run(self, run_name: str) -> None:
+        confirm = QMessageBox.question(
+            self,
+            "Delete run",
+            f"Delete the results for '{run_name}' from disk?\n\n"
+            f"This removes RESULTS/moe/{run_name}/ and cannot be undone.",
+            QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
+            QMessageBox.StandardButton.No,
+        )
+        if confirm != QMessageBox.StandardButton.Yes:
+            return
+        ok, msg = delete_run(run_name)
+        self.status.showMessage(msg)
+        self._log(msg)
+        self._refresh_history()
 
     # ---------------------------------------------------------------- helpers
     def _refresh_checkpoints(self) -> None:
@@ -589,6 +758,7 @@ class MainWindow(QMainWindow):
         s.setValue("expert_lr_end", self.expert_lr_end.value())
         s.setValue("expert_optimizer", self.expert_optimizer.currentData())
         s.setValue("l1_frozen", self.l1_frozen.isChecked())
+        s.setValue("expert_min_ce_decrease", self.expert_min_ce_decrease.value())
         s.setValue("switch_alpha", self.switch_alpha.value())
         s.setValue("switch_epochs", self.switch_epochs.value())
         s.setValue("switch_lr", self.switch_lr.value())
@@ -655,6 +825,7 @@ class MainWindow(QMainWindow):
         frozen = s.value("l1_frozen")
         if frozen is not None:
             self.l1_frozen.setChecked(frozen in (True, "true", "1", 1))
+        self._restore_double(self.expert_min_ce_decrease, s.value("expert_min_ce_decrease"))
         self._restore_double(self.switch_alpha, s.value("switch_alpha"))
         self._restore_spin(self.switch_epochs, s.value("switch_epochs"))
         self._restore_double(self.switch_lr, s.value("switch_lr"))
@@ -834,6 +1005,7 @@ class MainWindow(QMainWindow):
             expert_lr_end=float(self.expert_lr_end.value()),
             expert_optimizer=self.expert_optimizer.currentData(),
             l1_frozen=self.l1_frozen.isChecked(),
+            expert_min_ce_decrease=float(self.expert_min_ce_decrease.value()),
             switch_alpha=float(self.switch_alpha.value()),
             switch_epochs=self.switch_epochs.value(),
             switch_lr=float(self.switch_lr.value()),
@@ -891,7 +1063,7 @@ class MainWindow(QMainWindow):
             self.dispatcher_hidden, self.dispatcher_epochs, self.dispatcher_lr,
             self.expert_epochs, self.expert_lr, self.expert_lr_end,
             self.expert_optimizer,
-            self.l1_frozen, self.switch_alpha,
+            self.l1_frozen, self.expert_min_ce_decrease, self.switch_alpha,
             self.switch_epochs, self.switch_lr, self.device,
             self.refresh_models_btn,
         ):
@@ -1050,24 +1222,35 @@ class MainWindow(QMainWindow):
                 hold_ce = float(ev.get("hold_ce"))
                 base_ce = float(ev.get("base_hold_ce"))
                 pct = (hold_ce / base_ce * 100.0) if base_ce > 0.0 else 0.0
+                delta = ev.get("weight_delta")
+                base_delta = ev.get("weight_delta_base")
+                delta_txt = ""
+                if isinstance(delta, (int, float)):
+                    delta_txt += f" · Δw {delta:.1e}"
+                if isinstance(base_delta, (int, float)):
+                    delta_txt += f" · Δbase {base_delta:.1e}"
                 row.set_metric(
                     f"expert {eid}/{k} · epoch {epoch}/{ev.get('epochs')} · "
-                    f"{pct:.1f}% of base"
+                    f"{pct:.1f}% of base{delta_txt}"
                 )
                 if epoch == 1:
                     self._add_live_point(
-                        "experts", "Experts fine-tune", "hold CE (% of base)",
-                        f"expert {eid}", 0.0, 100.0,
+                        "experts", "Experts fine-tune", "CE gain (% vs base)",
+                        f"expert {eid}", 0.0, 0.0,
                     )
+                gain_pct = ((base_ce - hold_ce) / base_ce * 100.0) if base_ce > 0.0 else 0.0
                 self._add_live_point(
-                    "experts", "Experts fine-tune", "hold CE (% of base)",
-                    f"expert {eid}", float(epoch), pct,
+                    "experts", "Experts fine-tune", "CE gain (% vs base)",
+                    f"expert {eid}", float(epoch), gain_pct,
                 )
             elif event == "done":
+                note = " (stopped early)" if ev.get("stopped_early") else ""
                 row.set_metric(
-                    f"expert {eid}/{k} done · hold {ev.get('hold_ce'):.4f} "
+                    f"expert {eid}/{k} done{note} · hold {ev.get('hold_ce'):.4f} "
                     f"(base {ev.get('base_hold_ce'):.4f})"
                 )
+            elif event == "early_stop":
+                row.set_metric(str(ev.get("msg", f"expert {eid} stopped early")))
             elif event == "skip":
                 row.set_metric(str(ev.get("msg", f"expert {eid} skipped")))
             return
@@ -1343,6 +1526,7 @@ class MainWindow(QMainWindow):
         self.status.showMessage("Done")
         self._log("run finished")
         self.open_results_btn.setVisible(True)
+        self._refresh_history()
 
     def _on_failed(self, err: str) -> None:
         self._set_running(False)
@@ -1400,6 +1584,27 @@ class MainWindow(QMainWindow):
                 background: #0e1013; color: #c6cedb; border: 1px solid #3a4454;
                 border-radius: 4px; font-family: monospace;
             }
+            QTabWidget::pane { border: 1px solid #3a4454; border-radius: 4px; top: -1px; }
+            QTabBar::tab {
+                background: #1b1f27; color: #9aa6b8; padding: 6px 18px;
+                border: 1px solid #3a4454; border-bottom: none;
+                border-top-left-radius: 4px; border-top-right-radius: 4px;
+            }
+            QTabBar::tab:selected { background: #2f3948; color: #e8edf4; }
+            QTableWidget {
+                background: #1b1f27; color: #e8edf4; border: 1px solid #3a4454;
+                border-radius: 4px; gridline-color: #2a3140;
+                alternate-background-color: #171a20;
+            }
+            QTableWidget::item:selected { background: #3d5a80; }
+            QHeaderView::section {
+                background: #2f3948; color: #e8edf4; border: none;
+                border-right: 1px solid #3a4454; padding: 4px 8px;
+            }
+            QMenu {
+                background: #1b1f27; color: #e8edf4; border: 1px solid #3a4454;
+            }
+            QMenu::item:selected { background: #3d5a80; }
             """
         )
 

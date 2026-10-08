@@ -20,10 +20,13 @@ from __future__ import annotations
 
 import dataclasses
 import json
+import math
 import re
+import shutil
 import sys
 import threading
 import time
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Callable, Iterator
 
@@ -83,6 +86,7 @@ DEFAULT_SLICES = PROCESSED_DATA_DIR / BOARD_EVAL_DIR_NAME / FEN_VALUE_VISITS_DIR
 DEFAULT_CHECKPOINT = NNUE_CHECKPOINTS_DIR / "dual_h128_H256_e200_bpe512_bs10000" / "best.pt"
 UI_PACK_ROOT = PROCESSED_DATA_DIR / BOARD_EVAL_DIR_NAME / "moe"
 DISPATCHER_CHECKPOINTS_DIR = SARDINE_MODELS_DIR / "checkpoints" / "dispatchers"
+MOE_RESULTS_ROOT = PROJECT_ROOT / "RESULTS" / "moe"
 
 L1_CHUNK = 16_384
 CLUSTER_CHUNK = 1_000_000
@@ -91,6 +95,10 @@ EXPERT_BATCH = 2048
 EVAL_BATCH = 4096
 SWITCH_BATCH = 2048
 PIECE_COUNT_BUCKETS_K = 8
+
+# Consecutive iterations whose holdout-CE decrease falls below
+# ``expert_min_ce_decrease`` before the expert is declared stalled and skipped.
+EXPERT_STALL_STEPS = 10
 
 
 class CancelledError(Exception):
@@ -152,6 +160,7 @@ class TrainingConfig:
     expert_lr_end: float = 1e-4
     expert_optimizer: str = "adam"  # "adam" | "sgd" | "rprop"
     l1_frozen: bool = True
+    expert_min_ce_decrease: float = 0.01  # min % CE decrease per iteration; 0 = off
     # switch (end-to-end top-1)
     switch_alpha: float = 0.01
     switch_epochs: int = 5
@@ -567,6 +576,19 @@ def _predict_labels(disp, l1: np.ndarray, device: torch.device, cancel: CancelTo
 # --------------------------------------------------------------------------- #
 # Expert stage
 # --------------------------------------------------------------------------- #
+def _snapshot_params(model) -> dict:
+    """Detached on-device copy of every parameter (for weight-update measurement)."""
+    return {name: p.detach().clone() for name, p in model.named_parameters()}
+
+
+def _weight_update_norm(model, before: dict) -> float:
+    """L2 norm of the weight-space change since ``before`` (single device sync)."""
+    total = torch.zeros((), device=next(model.parameters()).device)
+    for name, p in model.named_parameters():
+        total = total + (p.detach() - before[name]).float().pow(2).sum()
+    return float(math.sqrt(total.item()))
+
+
 def _fine_tune_experts(
     base: DualHiddenNNUE,
     labels: np.ndarray,
@@ -656,6 +678,11 @@ def _fine_tune_experts(
         best_ce = base_hold
         best_state = {k: v.detach().cpu().clone() for k, v in expert.state_dict().items()}
         prev_hold = base_hold
+        stall_steps = 0
+        stopped_early = False
+        last_delta = 0.0
+        base_params = _snapshot_params(expert)
+        min_ce_decrease = cfg.expert_min_ce_decrease / 100.0  # percent -> fraction
         for epoch in range(1, cfg.expert_epochs + 1):
             cancel.check()
             expert.train()
@@ -672,10 +699,14 @@ def _fine_tune_experts(
                 loss = ce / w.clamp_min(1e-8)
                 loss.backward()
                 if not full_batch:
+                    before = _snapshot_params(expert)
                     opt.step()
                     opt.zero_grad(set_to_none=True)
+                    last_delta = _weight_update_norm(expert, before)
             if full_batch:
+                before = _snapshot_params(expert)
                 opt.step()
+                last_delta = _weight_update_norm(expert, before)
             if sched is not None:
                 sched.step()
             hold_ce = _eval(hold_pos)
@@ -687,8 +718,16 @@ def _fine_tune_experts(
                 opt.shrink_step_sizes()
                 opt.reset_tracking()
                 hold_ce = prev_hold
-            else:
-                prev_hold = hold_ce
+            # Early stop: stop once the holdout CE has decreased by less than
+            # ``expert_min_ce_decrease`` (relative) for 10 iterations in a row.
+            ce_decrease = prev_hold - hold_ce
+            if cfg.expert_min_ce_decrease > 0:
+                threshold = min_ce_decrease * max(prev_hold, 1e-12)
+                stall_steps = stall_steps + 1 if ce_decrease < threshold else 0
+                if stall_steps >= EXPERT_STALL_STEPS:
+                    stopped_early = True
+            prev_hold = hold_ce
+            delta_base = _weight_update_norm(expert, base_params)
             emit(
                 {
                     "stage": "expert",
@@ -700,16 +739,35 @@ def _fine_tune_experts(
                     "hold_ce": hold_ce,
                     "base_hold_ce": base_hold,
                     "n_train": int(train_pos.size),
+                    "weight_delta": last_delta,
+                    "weight_delta_base": delta_base,
                     "progress": epoch / cfg.expert_epochs,
                 }
             )
             if hold_ce < best_ce:
                 best_ce = hold_ce
                 best_state = {k: v.detach().cpu().clone() for k, v in expert.state_dict().items()}
+            if stopped_early:
+                break
 
         expert.load_state_dict(best_state)
         moe.experts_l2[expert_id].load_state_dict(expert.l2.state_dict())
         moe.experts_head[expert_id].load_state_dict(expert.head.state_dict())
+        if stopped_early:
+            emit(
+                {
+                    "stage": "expert",
+                    "expert_id": expert_id,
+                    "k": cfg.k,
+                    "event": "early_stop",
+                    "epoch": epoch,
+                    "epochs": cfg.expert_epochs,
+                    "msg": (
+                        f"expert {expert_id}: stopped early — CE decrease < "
+                        f"{cfg.expert_min_ce_decrease:g}% for {EXPERT_STALL_STEPS} iterations"
+                    ),
+                }
+            )
         emit(
             {
                 "stage": "expert",
@@ -720,6 +778,7 @@ def _fine_tune_experts(
                 "base_hold_ce": base_hold,
                 "n_train": int(train_pos.size),
                 "progress": 1.0,
+                "stopped_early": stopped_early,
             }
         )
 
@@ -1115,7 +1174,7 @@ def run_moe_training(cfg: TrainingConfig, emit: EmitFn, cancel: CancelToken) -> 
 
     pack_dir = UI_PACK_ROOT / f"moe_ui_{cfg.run_name}_h{h_actual}_H{H_actual}_n{cfg.max_rows}"
     pack_dir.mkdir(parents=True, exist_ok=True)
-    work_dir = PROJECT_ROOT / "RESULTS" / "moe" / cfg.run_name
+    work_dir = MOE_RESULTS_ROOT / cfg.run_name
     work_dir.mkdir(parents=True, exist_ok=True)
 
     # -- loading: pack the training rows ------------------------------------
@@ -1236,6 +1295,7 @@ def run_moe_training(cfg: TrainingConfig, emit: EmitFn, cancel: CancelToken) -> 
             "technique": "base",
             "config": cfg.to_dict(),
             "metrics": metrics,
+            "timestamp": datetime.now(timezone.utc).isoformat(timespec="seconds"),
         }
         (work_dir / "summary.json").write_text(json.dumps(summary, indent=2), encoding="utf-8")
         emit({"stage": "done", "summary": summary})
@@ -1244,6 +1304,7 @@ def run_moe_training(cfg: TrainingConfig, emit: EmitFn, cancel: CancelToken) -> 
     # -- switch (end-to-end sparse top-1 MoE) --------------------------------
     if cfg.technique == "switch":
         pack, _s, _l = load_train_pack(pack_dir)
+        pack = pack.to(device)
         emit(
             {
                 "stage": "switch",
@@ -1269,6 +1330,7 @@ def run_moe_training(cfg: TrainingConfig, emit: EmitFn, cancel: CancelToken) -> 
             "config": cfg.to_dict(),
             "metrics": metrics,
             "best_test_ce": best_test,
+            "timestamp": datetime.now(timezone.utc).isoformat(timespec="seconds"),
         }
         (work_dir / "summary.json").write_text(json.dumps(summary, indent=2), encoding="utf-8")
         emit({"stage": "done", "summary": summary})
@@ -1368,6 +1430,7 @@ def run_moe_training(cfg: TrainingConfig, emit: EmitFn, cancel: CancelToken) -> 
 
     # -- experts -------------------------------------------------------------
     pack, _s, _l = load_train_pack(pack_dir)
+    pack = pack.to(device)
     emit({"stage": "experts", "event": "start", "k": cfg.k})
     moe = _fine_tune_experts(base, disp_labels, pack, cfg, device, emit, cancel, dispatcher=disp)
     moe.save(work_dir / "moe.pt")
@@ -1386,6 +1449,7 @@ def run_moe_training(cfg: TrainingConfig, emit: EmitFn, cancel: CancelToken) -> 
         "metrics": metrics,
         "dispatcher_val_acc": best_val_acc,
         "cluster_sizes": diag.get("sizes", []),
+        "timestamp": datetime.now(timezone.utc).isoformat(timespec="seconds"),
     }
     (work_dir / "summary.json").write_text(json.dumps(summary, indent=2), encoding="utf-8")
     emit({"stage": "done", "summary": summary})
@@ -1450,3 +1514,63 @@ def iter_dispatchers() -> list[dict]:
             }
         )
     return out
+
+
+def iter_history() -> list[dict]:
+    """List completed MoE runs for the History tab.
+
+    Scans ``RESULTS/moe/*/summary.json`` and returns one entry per run, newest
+    first. Each entry: ``{run_name, path, timestamp, technique, config,
+    metrics}``. ``timestamp`` is the ISO string saved at write time (falls back
+    to the directory mtime for legacy runs).
+    """
+    root = MOE_RESULTS_ROOT
+    if not root.is_dir():
+        return []
+    out: list[dict] = []
+    for summary in root.glob("*/summary.json"):
+        run_name = summary.parent.name
+        try:
+            data = json.loads(summary.read_text(encoding="utf-8"))
+        except (OSError, json.JSONDecodeError):
+            continue
+        if not isinstance(data, dict):
+            continue
+        timestamp = data.get("timestamp")
+        if not timestamp:
+            timestamp = datetime.fromtimestamp(
+                summary.stat().st_mtime, tz=timezone.utc
+            ).isoformat(timespec="seconds")
+        out.append(
+            {
+                "run_name": run_name,
+                "path": str(summary.parent),
+                "timestamp": timestamp,
+                "technique": data.get("technique", ""),
+                "config": data.get("config") or {},
+                "metrics": data.get("metrics") or {},
+            }
+        )
+    out.sort(key=lambda r: r["timestamp"], reverse=True)
+    return out
+
+
+def delete_run(run_name: str) -> tuple[bool, str]:
+    """Delete a run's results folder (and its sibling ``.zip`` if present).
+
+    Returns ``(ok, message)``. Only the ``RESULTS/moe/<run_name>`` directory is
+    removed; cached data packs and dispatcher checkpoints are left untouched.
+    """
+    root = MOE_RESULTS_ROOT
+    run_dir = root / run_name
+    zip_path = root / f"{run_name}.zip"
+    if not run_dir.is_dir() and not zip_path.exists():
+        return False, f"run '{run_name}' not found"
+    try:
+        if run_dir.is_dir():
+            shutil.rmtree(run_dir)
+        if zip_path.exists():
+            zip_path.unlink()
+    except OSError as exc:
+        return False, f"failed to delete '{run_name}': {exc}"
+    return True, f"deleted '{run_name}'"
