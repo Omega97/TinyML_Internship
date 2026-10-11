@@ -1,22 +1,12 @@
 # Implementation: NNUE and MoE for Chess
 
 
-#idea can/should we focus the dataset on positions hard for the NNUE (eval flipped by 180°)? Is there a trick to let the NNUE figure out the steps ahead, like the solution to a tactic? **More layers but sparse connections**?
-
 #idea **certi algoritmi di clustering decidono $B$** 
 
 #idea U Map in 3D, DBScan, Density Peak Clustering
   
-#idea PCA per aiutare il clustering?
-
 #todo improve the flavour of the thesis by making each section more *intentional* and clear - align the chapter to its title (in gray) 
-
-#todo we could emphasize the hardest to read positions, but with quiescent search we hardly ever have to evaluate those correctly
   
-#todo visualizzare i cluster; plot per la tesi
-
-#todo to specify why we use cross-entropy loss
-
 #todo estimate number of value function calls
 
 ---
@@ -25,12 +15,11 @@
 
 <span style="color: #808080;">[Data Overview]</span> The quality of an NNUE evaluation function depends critically on the dataset used for training. For this work, we constructed a dataset of approximately [dataset_size] chess positions extracted from human games and labeled with high-quality value estimates from a strong teacher network, **Leela Chess Zero** (Lc0), the *spiritual* successor of AlphaZero.
 
-#todo reference to Lc0
-#todo update hyperparameters
+#reference to Lc0
 
 ### 4.1.1 Dataset Construction
 
-<span style="color: #808080;">[Sources]</span> The raw positions are sourced from **Lichess** monthly PGN archives, containing standard-rated games played by humans across all time controls. We filter games to include only those with at least 16 moves, excluding very short games that often end in early blunders or resignations and would introduce noisy or uninformative positions into the training set ( #todo omit?). From each remaining game, we sample positions randomly with probability [keep_prob], ensuring a diverse and representative collection of states across all phases of play, and mostly avoiding highly correlated positions.
+<span style="color: #808080;">[Sources]</span> The raw positions are sourced from **Lichess** monthly PGN archives, containing standard-rated games played by humans across all time controls. We filter games to include only those with at least 16 moves, excluding very short games that often end in early blunders or resignations and would introduce noisy or uninformative positions into the training set. From each remaining game, we sample positions randomly with probability [keep_prob], ensuring a diverse and representative collection of states across all phases of play, and mostly avoiding highly correlated positions.
 
 <span style="color: #808080;">[Phase Mix]</span> The dataset retains the natural distribution of game phases found in human play: a majority of middlegame positions, with fewer openings and endgames. We intentionally avoid resampling to balance phases, as the natural distribution better reflects the positions the engine will encounter during actual play. Each position is stored as a FEN string along with the multiplicity of the position—a visit count that may be used for optional weighting during training.
 
@@ -44,11 +33,9 @@
 
 <span style="color: #808080;">[Feature Split]</span> The $d_{\text{in}}$ features are divided into two categories:
 
-- **716 base features**: These encode piece-square pairs, representing the presence of each piece type on each square. The feature set is pruned to remove impossible pawn ranks and compressed to reduce redundancy (e.g., the king plane is stored in a compact form). #todo explain better? In the [d_in]‑dim SARDINE encoder, the king plane is compressed from 64 squares to 32, saving features.
+- **716 base features**: These encode piece-square pairs, representing the presence of each piece type on each square. The feature set is pruned to remove impossible pawn ranks and compressed to reduce redundancy (e.g., the king plane is stored in a compact form). #todo explain better? 🟡 In the [d_in]‑dim SARDINE encoder, the king plane is compressed from 64 squares to 32, saving features.
 
 - **128 tactical features**: These encode dynamic aspects of the position, specifically which pieces are under attack and which pieces are attacking the king. These features provide the network with explicit information about immediate tactical threats. #todo is it worth trying without these? I don't think so...
-
-#todo list to prose?
 
 <span style="color: #808080;">[Dual POV]</span> A key design choice is the **dual‑POV** encoding: for each position, the encoder produces two sets of sparse indices—one from the perspective of the **side‑to‑move** (STM) and one from the opponent's perspective (obtained by flipping the board rank-wise and swapping colors). This dual representation allows the network to learn symmetric evaluations and is consistent with the NNUE architecture's ability to evaluate positions from either player's viewpoint.
 
@@ -104,7 +91,7 @@ $$
 where $x_{\text{own}}, x_{\text{opp}} \in \{0,1\}^{[d_in]}$ are the sparse feature vectors for the two perspectives, and $W_{\text{L1}} \in \mathbb{R}^{d_{\text{in}} \times W}$ is the shared weight matrix of the accumulator layer. The output of the L1 layer is a pair of vectors $h_{\text{own}}, h_{\text{opp}} \in \mathbb{R}^W$, where $W$ is the hidden dimension of the accumulator, set to $W = [W]$ in this work.
 
 <div align="center">
-    <img src="THESIS/thesis-plots/sardine_nnue_architecture.png" width="600">
+    <img src="THESIS/thesis-plots/nnue_architecture_moe.png" width="600">
 </div>
 
 #todo make the plots large in LaTeX
@@ -123,7 +110,7 @@ $$
 
 This clipping is essential for integer quantization, as it bounds the dynamic range of the accumulator values and allows the use of low‑precision integer arithmetic during inference.
 
-#todo reference to CReLU?
+#reference to CReLU?
 
 ### 4.2.3 Side‑to‑Move Reorder
 
@@ -190,7 +177,7 @@ $$
 
 The outer sum averages the loss over the batch, while the inner sum accumulates the contribution of each outcome for a given position.
 
-#todo reference to soft cross-entropy
+#reference to soft cross-entropy
 
 <span style="color: #808080;">[Why this loss]</span> This loss is well-suited to the task because the teacher labels are probability distributions rather than point estimates. Soft cross-entropy encourages the model to match the full outcome distribution, not merely its scalar expected reward, and therefore provides a richer training signal. The loss also handles the non-linearity introduced by the softmax in a principled way, and its gradient does not saturate at extreme values, unlike the squared error on the scalar evaluation $v = P(W) - P(L)$.
 
