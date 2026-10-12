@@ -8,7 +8,6 @@ data/processed/
 /models/
 /legacy/pre-sardine/models/
 
-*.csv
 *.pgn
 *.bz2
 *.h
