@@ -1,0 +1,7 @@
+Run,K,MoE CE,vs base (0.6537)
+l1_k4_linear_ep30_10M_100k,4,0.6499,-0.0037
+l1_k16_linear_ep100_rprop_60M,16,0.6502,-0.0035
+l1_k4_linear_ep30_5M,4,0.6505,-0.0032
+l1_k2_linear_ep30_10M,2,0.6505,-0.0032
+l1_k8_linear_ep50_rprop_25M,8,0.6512,-0.0025
+l1_k8_linear_ep100_rprop_50M,8,0.6515,-0.0022

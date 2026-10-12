@@ -1,32 +1,42 @@
-## Discussion
+# 6 Discussion
 
----
+#todo mention the fact that we can replace the worst performing experts with the base model, saving some memory, with a very limited decrease in performance
 
-### 6.1 Interpretation of Results
+## 6.1 Interpretation of Results
 
-<span style="color: #808080;">[Interpretation]</span>
-#todo What the numbers imply for specialisation, eval quality, and on-device cost. Whether clusters are semantically meaningful.
+<span style="color: #808080;">[Expert Specialization]</span> The experimental results demonstrate that while MoE architectures possess the theoretical capacity to outperform a monolithic base model, realizing this capacity requires overcoming severe routing bottlenecks. Our oracle upper bounds confirm that the expert heads can indeed specialize, yielding substantial cross-entropy (CE) improvements (down to ~0.60) if routed perfectly. Furthermore, we established that a training budget of 7 million positions is sufficient to avoid overfitting in the larger NNUE architectures, allowing the base models to stabilize at a CE of approximately 0.62. This data-sufficient regime ensures that the MoE experts are also trained without the underfitting issues observed in preliminary, data-starved runs.
 
----
+<span style="color: #808080;">[Routing Bottleneck]</span> The primary failure mode of the MoE variants on the strong reference base is a lack of an inference-time signal that accurately identifies the optimal expert, rather than a lack of model capacity. The fact that soft-gated and Switch variants pin their routing gates to a near-uniform distribution—resulting in experts that remain clones of the base head—highlights the difficulty of learning a routing policy from scratch when the base model is already highly optimized. Conversely, the random dispatcher control proves that without correct routing, the specialized experts actually degrade performance below the base model, confirming that the gap between the MoE and the oracle is entirely attributable to routing inaccuracies.
 
-### 6.2 Limitations
+<span style="color: #808080;">[Optimization Stability]</span> A critical secondary finding that unlocked measurable gains was the modification of the expert fine-tuning optimizer. Initial experiments using standard adaptive optimizers exhibited instability and premature convergence when scaling the training budget and expert capacity. By transitioning to the Rprop optimizer, and specifically employing the technique of stepping back and slowing down the learning rate when the loss increased, the fine-tuning step became significantly more stable and reliable. This optimization trick allowed the experts to properly specialize on the weaker base architecture, yielding the first reproducible routing gains and proving that the dynamics of the fine-tuning phase are just as critical as the routing signal itself.
 
-<span style="color: #808080;">[Limitations]</span>
-#todo Clustering quality, dispatcher errors, Wio memory/compute, sensitivity to $B$, dependence on Lc0 and on a single game.
+<span style="color: #808080;">[Inference Efficiency]</span> From a deployment perspective, the hard-routing MoE variants offer a highly favorable computational trade-off compared to soft-gated alternatives. The linear dispatcher adds negligible overhead—merely a single matrix-vector product and an argmax operation—making it ideal for constrained environments. Because the L1 activations are already computed during the forward pass, the routing decision is essentially free in terms of memory bandwidth, preserving the extreme inference throughput that makes NNUE architectures valuable in the first place.
 
----
+<span style="color: #808080;">[Bridging the Routing Gap]</span> The fundamental dichotomy identified in this work—that L1 activations are linearly dispatchable but lack specialization signal, while sample gradients contain the ideal signal but are non-linearly entangled—motivates the KITSUNE approach. Rather than forcing a single-stage dispatcher to approximate a non-convex gradient manifold, KITSUNE decouples the problem: it partitions the trivially separable L1 space into micro-buckets, and then stitches these micro-buckets into macro-experts offline using gradient similarity. This two-stage design preserves the actionable gradient information without sacrificing the robust, nearly perfect inference-time routing of the L1 space, effectively closing the routing gap identified by the oracle bounds.
 
-### 6.3 Generalisation
+## 6.2 Limitations
 
-<span style="color: #808080;">[Transfer]</span>
-#todo Transfer to other domains. What must change (features, loss, target, hardware).
+<span style="color: #808080;">[Dispatcher Ceilings]</span> Despite the theoretical elegance of gradient-based routing, the physical limitations of the dispatcher remain a hard constraint. Even with advanced architectures, mapping L1 activations to gradient clusters tops out at an accuracy far below what is required to fully realize the oracle's potential. While the KITSUNE approach mitigates this by relying on the highly accurate L1 micro-bucketing, the offline stitching step assumes that the mean gradient of a micro-bucket is a perfectly representative proxy for all samples within it, which may not hold for highly diverse or noisy partitions.
 
----
+<span style="color: #808080;">[Hyperparameter Sensitivity]</span> The methodology exhibits a distinct sensitivity to the number of macro-experts ($B$) and the resolution of the micro-buckets ($B'$). If $B'$ is too small, the gradient variance within a micro-bucket destroys the specialization signal; if it is too large, the linear dispatcher struggles to maintain near-perfect accuracy. Similarly, the load-balancing constraint during the offline clustering phase requires careful tuning to prevent a few macro-experts from absorbing the vast majority of the data, which would otherwise lead to severe capacity underutilization.
 
-### 6.4 Comparison with Related Work
+<span style="color: #808080;">[Data and Teacher Dependence]</span> The routing signals derived in this work are inherently dependent on the specific teacher model and dataset distribution used during the calibration phase. The sample gradients are computed with respect to the Lc0 teacher's win/draw/loss distribution; a different teacher, or a dataset with a radically different phase distribution, would yield a different gradient manifold. Consequently, the offline micro-to-macro mapping must be recomputed if the underlying data distribution or the teacher model shifts significantly, limiting the plug-and-play portability of the routing tables.
 
-<span style="color: #808080;">[Related Work]</span>
-#todo Vs.\ handcrafted NNUE bucketing. Vs.\ learned routing and gradient-clustering MoE (activations vs.\ sample-gradients; LLM LoRA vs.\ NNUE heads).
+## 6.3 Generalisation
+
+<span style="color: #808080;">[Cross-Domain Applicability]</span> The core premise of KITSUNE—decoupling a trivially dispatchable geometric space from a complex, signal-rich optimization space—is broadly applicable beyond chess evaluation. Any architecture that utilizes a shared trunk with specialized heads, such as multi-task learning networks, recommendation systems with diverse user intents, or autonomous driving models handling distinct traffic scenarios, could benefit from this two-stage routing paradigm. The requirement is simply that the intermediate trunk activations form convex, linearly separable regions, while the task-specific gradients form complex, non-convex manifolds.
+
+<span style="color: #808080;">[Adaptation Requirements]</span> Transferring this framework to a new domain requires adapting the feature extraction, the loss function, and the target definitions. The chess-specific sparse binary features would be replaced by the domain's native input representation, and the soft cross-entropy loss against a WDL distribution would be swapped for the appropriate objective, such as mean squared error for regression or categorical cross-entropy for classification. The calibration pipeline would then need to be re-run to extract the domain-specific sample gradients and recompute the micro-to-macro lookup table.
+
+<span style="color: #808080;">[Hardware Portability]</span> Because the inference-time computation of the KITSUNE dispatcher is strictly limited to a linear projection and a static array lookup, the approach is highly portable across diverse hardware accelerators. It avoids the non-linear overhead, memory fragmentation, and complex control flow associated with soft-gating or attention-based routing. This makes it exceptionally well-suited for deployment on microcontrollers, edge AI accelerators, and custom silicon where predictable execution time and minimal memory bandwidth are paramount.
+
+## 6.4 Comparison with Related Work
+
+<span style="color: #808080;">[Handcrafted Baselines]</span> Traditional NNUE architectures rely heavily on handcrafted bucketing, typically using the scalar piece count to divide the game into distinct phases (e.g., opening, middlegame, endgame). While our experiments showed that piece-count routing performs adequately and provides a non-degrading baseline, it captures only a coarse, one-dimensional game-phase heuristic. In contrast, the L1 and gradient-based partitions capture fine-grained positional geometry and learning dynamics, allowing the experts to specialize on subtle tactical motifs or structural imbalances that a simple piece-count heuristic completely overlooks.
+
+<span style="color: #808080;">[Modern Mixture-of-Experts]</span> In the broader context of modern machine learning, large language models often employ MoE layers with soft-gating or Switch routing mechanisms. These approaches rely on massive computational budgets, auxiliary load-balancing losses, and differentiable routing to manage the sparsity. Our approach stands in stark contrast by utilizing hard, static routing optimized for extreme efficiency. By accepting that the routing table can be computed entirely offline, we eliminate the need for differentiable gates at inference time, trading the flexibility of dynamic soft-routing for the deterministic, zero-overhead execution required in real-time search engines.
+
+<span style="color: #808080;">[Gradient-Aware Routing]</span> Finally, compared to prior literature that attempts to route directly on gradients or task-vectors at inference time, KITSUNE offers a novel pragmatic compromise. Previous gradient-clustering MoE approaches often fail because they attempt to train a neural network to predict non-linear gradient manifolds from linear activations, resulting in unreliable dispatchers. KITSUNE sidesteps this impossibility by acknowledging the geometric limits of the activation space, using gradients purely as an offline profiling tool to stitch together geometrically sound, online-dispatchable micro-buckets.
 
 ---
 
