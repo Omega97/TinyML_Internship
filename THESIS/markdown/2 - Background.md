@@ -8,7 +8,7 @@
 
 ## 2.1 Chess Engines and Evaluation Functions
 
-<span style="color: #808080;">[Role of Eval]</span> At the core of every chess engine lies an **evaluation function** $f: \mathcal{S} \rightarrow \mathbb{R}$ that assigns a scalar value to a board position, indicating the expected outcome from that position (typically from the perspective of the player to move). This value guides the search algorithm—usually a variant of **alpha-beta search** with iterative deepening—by pruning unpromising branches and selecting the most promising moves.
+<span style="color: #808080;">[Role of Eval]</span> At the core of every chess engine lies an evaluation function $f: \mathcal{S} \rightarrow \mathbb{R}$ that assigns a scalar value to a board position, indicating the expected outcome from that position (typically from the perspective of the player to move). This value guides the search algorithm—usually a variant of **alpha-beta search** with iterative deepening—by pruning unpromising branches and selecting the most promising moves.
 
 ### 2.1.1 Classical Evaluation
 

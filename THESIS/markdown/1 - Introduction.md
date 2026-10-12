@@ -15,14 +15,17 @@
 
 #description <span style="color: #808080;">[The base NNUE architecture efficiently computes the L1 activations. It is the first hidden layer of the network, and the activations are stored throughout the game. After every move, since the position changes slightly, only the differences are added and subtracted.]</span>
 
-
 <span style="color: #808080;">[Heuristic Gap]</span> A single shallow head must represent positions arising from substantially different tactical and positional regimes. This raises the question of whether different regions of the state space could benefit from specialized heads. Different positions may require understanding of very diverse aspects of the game. Mixture-of-Experts (**MoE**) evaluation provides a natural framework for this form of specialization: partition the state space into buckets, and assign an *expert head* to each region, while keeping a shared representation. Common chess-engine bucketing strategies rely on manually designed features such as piece count, king location, or game phase. Those rules are cheap and interpretable, but they are game-specific heuristics and are not necessarily optimal. They encode what a programmer thinks is a distinct regime, not what the model actually needs in order to specialise.
 
 #reference to MoE
 
 <span style="color: #808080;">[Core Idea]</span> Unsupervised alternatives exist. Clustering hidden-layer activations, for example, groups positions that look similar in the eyes of the network. The weakness of this approach lies in the fact that similarity of representation is not the same as similarity of learning signal. Hidden activations characterize the representation produced by the current model, whereas gradients with respect to the head parameters directly characterize how the loss would change under parameter updates. This motivates defining the partition in terms of the parameter-space directions induced by individual training samples. This thesis is motivated by the idea that lightweight, data-driven bucketing can provide a practical solution for on-device NNUE evaluation while avoiding reliance on chess-specific features. More generally, such an approach provides a way to mix experts over a state space using information derived from the learning process.
 
-#todo figure
+<div align="center">
+    <img src="THESIS/thesis-plots/mini-k-means_isomap_4-clusters.jpg" width="600">
+</div>
+
+#description <span style="color: #808080;">[A random subset of game positions, clustered by L1 activations with Mini batch k-Means, and projected in 2D with ISOMAP.]</span>
 
 ## 1.2 Problem Statement
 

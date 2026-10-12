@@ -290,6 +290,37 @@ def test_mlp_dispatcher_loss_drops_and_predicts():
     assert acc > 0.7
 
 
+def test_dispatcher_save_load_roundtrip(tmp_path: Path):
+    from tinymlinternship.nnue.moe import (
+        MLPDispatcher,
+        dispatcher_checkpoint_info,
+        load_dispatcher,
+        save_dispatcher,
+    )
+
+    torch.manual_seed(0)
+    mlp = MLPDispatcher(in_dim=256, n_clusters=8, hidden_dim=64)
+    path = tmp_path / "dispatcher.pt"
+    save_dispatcher(mlp, path)
+    info = dispatcher_checkpoint_info(path)
+    assert info is not None
+    assert info["dispatcher_type"] == "mlp"
+    assert info["in_dim"] == 256 and info["n_clusters"] == 8 and info["hidden_dim"] == 64
+
+    loaded = load_dispatcher(path)
+    assert isinstance(loaded, MLPDispatcher)
+    assert loaded.in_dim == 256 and loaded.n_clusters == 8 and loaded.hidden_dim == 64
+    x = torch.randn(4, 256)
+    assert torch.allclose(mlp(x), loaded(x), atol=1e-6)
+
+    lin = LinearDispatcher(in_dim=128, n_clusters=4)
+    lin_path = tmp_path / "lin.pt"
+    save_dispatcher(lin, lin_path)
+    lin2 = load_dispatcher(lin_path)
+    assert isinstance(lin2, LinearDispatcher)
+    assert lin2.in_dim == 128 and lin2.n_clusters == 4
+
+
 def test_expert_step_does_not_change_l1():
     torch.manual_seed(0)
     base = DualHiddenNNUE(hidden_dim=4, hidden2_dim=6)

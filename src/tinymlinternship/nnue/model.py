@@ -2,6 +2,9 @@
 
 from __future__ import annotations
 
+from pathlib import Path
+from typing import Any
+
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
@@ -13,10 +16,36 @@ def crelu(x: torch.Tensor, clip: float = 127.0) -> torch.Tensor:
     return torch.clamp(x, min=0.0, max=clip)
 
 
+def l1_activation(
+    z: torch.Tensor,
+    encoder: str = "standard",
+    crelu_clip: float = 127.0,
+    normalize: bool = False,
+) -> torch.Tensor:
+    """Per-POV activation after the L1 linear layer.
+
+    ``standard`` applies CReLU (clip at ``crelu_clip``), matching the legacy
+    accumulator. ``world_model`` applies SiLU and (optionally) normalizes the
+    latent to the unit hypersphere, matching the self-supervised world-model
+    encoder. The ``l1`` weight matrix is identical in both cases, so state-dict
+    keys stay ``l1.weight`` / ``l1.bias`` and legacy checkpoints remain loadable.
+    """
+    if encoder == "world_model":
+        z = F.silu(z)
+        if normalize:
+            z = F.normalize(z, dim=-1, eps=1e-8)
+        return z
+    return crelu(z, crelu_clip)
+
+
 class DualHiddenNNUE(nn.Module):
     """
     Shared L1 ``844 → W`` on each POV, CReLU, concat ``[STM, opp]`` → ``2W``,
     L2 ``2W → H`` CReLU, head ``H → 3`` logits. Softmax is STM ``(W, D, L)``.
+
+    When ``encoder="world_model"`` the L1 layer is a self-supervised
+    world-model encoder (SiLU, optionally hypersphere-normalized) instead of a
+    CReLU accumulator; the weight matrix and all downstream layers are unchanged.
     """
 
     architecture = "dual_hidden_wdl"
@@ -28,17 +57,27 @@ class DualHiddenNNUE(nn.Module):
         hidden_dim: int = 64,
         hidden2_dim: int = 128,
         crelu_clip: float = 127.0,
+        encoder: str = "standard",
+        normalize_l1: bool = False,
     ) -> None:
         super().__init__()
+        if encoder not in ("standard", "world_model"):
+            raise ValueError(f"unknown encoder {encoder!r}")
         self.feature_dim = feature_dim
         self.hidden_dim = hidden_dim
         self.hidden2_dim = hidden2_dim
         self.crelu_clip = crelu_clip
+        self.encoder = encoder
+        self.normalize_l1 = bool(normalize_l1)
         self.l1 = nn.Linear(feature_dim, hidden_dim, bias=True)
         self.l2 = nn.Linear(hidden_dim * 2, hidden2_dim, bias=True)
         self.head = nn.Linear(hidden2_dim, 3, bias=True)
         self.softmax = nn.Softmax(dim=-1)
         self._reset_parameters()
+
+    @property
+    def is_world_model(self) -> bool:
+        return self.encoder == "world_model"
 
     def _reset_parameters(self) -> None:
         for layer in (self.l1, self.l2, self.head):
@@ -46,7 +85,7 @@ class DualHiddenNNUE(nn.Module):
             nn.init.zeros_(layer.bias)
 
     def l1_dense(self, features: torch.Tensor) -> torch.Tensor:
-        return crelu(self.l1(features), self.crelu_clip)
+        return l1_activation(self.l1(features), self.encoder, self.crelu_clip, self.normalize_l1)
 
     def l1_sparse(self, indices: torch.Tensor, mask: torch.Tensor) -> torch.Tensor:
         """``indices`` (B, K) int64, ``mask`` (B, K) bool. Pad slots must be masked.
@@ -63,7 +102,7 @@ class DualHiddenNNUE(nn.Module):
             dtype=self.l1.weight.dtype,
         )
         features.scatter_add_(1, safe, mask.to(dtype=features.dtype))
-        return crelu(self.l1(features), self.crelu_clip)
+        return l1_activation(self.l1(features), self.encoder, self.crelu_clip, self.normalize_l1)
 
     def stm_concat(
         self,
@@ -163,6 +202,21 @@ class DualHiddenNNUE(nn.Module):
 
     def count_parameters(self) -> int:
         return sum(p.numel() for p in self.parameters() if p.requires_grad)
+
+    def state_payload(self) -> dict[str, Any]:
+        return {
+            "architecture": self.architecture,
+            "hidden_dim": self.hidden_dim,
+            "hidden2_dim": self.hidden2_dim,
+            "encoder": self.encoder,
+            "normalize_l1": self.normalize_l1,
+            "model_state_dict": self.state_dict(),
+        }
+
+    def save(self, path: Path | str) -> None:
+        path = Path(path)
+        path.parent.mkdir(parents=True, exist_ok=True)
+        torch.save(self.state_payload(), path)
 
 
 class LinearWDLNNUE(nn.Module):

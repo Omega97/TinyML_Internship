@@ -137,6 +137,12 @@ MoE models combine a trained dispatcher (or soft gating network) with $K$ specia
 
 #### Algorithms & Experiments
 
+- [x] 🟢📋📊 **Base-Only (K=1, no MoE)**
+	- **heads**: $K = 1$ (UI `Heads K = 1 (no MoE)`), no clustering / dispatcher / experts
+	- **training**: base model only (train new, or load a checkpoint / world model); no pack built when loading
+	- **evaluation**: test-set CE/MAE of the base alone (`eval.json`)
+	- **base**: dual-POV two-hidden NNUE ($W$, $H$, 844-d input)
+
 - [x] 🟢📋📊 **Piece-Count Routed MoE**:
 	- **clustering**: handcrafted piece-count buckets (8 disjoint intervals, §1 `PIECE_COUNT_BUCKETS`), not learned
 	- **dispatcher**: fixed piece-count rule (Board Input → Bucket ID), no training
@@ -233,6 +239,32 @@ MoE models combine a trained dispatcher (or soft gating network) with $K$ specia
 
 ---
 
+### 5. World-Model Encoder (self-supervised L1) 🌐
+
+`[RESULTS/moe/]` + `[models/checkpoints/nnue/worldmodel_*/]`
+
+An optional self-supervised replacement for the standard L1 accumulator. The same `844 → W` weight matrix is trained contrastively (mirror-symmetry positive pairs) with SiLU + optional unit-hypersphere activation instead of CReLU. It replaces L1 **globally** — the shared encoder, the router input, and every expert head all read the latent `z`. Spec/blueprint: `RESULTS/world-model-how-to.md`.
+
+**Toggle** (`Encoder (L1)` in the MoE training UI): the user chooses the encoder type `standard` (CReLU accumulator, unchanged) or `world_model`, and — for a world model — whether to **Train** it (contrastive L1 → supervised L2/head, frozen L1) or **Load** an existing world-model checkpoint. Standard-L1 models stay exactly as they are; loaded checkpoints report their encoder type.
+
+#### Metrics
+- Contrastive loss: InfoNCE (temperature τ) / VICReg (invariance + variance + covariance)
+- Collapse diagnostics: singular-value spectrum + effective rank (collapse ⇒ ≈ 1)
+- Downstream: base CE/MAE vs the standard-L1 base at equal $W$/$H$
+
+#### Plots
+- Contrastive loss curve; latent spectrum / effective-rank (collapse check)
+- MoE-vs-base CE (world-model L1 vs standard L1)
+
+#### Algorithms & Experiments
+- [ ] 🔴📋📊 World-Model Encoder — Train (`encoder=world_model`, `world_model_source=train`, loss ∈ {InfoNCE, VICReg}, τ, epochs, LR, normalize) — `src/tinymlinternship/nnue/world_model.py`
+- [ ] 🔴📋📊 World-Model Encoder — Load existing checkpoint (`world_model_source=load`) — `load_dual_hidden_checkpoint` reads the `encoder`/`normalize_l1` flags
+
+#### Results Summary
+- Not yet run. (Expected comparison: world-model L1 vs standard L1 at equal $W$/$H$ on the same MoE battery, plus collapse diagnostics.)
+
+---
+
 ## Runs
 
 > Report here the runs.
@@ -272,4 +304,6 @@ MoE models combine a trained dispatcher (or soft gating network) with $K$ specia
 **Run 11 — Random Dispatcher Control (L1 & gradient hard MoE, K ∈ {2,4,8,16}):** 🟢 2026-09-29, `scripts/run_random_dispatcher.py`. Replaces the trained MLP dispatcher with a uniform random router (seed 0) over the same expert heads (`l1_clustered_k{K}/moe.pt` and `grad_clustered_k{K}/moe.pt`, frozen L1). Tables: `RESULTS/moe/random_<variant>_k{K}/{eval.json, summary.json}` + `random_dispatcher_summary.json`. Result: random routing is always worse than the trained dispatcher and worse than base, degrading with K — random CE 0.6311/0.6337/0.6429/0.6398 (gradient) and 0.6317/0.6327/0.6341/0.6346 (L1) vs base 0.6303. Confirms the experts drift from the base and the dispatcher's routing (not raw capacity) is what returns the MoE to ≈ base.
 
 **Run 12 — Well-resourced gradient-clustered hard MoE (K=8, 7M/head):** 🔴 2026-09-30, `scripts/run_wellresourced_gradient_moe.py` (to be implemented). Targets the two bottlenecks isolated in Runs 6–11 — expert underfitting (≤2M rows, 2 epochs) and the weak $L1 \to$ gradient dispatcher (Top-1 ≈ 0.53 at $K=8$): mini-batch k-means on the cached 48-d head gradients ($K=8$) → single-hidden MLP dispatcher ($h=64$, **200 epochs**, early-stopped; input $L1 \oplus$ board features) → 8 expert NNUE (L2, OUT) blocks (frozen L1) fine-tuned **100 epochs** with warm-start + cosine LR decay on **7M routed positions per head** (≈56M, new `moe_b8_56m` pack). Tables per run: `RESULTS/moe/wellresourced_k8/{labels.npy, centroids.npy, diagnostics.json, dispatcher.pt, dispatcher_history.json, labels_dispatcher.npy, expert_metrics.json, eval.json, summary.json}` + `wellresourced_summary.json`; plots `expert_ce_by_bucket.png`, `moe_vs_base_ce.png`. Also evaluates the argmin-loss oracle upper bound (Run 10) and a capacity-matched dense reference. Target: MoE CE meaningfully below base 0.6303.
+
+**Run 13 — World-Model Encoder (self-supervised L1, train/load):** 🔴 (UI + engine implemented, no results), `scripts/moe-training-UI/` via `src/tinymlinternship/nnue/world_model.py`. New `encoder ∈ {standard, world_model}` toggle on the base model: `world_model` replaces the CReLU accumulator activation with SiLU + optional unit-hypersphere normalization, trained contrastively on mirror-symmetry positive pairs (InfoNCE `τ` or VICReg), then `L2`/`head` are supervised-trained with L1 frozen. `world_model_source ∈ {train, load}` picks training from scratch/init or loading a `models/checkpoints/nnue/worldmodel_h{W}_H{H}/best.pt` (payload carries `encoder`/`normalize_l1`). World-model checkpoints are badged in the UI dropdowns; a load of a non-world-model checkpoint is rejected. Artifacts per run: `RESULTS/moe/<run_name>/{summary.json, eval.json, moe.pt, ...}` (summary includes collapse diagnostics: singular-value spectrum + effective rank). Blueprint: `RESULTS/world-model-how-to.md`.
 

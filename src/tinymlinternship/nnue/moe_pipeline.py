@@ -573,7 +573,7 @@ def fine_tune_experts(
             return float((ce_sum / w_sum.clamp_min(1e-8)).item()) if float(w_sum) > 0 else float("nan")
 
         base_hold = _eval(hold_pos)
-        best_ce = float("inf")
+        best_ce = base_hold
         best_state = {k: v.detach().cpu().clone() for k, v in expert.state_dict().items()}
         for epoch in range(1, int(epochs) + 1):
             expert.train()
