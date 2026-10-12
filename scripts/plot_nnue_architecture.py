@@ -186,7 +186,7 @@ def plot_architecture(
     ax.text(
         cx,
         10.10,
-        "SARDINE Bucketed NNUE",
+        "MoE NNUE",
         ha="center",
         va="center",
         fontsize=17,
