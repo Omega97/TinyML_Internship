@@ -1,4 +1,0 @@
-Representation,Clusters,Bucket sizes,Noise (fit subset),Silhouette
-board,3,78.2% / 10.5% / 11.3%,39.6%,0.172
-L1,2,85.6% / 14.4%,57.2%,0.217
-gradients,5,21.1% / 23.1% / 7.8% / 40.2% / 7.7%,75.2%,0.152

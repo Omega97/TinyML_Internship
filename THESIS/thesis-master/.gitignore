@@ -1,9 +1,0 @@
-out/
-*.bbl
-*.blg
-+.txt
-*.log
-*.aux
-*.out
-*.pdf
-*.toc

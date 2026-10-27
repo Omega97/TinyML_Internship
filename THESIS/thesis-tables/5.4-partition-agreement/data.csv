@@ -1,7 +1,0 @@
-Pair,ARI,NMI
-board vs. L1,0.124,0.236
-board vs. gradients,0.057,0.063
-L1 vs. gradients,0.078,0.150
-board vs. piece count,0.189,0.303
-L1 vs. piece count,0.147,0.290
-gradients vs. piece count,0.042,0.088
