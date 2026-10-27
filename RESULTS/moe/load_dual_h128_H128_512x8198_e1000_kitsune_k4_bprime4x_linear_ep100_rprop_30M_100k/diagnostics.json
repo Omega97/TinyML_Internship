@@ -1,0 +1,33 @@
+{
+  "representation": "kitsune_l1_gradient",
+  "sizes": [
+    10355849,
+    11844023,
+    4619288,
+    3180840
+  ],
+  "inertia": 4047753216.0,
+  "kitsune_micro_buckets": 16,
+  "kitsune_macro_buckets": 4,
+  "kitsune_n_nonempty": 16,
+  "kitsune_linkage": "average",
+  "kitsune_metric": "cosine",
+  "kitsune_micro_sizes": [
+    2001982,
+    2347222,
+    2555223,
+    1865606,
+    1263867,
+    2007323,
+    2354662,
+    1698639,
+    697948,
+    743188,
+    3180840,
+    1955685,
+    1654373,
+    604910,
+    2863150,
+    2205382
+  ]
+}

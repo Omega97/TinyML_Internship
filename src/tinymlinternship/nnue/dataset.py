@@ -557,13 +557,23 @@ def ensure_slice_feature_db(
 
 
 def discover_slice_folders(root: Path) -> list[Path]:
-    """Immediate child dirs that contain a slice JSON."""
+    """Child dirs that contain a slice JSON, descending through grouping dirs.
+
+    Slices may be nested one level deep inside grouping directories (e.g.
+    ``fen_value_visits/f_0M_1M/<slice>/``), so recurse into child dirs that do
+    not themselves hold a slice source. The result is deterministic (sorted)
+    and returns slice folders regardless of nesting depth.
+    """
     if not root.is_dir():
         return []
     found: list[Path] = []
     for child in sorted(root.iterdir()):
-        if child.is_dir() and slice_source_json(child) is not None:
+        if not child.is_dir():
+            continue
+        if slice_source_json(child) is not None:
             found.append(child)
+        else:
+            found.extend(discover_slice_folders(child))
     return found
 
 

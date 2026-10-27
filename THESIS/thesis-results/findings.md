@@ -62,3 +62,12 @@
 - KITSUNE (two-stage routing: L1 micro-buckets stitched offline into
   gradient-aligned macro-experts) 
 - It's similar to L1 bucketing, except the way that buckets are built takes into account sample gradients
+- 🆕 The two-stage premise holds at the dispatch layer: a linear router recovers
+  the L1 micro-buckets near-perfectly (top-1 ≈ 0.98 at `B′=16` and `B′=32`), so
+  the convex micro-buckets are trivially dispatchable as designed.
+- 🆕 On the weaker base (`W64 H128`, CE 0.6537), the first two KITSUNE MoE runs
+  (`B′ = 4·K`) reach CE 0.6512 (`K=4`, 30M rows) and 0.6510 (`K=8`, 60M rows) — a
+  −0.0025/−0.0027 gain over the base, but *not* better than the plain L1-clustered
+  hard MoE (0.6499). Gradient-stitched macro-experts have not yet beaten simple
+  L1 clustering.
+- 🆕 A `K=16` (B′=64) run and a longer `K=4` (90M rows) run are still in progress.

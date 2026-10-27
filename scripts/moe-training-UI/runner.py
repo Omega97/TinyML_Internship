@@ -50,6 +50,7 @@ from tinymlinternship.nnue.dataset import FenValueVisitsDataset
 from tinymlinternship.nnue.model import DualHiddenNNUE
 from tinymlinternship.nnue.moe import (
     DualHiddenMoE,
+    KitsuneDispatcher,
     LinearDispatcher,
     MLPDispatcher,
     SoftGatedMoE,
@@ -68,6 +69,7 @@ from tinymlinternship.nnue.moe_data import (
     save_train_pack,
     slice_folders,
     subsample_parts,
+    total_rows,
 )
 from tinymlinternship.nnue.moe_pipeline import (
     DEFAULT_REDUCE_DIM,
@@ -91,6 +93,11 @@ MOE_RESULTS_ROOT = PROJECT_ROOT / "RESULTS" / "moe"
 L1_CHUNK = 16_384
 CLUSTER_CHUNK = 1_000_000
 DISPATCHER_BATCH = 4096
+# Dispatcher training subsamples the L1 matrix into RAM: a linear/MLP router
+# doesn't need all rows, and randomly indexing a disk-backed L1 matrix (hundreds
+# of GB) for SGD degenerates into page-fault thrashing.
+DISPATCHER_MAX_TRAIN = 5_000_000
+DISPATCHER_MAX_VAL = 500_000
 EXPERT_BATCH = 2048
 EVAL_BATCH = 4096
 SWITCH_BATCH = 2048
@@ -145,8 +152,13 @@ class TrainingConfig:
     max_rows: int = 2_000_000
     max_test: int = 50_000
     # clustering (hard MoE)
-    clustering: str = "gradient"  # "gradient" | "l1" | "piece_count"
+    clustering: str = "gradient"  # "gradient" | "l1" | "piece_count" | "kitsune"
     k: int = 8
+    # KITSUNE micro-bucket resolution: B' = micro_bucket_factor * B
+    micro_bucket_factor: int = 4
+    # KITSUNE balanced-draft fraction: share of micro-buckets claimed by the
+    # round-robin draft (even split); the rest fall back to nearest centroid.
+    kitsune_alpha: float = 1.0  # 0 = pure nearest-centroid, 1 = fully balanced
     # dispatcher (hard MoE)
     dispatcher_type: str = "mlp"  # "mlp" | "linear"
     dispatcher_hidden: int = 64
@@ -184,6 +196,24 @@ def _resolve_device(device: str) -> torch.device:
 
 def _n_active_features() -> int:
     return piece_square_count()
+
+
+def available_dataset_rows() -> int:
+    """Total rows across the default slice directory (0 if unavailable).
+
+    Used by the UI to bound the row-count spinboxes to the data that actually
+    exists instead of a hardcoded cap.
+    """
+    try:
+        folders = slice_folders(DEFAULT_SLICES)
+    except Exception:
+        return 0
+    if not folders:
+        return 0
+    try:
+        return total_rows(folders)
+    except Exception:
+        return 0
 
 
 # --------------------------------------------------------------------------- #
@@ -367,11 +397,20 @@ def _build_pack(
 # L1 activations (dispatcher input)
 # --------------------------------------------------------------------------- #
 def build_l1(
-    pack, base: DualHiddenNNUE, device: torch.device, cancel: CancelToken, emit: EmitFn
+    pack,
+    base: DualHiddenNNUE,
+    device: torch.device,
+    cancel: CancelToken,
+    emit: EmitFn,
+    path: Path,
 ) -> np.ndarray:
     n = len(pack)
     hidden = int(base.hidden_dim)
-    out = np.empty((n, 2 * hidden), dtype=np.float32)
+    # Materialize the L1 activation matrix on disk via mmap instead of a single
+    # in-RAM array: at max_rows=99M and hidden=256 this is ~189 GiB of float32,
+    # which exceeds system RAM. The callers (minibatch k-means, dispatcher
+    # training/prediction) already read it in chunks, so an mmap is transparent.
+    out = np.memmap(str(path), dtype=np.float32, mode="w+", shape=(n, 2 * hidden))
     base.eval()
     with torch.inference_mode():
         for start in range(0, n, L1_CHUNK):
@@ -400,15 +439,30 @@ def build_l1(
 # --------------------------------------------------------------------------- #
 # Clustering stage
 # --------------------------------------------------------------------------- #
-def _kmeans_labels(matrix: np.ndarray, k: int) -> tuple[np.ndarray, np.ndarray, dict]:
-    km = fit_minibatch_kmeans(matrix, k, seed=0)
+def _kmeans_labels(
+    matrix: np.ndarray, k: int, cancel: CancelToken, emit: EmitFn
+) -> tuple[np.ndarray, np.ndarray, dict]:
+    def progress(frac: float, msg: str) -> None:
+        cancel.check()
+        emit({"stage": "cluster", "event": "progress", "progress": frac, "msg": msg})
+
+    km = fit_minibatch_kmeans(matrix, k, seed=0, max_fit_rows=5_000_000, progress=progress)
     n = int(matrix.shape[0])
     labels = np.empty(n, dtype=np.int16)
     for start in range(0, n, CLUSTER_CHUNK):
+        cancel.check()
         end = min(start + CLUSTER_CHUNK, n)
         labels[start:end] = km.predict(
             np.ascontiguousarray(matrix[start:end], dtype=np.float32)
         ).astype(np.int16)
+        emit(
+            {
+                "stage": "cluster",
+                "event": "progress",
+                "progress": end / n,
+                "msg": f"assigning labels {end:,}/{n:,}",
+            }
+        )
     centroids = np.ascontiguousarray(km.cluster_centers_, dtype=np.float32)
     diag = cluster_diagnostics(labels, centroids, inertia=float(km.inertia_))
     return labels, centroids, diag
@@ -439,8 +493,160 @@ def _piece_labels(pack, cancel: CancelToken, emit: EmitFn) -> np.ndarray:
 
 
 # --------------------------------------------------------------------------- #
+# KITSUNE (two-stage micro-bucket → macro-expert recombination)
+# --------------------------------------------------------------------------- #
+def _micro_bucket_means(
+    gradients,
+    micro_labels: np.ndarray,
+    b_prime: int,
+    cancel: CancelToken,
+) -> tuple[np.ndarray, np.ndarray]:
+    """Mean sample gradient per micro-bucket (chunked over the mmap'd cache)."""
+    labels = np.asarray(micro_labels, dtype=np.int64)
+    n = int(labels.shape[0])
+    d = int(gradients.shape[1])
+    sums = np.zeros((int(b_prime), d), dtype=np.float64)
+    sizes = np.zeros(int(b_prime), dtype=np.int64)
+    for start in range(0, n, 1_000_000):
+        cancel.check()
+        end = min(start + 1_000_000, n)
+        block = np.asarray(gradients[start:end], dtype=np.float32)
+        lab = labels[start:end]
+        np.add.at(sums, lab, block.astype(np.float64))
+        sizes += np.bincount(lab, minlength=int(b_prime))
+    means = np.zeros((int(b_prime), d), dtype=np.float32)
+    nonempty = sizes > 0
+    if nonempty.any():
+        means[nonempty] = (sums[nonempty] / sizes[nonempty, None]).astype(np.float32)
+    return means, sizes
+
+
+def _kitsune_macro_cluster(
+    mean_grads: np.ndarray,
+    bucket_sizes: np.ndarray,
+    b: int,
+    alpha: float = 1.0,
+) -> tuple[np.ndarray, dict]:
+    """Balanced-draft recombination of ``B'`` gradient prototypes into ``B`` experts.
+
+    Stage A — centroids: spherical k-means on the unit-norm prototype vectors
+    yields ``B`` centroids (the "default" nearest-centroid partition).
+
+    Stage B — balanced draft: the centroids are iterated round-robin and each
+    expert, in turn, claims the closest *unclaimed* prototype. After
+    ``round(alpha * N)`` claims the remaining prototypes are assigned to their
+    nearest centroid (default assignment). ``alpha`` therefore trades balance
+    against centroid purity: ``alpha=1`` splits the micro-buckets evenly (every
+    expert gets ``floor(N / B)`` or ``ceil(N / B)``), while ``alpha=0`` is a pure
+    nearest-centroid partition.
+
+    Returns a ``MAP[k'] → b`` table over all ``B'`` micro-buckets (empty buckets
+    are left unassigned and re-keyed deterministically afterwards).
+    """
+    from sklearn.cluster import KMeans
+
+    alpha = float(np.clip(alpha, 0.0, 1.0))
+    b_prime = int(mean_grads.shape[0])
+    nonempty = np.flatnonzero(np.asarray(bucket_sizes) > 0).astype(np.int64)
+    n_proto = int(nonempty.size)
+    if n_proto < 2:
+        raise RuntimeError(f"KITSUNE needs >= 2 non-empty micro-buckets, got {n_proto}")
+    n_groups = max(2, min(int(b), n_proto))
+
+    prototypes = np.ascontiguousarray(mean_grads[nonempty], dtype=np.float32)
+    norms = np.linalg.norm(prototypes, axis=1, keepdims=True)
+    unit = prototypes / np.maximum(norms, 1e-8)
+
+    # Stage A: centroids via spherical k-means (Euclidean on the sphere == cosine).
+    km = KMeans(n_clusters=n_groups, n_init=10, random_state=0)
+    km.fit(unit)
+    centroids = km.cluster_centers_.astype(np.float32)
+    cnorms = np.linalg.norm(centroids, axis=1, keepdims=True)
+    centroids_unit = centroids / np.maximum(cnorms, 1e-8)
+
+    # cosine similarity of each prototype to each centroid: sim[i, e] = <unit_i, c_e>
+    sim = unit @ centroids_unit.T  # (n_proto, n_groups)
+
+    # Stage B: round-robin balanced draft over round(alpha * N) prototypes.
+    n_claim = max(0, min(n_proto, int(round(alpha * n_proto))))
+    assign = np.full(n_proto, -1, dtype=np.int64)
+    claimed = np.zeros(n_proto, dtype=bool)
+    scores = np.empty(n_proto, dtype=np.float32)
+    for t in range(n_claim):
+        e = t % n_groups
+        # closest unclaimed prototype to centroid e (ties broken by lowest index)
+        np.copyto(scores, sim[:, e])
+        scores[claimed] = -np.inf
+        i = int(np.argmax(scores))
+        claimed[i] = True
+        assign[i] = e
+
+    # Default assignment: nearest centroid for everything the draft did not claim.
+    unclaimed = ~claimed
+    assign[unclaimed] = sim[unclaimed].argmax(axis=1)
+
+    # Guarantee every expert owns at least one prototype so all B experts survive
+    # (relevant for small ``alpha``): steal the closest prototype from a donor.
+    counts = np.bincount(assign, minlength=n_groups)
+    while int(counts.min()) == 0:
+        e = int(np.argmin(counts))
+        i = int(np.argmax(sim[:, e]))
+        assign[i] = e
+        counts = np.bincount(assign, minlength=n_groups)
+
+    map_table = np.zeros(b_prime, dtype=np.int64)
+    map_table[nonempty] = assign
+    # Re-key the macro labels so expert 0 is the largest (deterministic).
+    order = np.argsort(-counts, kind="stable")
+    remap = np.empty(order.size, dtype=np.int64)
+    remap[order] = np.arange(order.size, dtype=np.int64)
+    map_table = remap[map_table].astype(np.int64)
+    diag = {
+        "kitsune_micro_buckets": b_prime,
+        "kitsune_macro_buckets": int(n_groups),
+        "kitsune_n_nonempty": n_proto,
+        "kitsune_algorithm": "balanced_draft",
+        "kitsune_metric": "cosine",
+        "kitsune_alpha": float(alpha),
+        "kitsune_n_claimed": int(n_claim),
+        "kitsune_micro_sizes": np.asarray(bucket_sizes).tolist(),
+    }
+    return map_table, diag
+
+
+# --------------------------------------------------------------------------- #
 # Dispatcher stage
 # --------------------------------------------------------------------------- #
+def _gather_l1_rows(
+    l1: np.ndarray,
+    idx: np.ndarray,
+    cancel: CancelToken,
+    emit: EmitFn,
+    label: str,
+) -> np.ndarray:
+    """Copy ``l1[idx]`` into RAM in chunks, reporting progress.
+
+    Fancy-indexing a large disk-backed matrix in one shot stalls on a single
+    huge gather; this spreads the reads out and lets the UI show progress.
+    """
+    idx = np.asarray(idx, dtype=np.int64)
+    out = np.empty((int(idx.size), int(l1.shape[1])), dtype=np.float32)
+    chunk = 1_000_000
+    for start in range(0, int(idx.size), chunk):
+        cancel.check()
+        end = min(start + chunk, int(idx.size))
+        out[start:end] = l1[idx[start:end]]
+        emit(
+            {
+                "stage": "dispatcher",
+                "event": "progress",
+                "progress": end / int(idx.size),
+                "msg": f"gathering {label} rows {end:,}/{int(idx.size):,}",
+            }
+        )
+    return out
+
+
 def _train_dispatcher(
     l1: np.ndarray,
     labels: np.ndarray,
@@ -448,21 +654,30 @@ def _train_dispatcher(
     device: torch.device,
     emit: EmitFn,
     cancel: CancelToken,
+    n_classes: int | None = None,
 ) -> tuple[object, dict]:
     n = int(l1.shape[0])
     in_dim = int(l1.shape[1])
+    n_out = int(cfg.k if n_classes is None else n_classes)
     if cfg.dispatcher_type == "mlp":
-        disp = MLPDispatcher(in_dim, cfg.k, hidden_dim=cfg.dispatcher_hidden).to(device)
+        disp = MLPDispatcher(in_dim, n_out, hidden_dim=cfg.dispatcher_hidden).to(device)
     else:
-        disp = LinearDispatcher(in_dim, cfg.k).to(device)
+        disp = LinearDispatcher(in_dim, n_out).to(device)
 
     rng = np.random.RandomState(0)
     perm = rng.permutation(n)
     n_val = max(1, int(n * 0.10))
     val_idx = perm[:n_val]
     train_idx = perm[n_val:]
-    idx_train = torch.from_numpy(train_idx.astype(np.int64)).to(device)
-    idx_val = torch.from_numpy(val_idx.astype(np.int64)).to(device)
+    # Cap to a RAM-sized subsample and materialize once: the router is a simple
+    # linear/MLP classifier, so a representative subset is statistically sound
+    # and avoids random-access page-fault thrashing on a disk-backed L1 matrix.
+    if int(train_idx.size) > DISPATCHER_MAX_TRAIN:
+        train_idx = train_idx[:DISPATCHER_MAX_TRAIN]
+    if int(val_idx.size) > DISPATCHER_MAX_VAL:
+        val_idx = val_idx[:DISPATCHER_MAX_VAL]
+    X_train = _gather_l1_rows(l1, train_idx, cancel, emit, "training")
+    X_val = _gather_l1_rows(l1, val_idx, cancel, emit, "validation")
     y_train = torch.from_numpy(labels[train_idx].astype(np.int64)).to(device)
     y_val = torch.from_numpy(labels[val_idx].astype(np.int64)).to(device)
 
@@ -484,7 +699,7 @@ def _train_dispatcher(
         for start in range(0, n_train, DISPATCHER_BATCH):
             end = min(start + DISPATCHER_BATCH, n_train)
             x = torch.from_numpy(
-                np.ascontiguousarray(l1[train_idx[start:end]], dtype=np.float32)
+                np.ascontiguousarray(X_train[start:end], dtype=np.float32)
             ).to(device)
             y = y_train[start:end]
             train_correct0 += int((disp(x).argmax(dim=-1) == y).sum().item())
@@ -493,7 +708,7 @@ def _train_dispatcher(
         for start in range(0, n_val_v, DISPATCHER_BATCH):
             end = min(start + DISPATCHER_BATCH, n_val_v)
             x = torch.from_numpy(
-                np.ascontiguousarray(l1[val_idx[start:end]], dtype=np.float32)
+                np.ascontiguousarray(X_val[start:end], dtype=np.float32)
             ).to(device)
             y = y_val[start:end]
             val_correct0 += int((disp(x).argmax(dim=-1) == y).sum().item())
@@ -518,7 +733,7 @@ def _train_dispatcher(
             cancel.check()
             end = min(start + DISPATCHER_BATCH, n_train)
             x = torch.from_numpy(
-                np.ascontiguousarray(l1[train_idx[start:end]], dtype=np.float32)
+                np.ascontiguousarray(X_train[start:end], dtype=np.float32)
             ).to(device)
             y = y_train[start:end]
             opt.zero_grad(set_to_none=True)
@@ -534,7 +749,7 @@ def _train_dispatcher(
             for start in range(0, n_val_v, DISPATCHER_BATCH):
                 end = min(start + DISPATCHER_BATCH, n_val_v)
                 x = torch.from_numpy(
-                    np.ascontiguousarray(l1[val_idx[start:end]], dtype=np.float32)
+                    np.ascontiguousarray(X_val[start:end], dtype=np.float32)
                 ).to(device)
                 y = y_val[start:end]
                 val_correct += int((disp(x).argmax(dim=-1) == y).sum().item())
@@ -569,7 +784,7 @@ def _predict_labels(disp, l1: np.ndarray, device: torch.device, cancel: CancelTo
             cancel.check()
             end = min(start + L1_CHUNK, n)
             x = torch.from_numpy(np.ascontiguousarray(l1[start:end], dtype=np.float32)).to(device)
-            out[start:end] = disp(x).argmax(dim=-1).cpu().numpy().astype(np.int16)
+            out[start:end] = disp.predict(x).cpu().numpy().astype(np.int16)
     return out
 
 
@@ -857,6 +1072,7 @@ def _evaluate(
     emit: EmitFn,
     cancel: CancelToken,
     centroids: np.ndarray | None = None,
+    map_table: np.ndarray | None = None,
 ) -> dict:
     planned = plan_split_indices(folders, 0.01, seed=0)
     test_parts = subsample_parts([p[2] for p in planned], cfg.max_test, seed=1)
@@ -911,6 +1127,12 @@ def _evaluate(
             # Perfect dispatcher: route each row to its true cluster.
             if cfg.clustering == "l1" and centroids is not None:
                 perfect_ids = assign_to_centroids(h.detach().cpu().numpy(), centroids)
+                perfect_logits, _ = moe.route_from_h(
+                    h, expert_ids=torch.from_numpy(perfect_ids.astype(np.int64)).to(device)
+                )
+            elif cfg.clustering == "kitsune" and centroids is not None and map_table is not None:
+                micro_ids = assign_to_centroids(h.detach().cpu().numpy(), centroids)
+                perfect_ids = np.asarray(map_table, dtype=np.int64)[micro_ids.astype(np.int64)]
                 perfect_logits, _ = moe.route_from_h(
                     h, expert_ids=torch.from_numpy(perfect_ids.astype(np.int64)).to(device)
                 )
@@ -1152,6 +1374,37 @@ def run_moe_training(cfg: TrainingConfig, emit: EmitFn, cancel: CancelToken) -> 
     if not folders:
         raise RuntimeError(f"no slice folders in {slices_dir}")
 
+    # Bound the row budgets to the data that actually exists. Train and test
+    # come from a fixed 99/1 split of every slice, so each budget is clamped to
+    # its own pool; this guarantees train + test never overshoot the dataset.
+    try:
+        n_available = total_rows(folders)
+    except Exception:
+        n_available = 0
+    if n_available > 0:
+        test_pool = max(1, int(n_available * 0.01))
+        train_pool = n_available - test_pool
+        if cfg.max_rows > train_pool:
+            emit(
+                {
+                    "stage": "init",
+                    "event": "note",
+                    "msg": f"train rows {cfg.max_rows:,} exceed the {train_pool:,}-row "
+                    f"train split; clamping to {train_pool:,}",
+                }
+            )
+            cfg.max_rows = train_pool
+        if cfg.max_test > test_pool:
+            emit(
+                {
+                    "stage": "init",
+                    "event": "note",
+                    "msg": f"test rows {cfg.max_test:,} exceed the {test_pool:,}-row "
+                    f"test split; clamping to {test_pool:,}",
+                }
+            )
+            cfg.max_test = test_pool
+
     # -- resolve the base model up front so the gradient-cache directory can be
     # keyed by the actual architecture + row count. Otherwise a new arch / row
     # count would reuse (and clash with) a stale cache from a previous run.
@@ -1338,22 +1591,58 @@ def run_moe_training(cfg: TrainingConfig, emit: EmitFn, cancel: CancelToken) -> 
 
     # -- cluster -------------------------------------------------------------
     emit({"stage": "cluster", "event": "start", "clustering": cfg.clustering, "k": cfg.k})
+    map_table: np.ndarray | None = None
+    micro_labels: np.ndarray | None = None
+    b_prime: int = 0
     if cfg.clustering == "gradient":
         compute_gradients(
             base, folders, pack_dir, device=device, max_rows=cfg.max_rows,
             resume=True, log=_loading_forwarder(emit, cancel),
         )
         gradients = np.load(pack_dir / "gradients.npy", mmap_mode="r")
-        labels, centroids, diag = _kmeans_labels(gradients, cfg.k)
+        labels, centroids, diag = _kmeans_labels(gradients, cfg.k, cancel, emit)
         diag["representation"] = "head_gradient_48d"
         del gradients
     elif cfg.clustering == "l1":
         pack, _s, _l = load_train_pack(pack_dir)
-        l1 = build_l1(pack, base, device, cancel, emit)
-        labels, centroids, diag = _kmeans_labels(l1, cfg.k)
+        l1 = build_l1(pack, base, device, cancel, emit, path=work_dir / "l1_activations.npy")
+        labels, centroids, diag = _kmeans_labels(l1, cfg.k, cancel, emit)
         diag["representation"] = "l1_256d"
         del l1
+        (work_dir / "l1_activations.npy").unlink(missing_ok=True)
         del pack
+    elif cfg.clustering == "kitsune":
+        # Stage 1: micro-quantize L1 into B' = factor * B micro-buckets.
+        pack, _s, _l = load_train_pack(pack_dir)
+        l1 = build_l1(pack, base, device, cancel, emit, path=work_dir / "l1_activations.npy")
+        b_prime = max(int(cfg.k) * int(cfg.micro_bucket_factor), int(cfg.k) + 1, 2)
+        micro_labels, centroids, micro_diag = _kmeans_labels(l1, b_prime, cancel, emit)
+        del l1
+        (work_dir / "l1_activations.npy").unlink(missing_ok=True)
+        del pack
+        # Stage 2: mean sample gradient per micro-bucket.
+        compute_gradients(
+            base, folders, pack_dir, device=device, max_rows=cfg.max_rows,
+            resume=True, log=_loading_forwarder(emit, cancel),
+        )
+        gradients = np.load(pack_dir / "gradients.npy", mmap_mode="r")
+        mean_grads, bucket_sizes = _micro_bucket_means(
+            gradients, micro_labels, b_prime, cancel
+        )
+        del gradients
+        # Stage 3: agglomerative (cosine) macro-clustering of gradient prototypes.
+        map_table, map_diag = _kitsune_macro_cluster(
+            mean_grads, bucket_sizes, cfg.k, alpha=cfg.kitsune_alpha
+        )
+        labels = map_table[micro_labels.astype(np.int64)].astype(np.int16)
+        diag = {
+            "representation": "kitsune_l1_gradient",
+            "sizes": np.bincount(labels.astype(np.int64), minlength=cfg.k).tolist(),
+            "inertia": micro_diag.get("inertia"),
+            **map_diag,
+        }
+        np.save(work_dir / "map_table.npy", map_table.astype(np.int64))
+        np.save(work_dir / "labels_micro.npy", micro_labels.astype(np.int16))
     else:  # piece_count
         pack, _s, _l = load_train_pack(pack_dir)
         labels = _piece_labels(pack, cancel, emit)
@@ -1378,9 +1667,36 @@ def run_moe_training(cfg: TrainingConfig, emit: EmitFn, cancel: CancelToken) -> 
         best_val_acc = None
         disp = None
         emit({"stage": "dispatcher", "event": "skip", "msg": "piece-count rule (no dispatcher)"})
+    elif cfg.clustering == "kitsune":
+        pack, _s, _l = load_train_pack(pack_dir)
+        l1 = build_l1(pack, base, device, cancel, emit, path=work_dir / "l1_activations.npy")
+        in_dim = int(base.hidden_dim) * 2
+        emit({"stage": "dispatcher", "event": "start", "type": cfg.dispatcher_type})
+        micro_disp, info = _train_dispatcher(
+            l1, micro_labels, cfg, device, emit, cancel, n_classes=b_prime
+        )
+        best_val_acc = info["best_val_acc"]
+        disp = KitsuneDispatcher(in_dim, cfg.k, map_table, micro_disp).to(device)
+        disp_labels = _predict_labels(disp, l1, device, cancel)
+        save_dispatcher(
+            micro_disp, DISPATCHER_CHECKPOINTS_DIR / cfg.run_name / "dispatcher.pt"
+        )
+        del l1
+        (work_dir / "l1_activations.npy").unlink(missing_ok=True)
+        del pack
+        emit(
+            {
+                "stage": "dispatcher",
+                "event": "done",
+                "best_val_acc": best_val_acc,
+                "label_sizes": np.bincount(
+                    disp_labels.astype(np.int64), minlength=cfg.k
+                ).tolist(),
+            }
+        )
     else:
         pack, _s, _l = load_train_pack(pack_dir)
-        l1 = build_l1(pack, base, device, cancel, emit)
+        l1 = build_l1(pack, base, device, cancel, emit, path=work_dir / "l1_activations.npy")
         if cfg.dispatcher_source == "load":
             # A dispatcher is independent of the clustering algorithm: it only
             # needs its input dim and bucket count to match the current base and
@@ -1415,6 +1731,7 @@ def run_moe_training(cfg: TrainingConfig, emit: EmitFn, cancel: CancelToken) -> 
             # persist the trained dispatcher so it can be loaded in later runs
             save_dispatcher(disp, DISPATCHER_CHECKPOINTS_DIR / cfg.run_name / "dispatcher.pt")
         del l1
+        (work_dir / "l1_activations.npy").unlink(missing_ok=True)
         del pack
         emit(
             {
@@ -1438,7 +1755,10 @@ def run_moe_training(cfg: TrainingConfig, emit: EmitFn, cancel: CancelToken) -> 
 
     # -- eval ----------------------------------------------------------------
     emit({"stage": "eval", "event": "start"})
-    metrics = _evaluate(base, moe, folders, cfg, device, emit, cancel, centroids=centroids)
+    metrics = _evaluate(
+        base, moe, folders, cfg, device, emit, cancel,
+        centroids=centroids, map_table=map_table,
+    )
     (work_dir / "eval.json").write_text(json.dumps(metrics, indent=2), encoding="utf-8")
     emit({"stage": "eval", "event": "done", **metrics})
 

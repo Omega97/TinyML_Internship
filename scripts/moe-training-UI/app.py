@@ -60,6 +60,7 @@ from runner import (
     CancelToken,
     CancelledError,
     TrainingConfig,
+    available_dataset_rows,
     delete_run,
     iter_checkpoints_info,
     iter_dispatchers,
@@ -322,9 +323,15 @@ class MainWindow(QMainWindow):
         data_group = QGroupBox("Data")
         df = QFormLayout(data_group)
         self.max_rows = QSpinBox()
-        self.max_rows.setRange(1, 100)
+        # Cap the train-row limit at the actual dataset size (rounded down to
+        # the nearest million) instead of a hardcoded 100 M. Fall back to the
+        # old 100 M cap only if the dataset size can't be determined.
+        total_millions = available_dataset_rows() // 1_000_000
+        if total_millions <= 0:
+            total_millions = 100
+        self.max_rows.setRange(1, total_millions)
         self.max_rows.setSuffix(" M")
-        self.max_rows.setValue(2)
+        self.max_rows.setValue(min(2, total_millions))
         self.max_test = QSpinBox()
         self.max_test.setRange(1, 500)
         self.max_test.setSuffix(" k")
@@ -336,12 +343,38 @@ class MainWindow(QMainWindow):
         # Clustering
         cluster_group = QGroupBox("Clustering")
         cf = QFormLayout(cluster_group)
+        self.cluster_layout = cf
         self.clustering = QComboBox()
         self.clustering.addItem("Sample gradients (48-d)", "gradient")
         self.clustering.addItem("L1 activations (256-d)", "l1")
         self.clustering.addItem("Piece count (rule)", "piece_count")
+        self.clustering.addItem("KITSUNE (L1 micro-buckets → gradient macro)", "kitsune")
         self.clustering.currentIndexChanged.connect(self._sync_enabled_state)
         cf.addRow("Representation", self.clustering)
+        self.micro_bucket_factor = QSpinBox()
+        # No hard upper limit: B' can be scaled arbitrarily high (QSpinBox's
+        # largest representable value is used as an effectively-unbounded cap).
+        self.micro_bucket_factor.setRange(2, 2_147_483_647)
+        self.micro_bucket_factor.setValue(4)
+        self.micro_bucket_factor.setSuffix(" ×K")
+        self.micro_bucket_factor.setToolTip(
+            "KITSUNE micro-bucket resolution: B' = factor × B micro-buckets "
+            "clustered on L1, then recombined into B experts by mean sample "
+            "gradient (balanced draft + nearest-centroid)."
+        )
+        cf.addRow("Micro-bucket factor", self.micro_bucket_factor)
+        self.kitsune_alpha = QDoubleSpinBox()
+        self.kitsune_alpha.setDecimals(2)
+        self.kitsune_alpha.setRange(0.0, 1.0)
+        self.kitsune_alpha.setSingleStep(0.05)
+        self.kitsune_alpha.setValue(1.0)
+        self.kitsune_alpha.setToolTip(
+            "KITSUNE balanced-draft fraction α: share of micro-buckets claimed "
+            "by the round-robin draft (guaranteeing an even split across experts); "
+            "the rest fall back to the nearest centroid. 0 = pure nearest-centroid, "
+            "1 = fully balanced."
+        )
+        cf.addRow("Draft fraction α", self.kitsune_alpha)
         layout.addWidget(cluster_group)
         self.cluster_group = cluster_group
 
@@ -464,10 +497,11 @@ class MainWindow(QMainWindow):
         for w in (
             self.h_spin, self.H_spin, self.base_epochs, self.max_rows,
             self.max_test, self.expert_epochs, self.switch_epochs,
-            self.wm_epochs, self.wm_vicreg_gamma,
+            self.wm_epochs, self.wm_vicreg_gamma, self.micro_bucket_factor,
         ):
             w.valueChanged.connect(self._refresh_run_name)
-        for w in (self.switch_alpha, self.switch_lr, self.wm_tau, self.wm_lr):
+        for w in (self.switch_alpha, self.switch_lr, self.wm_tau, self.wm_lr,
+                  self.kitsune_alpha):
             w.valueChanged.connect(self._refresh_run_name)
         self._refresh_run_name()
 
@@ -747,6 +781,8 @@ class MainWindow(QMainWindow):
         s.setValue("max_test", self.max_test.value())
         s.setValue("clustering", self.clustering.currentData())
         s.setValue("k", self.k_combo.currentData())
+        s.setValue("micro_bucket_factor", self.micro_bucket_factor.value())
+        s.setValue("kitsune_alpha", self.kitsune_alpha.value())
         s.setValue("dispatcher_source", self.dispatcher_source.currentData())
         s.setValue("dispatcher_checkpoint", self.dispatcher_checkpoint.currentData() or "")
         s.setValue("dispatcher_type", self.dispatcher_type.currentData())
@@ -812,6 +848,8 @@ class MainWindow(QMainWindow):
         self._restore_spin(self.max_test, s.value("max_test"))
         self._restore_combo_data(self.clustering, s.value("clustering"))
         self._restore_combo_data(self.k_combo, s.value("k"))
+        self._restore_spin(self.micro_bucket_factor, s.value("micro_bucket_factor"))
+        self._restore_double(self.kitsune_alpha, s.value("kitsune_alpha"))
         self._restore_combo_data(self.dispatcher_source, s.value("dispatcher_source"))
         self._restore_combo_data(self.dispatcher_checkpoint, s.value("dispatcher_checkpoint"))
         self._restore_combo_data(self.dispatcher_type, s.value("dispatcher_type"))
@@ -871,16 +909,25 @@ class MainWindow(QMainWindow):
             self.base_epochs.setEnabled(training_new)
 
         piece = self.clustering.currentData() == "piece_count"
+        kitsune = self.clustering.currentData() == "kitsune"
         if piece and not no_moe:
             self.k_combo.setCurrentIndex(3)  # lock to K=8
         # Heads K stays editable in every mode so the user can always switch
         # between "1 (no MoE)" and a real MoE; only piece-count pins it to 8.
         self.k_combo.setEnabled(not piece)
+        # KITSUNE micro-bucket resolution only applies to the kitsune clustering.
+        self._set_row_visible(self.micro_bucket_factor, kitsune, self.cluster_layout)
+        self._set_row_visible(self.kitsune_alpha, kitsune, self.cluster_layout)
 
         # Dispatcher: piece-count is rule-based (no dispatcher), so hide the
         # whole group; otherwise show the load-vs-train source toggle.
         self.disp_group.setVisible(show_moe and not is_switch and not piece)
         disp_active = show_moe and not is_switch and not piece
+        # KITSUNE always trains its own micro-dispatcher (the micro-buckets are
+        # run-specific), so the "load a dispatcher" path does not apply.
+        if kitsune and self.dispatcher_source.currentData() != "train":
+            self.dispatcher_source.setCurrentIndex(0)  # "Train"
+        self.dispatcher_source.setEnabled(disp_active and not kitsune)
         disp_load = self.dispatcher_source.currentData() == "load"
         self._set_row_visible(self.dispatcher_checkpoint, disp_load, self.disp_layout)
         for w in (self.dispatcher_type, self.dispatcher_hidden, self.dispatcher_epochs, self.dispatcher_lr):
@@ -953,6 +1000,9 @@ class MainWindow(QMainWindow):
             else:
                 parts.append(str(self.clustering.currentData()))
                 parts.append(f"k{int(self.k_combo.currentData())}")
+                if self.clustering.currentData() == "kitsune":
+                    parts.append(f"bprime{self.micro_bucket_factor.value()}x")
+                    parts.append(f"a{self.kitsune_alpha.value():g}")
                 if self.clustering.currentData() != "piece_count":
                     if self.dispatcher_source.currentData() == "load":
                         disp = self._dispatcher_name()
@@ -994,6 +1044,8 @@ class MainWindow(QMainWindow):
             max_test=self.max_test.value() * 1_000,
             clustering=self.clustering.currentData(),
             k=k,
+            micro_bucket_factor=self.micro_bucket_factor.value(),
+            kitsune_alpha=float(self.kitsune_alpha.value()),
             dispatcher_source=self.dispatcher_source.currentData(),
             dispatcher_checkpoint=self.dispatcher_checkpoint.currentData() or "",
             dispatcher_type=self.dispatcher_type.currentData(),
@@ -1058,7 +1110,9 @@ class MainWindow(QMainWindow):
             self.encoder, self.world_model_source, self.wm_checkpoint,
             self.wm_loss, self.wm_tau, self.wm_epochs, self.wm_lr,
             self.wm_normalize, self.wm_vicreg_gamma,
-            self.clustering, self.k_combo, self.dispatcher_source,
+            self.clustering, self.k_combo, self.micro_bucket_factor,
+            self.kitsune_alpha,
+            self.dispatcher_source,
             self.dispatcher_checkpoint, self.dispatcher_type,
             self.dispatcher_hidden, self.dispatcher_epochs, self.dispatcher_lr,
             self.expert_epochs, self.expert_lr, self.expert_lr_end,
@@ -1106,8 +1160,11 @@ class MainWindow(QMainWindow):
         event = str(ev.get("event", ""))
 
         if stage == "init":
-            self.status.showMessage(f"Running on {ev.get('device')}")
-            self._log(f"device={ev.get('device')}")
+            if event == "start":
+                self.status.showMessage(f"Running on {ev.get('device')}")
+                self._log(f"device={ev.get('device')}")
+            elif ev.get("msg"):
+                self._log(str(ev.get("msg")))
             return
 
         if stage == "base":
@@ -1199,6 +1256,10 @@ class MainWindow(QMainWindow):
                     "dispatcher", "Dispatcher", "val acc", "val acc",
                     float(ev.get("epoch")), float(ev.get("val_acc")),
                 )
+            elif event == "progress":
+                row.set_progress(ev.get("progress"))
+                if ev.get("msg"):
+                    row.set_metric(str(ev.get("msg")))
             elif event == "done":
                 row.set_progress(1.0)
                 if ev.get("best_val_acc") is not None:

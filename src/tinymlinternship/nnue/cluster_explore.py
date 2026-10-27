@@ -55,6 +55,35 @@ CLUSTER_ALGO_LABELS: dict[str, str] = {
 DENSITY_ALGORITHMS: frozenset[str] = frozenset({"dbscan", "optics"})
 DEFAULT_DBSCAN_EPSILON = 0.3
 
+CLUSTER_SPACES: tuple[str, ...] = ("gradients", "l1")
+CLUSTER_SPACE_LABELS: dict[str, str] = {
+    "gradients": "Sample gradients",
+    "l1": "L1 activations",
+}
+
+
+def normalize_cluster_space(name: str) -> str:
+    """``gradients`` / ``l1``. Default is the stored sample-gradient vectors."""
+    key = str(name).strip().lower().replace("-", "").replace("_", "")
+    aliases = {
+        "gradients": "gradients",
+        "samplegradients": "gradients",
+        "grad": "gradients",
+        "l1": "l1",
+        "l1activations": "l1",
+        "activations": "l1",
+    }
+    if key not in aliases:
+        raise ValueError(f"unknown clustering space {name!r}; expected {CLUSTER_SPACES}")
+    return aliases[key]
+
+
+def cluster_space_prefix(space: str | None) -> str:
+    """Cache-key prefix for a clustering space. Gradient space stays unprefixed."""
+    if space is None:
+        return ""
+    return "" if normalize_cluster_space(space) == "gradients" else "l1:"
+
 
 def quantize_dbscan_epsilon(value: float | None = None) -> float:
     """Snap DBSCAN ε to ``{0.1, 0.2, …, 0.9}``."""
@@ -145,6 +174,8 @@ class ExplorerData:
     diagnostics: dict[str, Any] = field(default_factory=dict)
     projection_cache: dict[str, np.ndarray] = field(default_factory=dict)
     cluster_cache: dict[str, tuple[np.ndarray, dict[str, Any]]] = field(default_factory=dict)
+    l1_features: np.ndarray | None = None
+    cluster_space: str = "gradients"
 
     def __post_init__(self) -> None:
         n = int(self.sample_id.shape[0])
@@ -159,6 +190,12 @@ class ExplorerData:
             if feat.ndim != 2 or int(feat.shape[0]) != n:
                 raise ValueError(f"features must be (n, d), got {getattr(feat, 'shape', None)}")
             self.features = feat
+        if self.l1_features is not None:
+            l1 = np.ascontiguousarray(self.l1_features, dtype=np.float32)
+            if l1.ndim != 2 or int(l1.shape[0]) != n:
+                raise ValueError(f"l1_features must be (n, d), got {getattr(l1, 'shape', None)}")
+            self.l1_features = l1
+        self.cluster_space = normalize_cluster_space(self.cluster_space)
         if self.n_source_rows <= 0:
             self.n_source_rows = n
         if self.requested_clusters <= 0 and self.cluster_id.size:
@@ -173,7 +210,12 @@ class ExplorerData:
             algo = normalize_cluster_algorithm(self.algorithm)
         except ValueError:
             algo = "kmeans"
-        key = cluster_cache_key(algo, int(self.n_clusters), dbscan_epsilon=self.dbscan_epsilon)
+        key = cluster_cache_key(
+            algo,
+            int(self.n_clusters),
+            dbscan_epsilon=self.dbscan_epsilon,
+            space=self.cluster_space,
+        )
         self.cluster_cache[key] = (
             np.ascontiguousarray(self.cluster_id, dtype=np.int16),
             dict(self.diagnostics),
@@ -330,6 +372,11 @@ class ModelPredictor:
         self._model = None
         self._datasets: dict[int, Any] = {}
         self._failed = False
+        self._packs: dict[str, Any] = {}
+
+    def model(self):
+        """The loaded DualHidden NNUE (lazily loaded, cached), or ``None``."""
+        return self._load()
 
     def _load(self):
         if self._model is not None or self._failed or self.checkpoint is None:
@@ -444,6 +491,22 @@ class ModelPredictor:
             return None
         return maps[0]
 
+    def l1_activations(self, work_dir: Path, idx: np.ndarray) -> np.ndarray | None:
+        """STM-ordered L1 activations for pack rows ``idx``, or ``None``."""
+        model = self._load()
+        if model is None:
+            return None
+        key = str(Path(work_dir).resolve())
+        pack = self._packs.get(key)
+        if pack is None:
+            from tinymlinternship.nnue.moe_data import load_train_pack
+
+            pack, _slice_ids, _local_rows = load_train_pack(work_dir)
+            self._packs[key] = pack
+        return build_l1_activations(
+            model, work_dir, idx, device=self.device, pack=pack
+        )
+
 
 def resolve_position(
     data: ExplorerData,
@@ -463,6 +526,51 @@ def resolve_position(
     return info
 
 
+L1_ACTIVATION_CHUNK = 16_384
+
+
+def build_l1_activations(
+    model,
+    work_dir: Path,
+    idx: np.ndarray,
+    *,
+    device: str = "cpu",
+    chunk: int = L1_ACTIVATION_CHUNK,
+    pack=None,
+) -> np.ndarray:
+    """STM-ordered L1 activations ``[h_stm ‖ h_opp]`` (``2W``-d) for rows ``idx``.
+
+    ``idx`` indexes the same rows as ``gradients.npy`` / ``train_pack.pt``
+    (i.e. ``ExplorerData.sample_id`` for a work-dir load). ``pack`` may be a
+    cached ``CompactPackedTensors`` from ``load_train_pack`` to avoid reloading.
+    """
+    import torch
+
+    from tinymlinternship.nnue.moe_data import load_train_pack
+
+    work_dir = Path(work_dir)
+    if pack is None:
+        pack, _slice_ids, _local_rows = load_train_pack(work_dir)
+    rows = np.asarray(idx, dtype=np.int64).reshape(-1)
+    n = int(rows.size)
+    hidden = int(model.hidden_dim)
+    out = np.empty((n, 2 * hidden), dtype=np.float32)
+    model.eval()
+    with torch.inference_mode():
+        for start in range(0, n, int(chunk)):
+            end = min(start + int(chunk), n)
+            batch = pack.gather(torch.as_tensor(rows[start:end], dtype=torch.long))
+            h = model.l1_concat(
+                batch["white_idx"].to(device),
+                batch["black_idx"].to(device),
+                batch["stm_white"].to(device),
+                batch["white_mask"].to(device),
+                batch["black_mask"].to(device),
+            )
+            out[start:end] = h.detach().float().cpu().numpy()
+    return out
+
+
 def _subsample_indices(n: int, max_points: int, seed: int) -> np.ndarray:
     n = int(n)
     take = n if int(max_points) <= 0 or n <= int(max_points) else int(max_points)
@@ -475,7 +583,19 @@ def _subsample_indices(n: int, max_points: int, seed: int) -> np.ndarray:
 
 
 def clustering_features(data: ExplorerData) -> np.ndarray:
-    """Matrix k-means should see: stored gradients, else the 2D/3D projection."""
+    """Matrix clustering/projection should see for the current space.
+
+    ``cluster_space == "l1"`` returns the STM-ordered L1 activations
+    ``[h_stm ‖ h_opp]``; otherwise the stored sample gradients. Falls back
+    to the 2D/3D projection when no matrix is available.
+    """
+    if data.cluster_space == "l1" and data.l1_features is not None:
+        return np.ascontiguousarray(data.l1_features, dtype=np.float32)
+    return gradient_features(data)
+
+
+def gradient_features(data: ExplorerData) -> np.ndarray:
+    """The sample-gradient matrix (or the 2D/3D projection when unset)."""
     if data.features is not None:
         return np.ascontiguousarray(data.features, dtype=np.float32)
     cols = [data.coord_x, data.coord_y]
@@ -511,12 +631,19 @@ def cluster_cache_key(
     algorithm: str,
     n_clusters: int,
     dbscan_epsilon: float | None = None,
+    space: str | None = None,
 ) -> str:
-    """Cache key for a clustering result. Density methods are keyed by ε, not B."""
+    """Cache key for a clustering result. Density methods are keyed by ε, not B.
+
+    ``space`` distinguishes the feature space the cluster was fit on; only
+    non-gradient spaces add a prefix, so legacy keys stay unchanged.
+    """
     algo = normalize_cluster_algorithm(algorithm)
     if uses_epsilon(algo):
-        return f"{algo}:{quantize_dbscan_epsilon(dbscan_epsilon):.1f}"
-    return f"{algo}:{int(n_clusters)}"
+        base = f"{algo}:{quantize_dbscan_epsilon(dbscan_epsilon):.1f}"
+    else:
+        base = f"{algo}:{int(n_clusters)}"
+    return f"{cluster_space_prefix(space)}{base}"
 
 
 def _label_diagnostics(labels: np.ndarray, n_clusters: int, *, inertia: float | None = None) -> dict[str, Any]:
@@ -750,7 +877,7 @@ def recluster(
     epsilon = quantize_dbscan_epsilon(
         data.dbscan_epsilon if dbscan_epsilon is None else dbscan_epsilon
     )
-    key = cluster_cache_key(algo, k, dbscan_epsilon=epsilon)
+    key = cluster_cache_key(algo, k, dbscan_epsilon=epsilon, space=data.cluster_space)
     cached = data.cluster_cache.get(key)
     if cached is not None:
         labels, diag = cached
@@ -823,8 +950,8 @@ def projection_label(method: str) -> str:
     return PROJECTION_LABELS[normalize_projection_method(method)]
 
 
-def projection_cache_key(method: str, n_components: int) -> str:
-    return f"{normalize_projection_method(method)}:{int(n_components)}"
+def projection_cache_key(method: str, n_components: int, space: str | None = None) -> str:
+    return f"{cluster_space_prefix(space)}{normalize_projection_method(method)}:{int(n_components)}"
 
 
 def orbit_project(
@@ -961,7 +1088,9 @@ def _apply_coords(data: ExplorerData, coords: np.ndarray, method: str) -> None:
     data.coord_y = coords[:, 1]
     data.coord_z = coords[:, 2] if coords.shape[1] > 2 else None
     data.method = normalize_projection_method(method)
-    data.projection_cache[projection_cache_key(data.method, int(coords.shape[1]))] = coords
+    data.projection_cache[
+        projection_cache_key(data.method, int(coords.shape[1]), space=data.cluster_space)
+    ] = coords
 
 
 def reproject(
@@ -974,9 +1103,9 @@ def reproject(
     """Recompute the 2D or 3D layout. Cluster labels are unchanged."""
     method = normalize_projection_method(method)
     k = max(2, int(n_components))
-    key = projection_cache_key(method, k)
+    key = projection_cache_key(method, k, space=data.cluster_space)
     cached = data.projection_cache.get(key)
-    if cached is None and k == 2:
+    if cached is None and k == 2 and data.cluster_space == "gradients":
         legacy = data.projection_cache.get(method)
         if legacy is not None:
             arr = np.asarray(legacy)

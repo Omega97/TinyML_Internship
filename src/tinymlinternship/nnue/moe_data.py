@@ -29,6 +29,11 @@ def slice_folders(root: Path) -> list[Path]:
     return []
 
 
+def total_rows(folders: list[Path]) -> int:
+    """Total row count across slice folders (sum of per-slice ``_slice_n_rows``)."""
+    return int(sum(int(_slice_n_rows(folder)) for folder in folders))
+
+
 def plan_split_indices(
     folders: list[Path],
     test_fraction: float,

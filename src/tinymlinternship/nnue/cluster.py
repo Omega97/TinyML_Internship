@@ -11,7 +11,7 @@ from __future__ import annotations
 
 import json
 from pathlib import Path
-from typing import Any
+from typing import Any, Callable
 
 import numpy as np
 from sklearn.cluster import MiniBatchKMeans
@@ -28,6 +28,29 @@ def _as_float32_matrix(x: np.ndarray) -> np.ndarray:
     return np.ascontiguousarray(arr, dtype=np.float32)
 
 
+def _gather_rows(
+    x: np.ndarray,
+    idx: np.ndarray,
+    *,
+    progress: Callable[[float, str], None] | None = None,
+    label: str = "gathering",
+) -> np.ndarray:
+    """Copy ``x[idx]`` into RAM in chunks.
+
+    Fancy-indexing a large mmap in one shot stalls on a single huge gather, so
+    this spreads the read out and reports progress per chunk.
+    """
+    idx = np.asarray(idx, dtype=np.int64)
+    out = np.empty((int(idx.size), int(x.shape[1])), dtype=np.float32)
+    chunk = 1_000_000
+    for start in range(0, int(idx.size), chunk):
+        end = min(start + chunk, int(idx.size))
+        out[start:end] = x[idx[start:end]]
+        if progress is not None:
+            progress(end / int(idx.size), f"{label} rows {end:,}/{int(idx.size):,}")
+    return out
+
+
 def fit_minibatch_kmeans(
     gradients: np.ndarray,
     n_clusters: int,
@@ -37,6 +60,8 @@ def fit_minibatch_kmeans(
     n_init: int = 3,
     max_iter: int = 100,
     reassignment_ratio: float = 0.01,
+    max_fit_rows: int | None = None,
+    progress: Callable[[float, str], None] | None = None,
 ) -> MiniBatchKMeans:
     n_clusters = int(n_clusters)
     if n_clusters < 2:
@@ -44,6 +69,26 @@ def fit_minibatch_kmeans(
     x = _as_float32_matrix(gradients)
     if x.shape[0] < n_clusters:
         raise ValueError(f"need at least {n_clusters} rows, got {x.shape[0]}")
+
+    # MiniBatchKMeans samples minibatches at random, which degenerates to a
+    # page fault per row when ``x`` is a large disk-backed mmap. Fit on a
+    # bounded in-memory subsample instead — the algorithm is already
+    # approximate, so a representative sample is statistically sound. Labels
+    # are still assigned over the full matrix afterwards by the caller.
+    n = int(x.shape[0])
+    if max_fit_rows and int(max_fit_rows) > 0 and n > int(max_fit_rows):
+        if progress is not None:
+            progress(0.0, f"sampling {int(max_fit_rows):,}/{n:,} rows for k-means")
+        rng = np.random.RandomState(int(seed))
+        idx = np.sort(
+            rng.choice(n, size=int(max_fit_rows), replace=False).astype(np.int64, copy=False)
+        )
+        x = _gather_rows(x, idx, progress=progress, label="sampling")
+        if progress is not None:
+            progress(1.0, f"sampled {int(max_fit_rows):,} rows")
+
+    if progress is not None:
+        progress(0.0, f"fitting k-means (K={n_clusters}) on {int(x.shape[0]):,} rows…")
     model = MiniBatchKMeans(
         n_clusters=n_clusters,
         batch_size=min(int(batch_size), int(x.shape[0])),
@@ -54,6 +99,8 @@ def fit_minibatch_kmeans(
         init="k-means++",
     )
     model.fit(x)
+    if progress is not None:
+        progress(1.0, "k-means fit done")
     return model
 
 

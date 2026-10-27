@@ -49,6 +49,7 @@ from tinymlinternship.nnue.cluster_explore import (
     cluster_color,
     clustering_features,
     compute_cluster_payload,
+    gradient_features,
     normalize_cluster_algorithm,
     quantize_dbscan_epsilon,
     uses_epsilon,
@@ -82,7 +83,7 @@ UNSELECTED_SIZE = 8.0
 SELECTED_SIZE_SCALE = 2.0
 CLICK_RADIUS_PX = 12.0
 INSPECTOR_WIDTH = 400
-BOARD_SVG_SIZE = 165
+BOARD_SVG_SIZE = 157
 GRAD_GRAPH_PAD = 7
 # WDL rectangles above each output neuron.
 WDL_BAR_WIDTH = 14.0
@@ -1088,6 +1089,24 @@ class ClusterExplorerWindow(QMainWindow):
         self._sync_cluster_param_controls()
 
         layout.addSpacing(8)
+        self.l1_clusters = QCheckBox("Cluster on L1")
+        self.l1_clusters.setCursor(Qt.CursorShape.PointingHandCursor)
+        self.l1_clusters.setToolTip(
+            "Re-cluster and re-project on STM-ordered L1 activations "
+            "[h_stm ‖ h_opp] (256-d) instead of the sample-gradient vectors. "
+            "Needs train_pack.pt in the run folder and an NNUE checkpoint."
+        )
+        self.l1_clusters.setChecked(self.data.cluster_space == "l1")
+        if not self._l1_available():
+            self.l1_clusters.setEnabled(False)
+            self.l1_clusters.setToolTip(
+                "L1 clustering needs train_pack.pt in the run folder and a loadable "
+                "NNUE checkpoint."
+            )
+        self.l1_clusters.toggled.connect(self._on_l1_toggled)
+        layout.addWidget(self.l1_clusters)
+
+        layout.addSpacing(8)
         self.clear_btn = QPushButton("Clear")
         self.clear_btn.clicked.connect(self._clear_selection)
         layout.addWidget(self.clear_btn)
@@ -1169,11 +1188,20 @@ class ClusterExplorerWindow(QMainWindow):
             return self.data
         return self._pool_cache.get(n)
 
-    def _stash_projection(self, pool_n: int, method: str, n_components: int, coords: np.ndarray) -> None:
+    def _stash_projection(
+        self,
+        pool_n: int,
+        method: str,
+        n_components: int,
+        coords: np.ndarray,
+        space: str | None = None,
+    ) -> None:
         target = self._pool_snapshot(pool_n)
         if target is None:
             return
-        key = projection_cache_key(method, n_components)
+        if space is None:
+            space = target.cluster_space
+        key = projection_cache_key(method, n_components, space=space)
         target.projection_cache[key] = np.ascontiguousarray(coords, dtype=np.float32)
 
     def _stash_cluster(
@@ -1214,11 +1242,14 @@ class ClusterExplorerWindow(QMainWindow):
         method: str,
         n_components: int,
         data: ExplorerData | None = None,
+        space: str | None = None,
     ) -> bool:
         target = self.data if data is None else data
-        key = projection_cache_key(method, n_components)
+        if space is None:
+            space = target.cluster_space
+        key = projection_cache_key(method, n_components, space=space)
         cached = target.projection_cache.get(key)
-        if cached is None and int(n_components) == 2:
+        if cached is None and int(n_components) == 2 and space == "gradients":
             cached = target.projection_cache.get(method)
         if cached is None:
             return False
@@ -1256,10 +1287,13 @@ class ClusterExplorerWindow(QMainWindow):
         n_clusters: int,
         data: ExplorerData | None = None,
         dbscan_epsilon: float | None = None,
+        space: str | None = None,
     ) -> bool:
         target = self.data if data is None else data
+        if space is None:
+            space = target.cluster_space
         eps = self._toolbar_eps() if dbscan_epsilon is None else dbscan_epsilon
-        key = cluster_cache_key(algorithm, n_clusters, dbscan_epsilon=eps)
+        key = cluster_cache_key(algorithm, n_clusters, dbscan_epsilon=eps, space=space)
         cached = target.cluster_cache.get(key)
         if cached is None:
             return False
@@ -1722,7 +1756,7 @@ class ClusterExplorerWindow(QMainWindow):
         data_ref = self.data
         seed = int(self.data.cluster_seed)
         eps = self._toolbar_eps() if dbscan_epsilon is None else quantize_dbscan_epsilon(dbscan_epsilon)
-        cache_key = cluster_cache_key(algo, k, dbscan_epsilon=eps)
+        cache_key = cluster_cache_key(algo, k, dbscan_epsilon=eps, space=self.data.cluster_space)
 
         def fn() -> tuple[np.ndarray, dict[str, Any], int, str]:
             return compute_cluster_payload(
@@ -1806,6 +1840,13 @@ class ClusterExplorerWindow(QMainWindow):
                 n_components=2,
                 dbscan_epsilon=eps,
             )
+            new = self._align_pool_space(
+                new,
+                want_l1=pool_template.cluster_space == "l1",
+                algo=algo,
+                k=n_clusters,
+                eps=eps,
+            )
             if not self._projection_cached(method, n_comp, data=new):
                 coords = project_gradients(
                     clustering_features(new),
@@ -1813,8 +1854,8 @@ class ClusterExplorerWindow(QMainWindow):
                     n_components=n_comp,
                     seed=seed,
                 )
-                new.projection_cache[projection_cache_key(method, n_comp)] = np.ascontiguousarray(
-                    coords, dtype=np.float32
+                new.projection_cache[projection_cache_key(method, n_comp, space=new.cluster_space)] = (
+                    np.ascontiguousarray(coords, dtype=np.float32)
                 )
             reproject(new, method, seed=seed, n_components=n_comp)
             return new
@@ -1843,31 +1884,35 @@ class ClusterExplorerWindow(QMainWindow):
         k = self._toolbar_k()
         eps = self._toolbar_eps()
         seed = int(new.cluster_seed)
-        need_proj = not self._projection_cached(method, n_comp, data=new)
-        need_cluster = not self._cluster_cached(algo, k, data=new, dbscan_epsilon=eps)
-        if not need_proj and not need_cluster:
-            self._abandon_in_flight()
-            self._apply_new_data(new, pool_n=n_points)
-            return
+        want_l1 = self.data.cluster_space == "l1"
+        already_aligned = (new.cluster_space == "l1") == want_l1 and (
+            not want_l1 or new.l1_features is not None
+        )
+        if already_aligned:
+            need_proj = not self._projection_cached(method, n_comp, data=new)
+            need_cluster = not self._cluster_cached(algo, k, data=new, dbscan_epsilon=eps)
+            if not need_proj and not need_cluster:
+                self._abandon_in_flight()
+                self._apply_new_data(new, pool_n=n_points)
+                return
         label = projection_label(method)
         dim = "3D" if n_comp >= 3 else "2D"
         previous = f"{previous_n:,} pts"
-        proj_key = projection_cache_key(method, n_comp)
-        cluster_key = cluster_cache_key(algo, k, dbscan_epsilon=eps)
 
         def fn() -> tuple[np.ndarray | None, object | None]:
+            aligned = self._align_pool_space(new, want_l1=want_l1, algo=algo, k=k, eps=eps)
             coords: np.ndarray | None = None
             payload: object | None = None
-            if need_proj:
+            if not self._projection_cached(method, n_comp, data=aligned):
                 coords = project_gradients(
-                    clustering_features(new),
+                    clustering_features(aligned),
                     method=method,
                     n_components=n_comp,
                     seed=seed,
                 )
-            if need_cluster:
+            if not self._cluster_cached(algo, k, data=aligned, dbscan_epsilon=eps):
                 payload = compute_cluster_payload(
-                    clustering_features(new),
+                    clustering_features(aligned),
                     algorithm=algo,
                     n_clusters=k,
                     seed=seed,
@@ -1877,13 +1922,19 @@ class ClusterExplorerWindow(QMainWindow):
 
         def stash(result: object) -> None:
             coords, payload = result  # type: ignore[misc]
+            space = new.cluster_space
             if coords is not None:
                 arr = np.ascontiguousarray(coords, dtype=np.float32)
-                new.projection_cache[proj_key] = arr
-                self._stash_projection(n_points, method, n_comp, arr)
+                new.projection_cache[projection_cache_key(method, n_comp, space=space)] = arr
+                self._stash_projection(n_points, method, n_comp, arr, space=space)
             if payload is not None:
                 labels, diag, _k_out, _algo = payload  # type: ignore[misc]
-                self._stash_cluster(n_points, cluster_key, labels, diag)
+                self._stash_cluster(
+                    n_points,
+                    cluster_cache_key(algo, k, dbscan_epsilon=eps, space=space),
+                    labels,
+                    diag,
+                )
 
         def on_ok(result: object) -> None:
             stash(result)
@@ -1897,6 +1948,45 @@ class ClusterExplorerWindow(QMainWindow):
             on_ok=on_ok,
             revert=lambda: self._revert_pool(previous_n),
         )
+
+    def _align_pool_space(
+        self,
+        new: ExplorerData,
+        *,
+        want_l1: bool,
+        algo: str,
+        k: int,
+        eps: float,
+    ) -> ExplorerData:
+        """Point a reloaded/cached pool at the current feature space.
+
+        ``reload_pool`` always projects and clusters on sample gradients, so a
+        pool switch would otherwise silently drop the "Cluster on L1" selection.
+        When L1 is wanted we recompute the activations for this pool's rows and
+        redo the layout and clustering on them; if that is unavailable we fall
+        back to gradients (and the checkbox stays off).
+        """
+        if not want_l1:
+            new.cluster_space = "gradients"
+            return new
+        if new.l1_features is not None:
+            new.cluster_space = "l1"
+            return new
+        l1 = None
+        if self.predictor is not None and new.source:
+            try:
+                l1 = self.predictor.l1_activations(Path(new.source), new.sample_id)
+            except Exception:
+                l1 = None
+        if l1 is None:
+            new.cluster_space = "gradients"
+            return new
+        new.l1_features = np.ascontiguousarray(l1, dtype=np.float32)
+        new.cluster_space = "l1"
+        seed = int(new.cluster_seed)
+        reproject(new, "pca", seed=seed, n_components=2)
+        recluster(new, k, seed=seed, algorithm=algo, dbscan_epsilon=eps)
+        return new
 
     def _apply_new_data(self, data: ExplorerData, *, pool_n: int) -> None:
         self._pool_cache[int(self._pool_n)] = self.data
@@ -1920,6 +2010,9 @@ class ClusterExplorerWindow(QMainWindow):
         self._view3d = bool(n_comp >= 3 and self.data.coord_z is not None)
         self._sync_orbit_mouse()
         self._sync_cluster_param_controls()
+        if hasattr(self, "l1_clusters"):
+            self._revert_l1(self.data.cluster_space == "l1")
+            self.l1_clusters.setEnabled(self._l1_available())
         self._update_display_coords()
         self._set_axis_labels()
         self._rebuild_scatter()
@@ -1953,9 +2046,10 @@ class ClusterExplorerWindow(QMainWindow):
         except ValueError:
             method = self.data.method
         dim = "3D" if self._view3d else "2D"
+        space = " · L1" if self.data.cluster_space == "l1" else ""
         self.setWindowTitle(
             f"SARDINE cluster explorer  ·  {len(self.data):,} pts  "
-            f"·  {self.data.n_clusters} clusters  ·  {method} {dim}"
+            f"·  {self.data.n_clusters} clusters  ·  {method} {dim}{space}"
         )
 
     def _on_projection_toggled(self, button: QPushButton, checked: bool) -> None:
@@ -2061,6 +2155,148 @@ class ClusterExplorerWindow(QMainWindow):
             dbscan_epsilon=eps,
             label=f"{CLUSTER_ALGO_LABELS.get(algo, algo)} ε={eps:.1f}",
             previous=previous,
+        )
+
+    def _l1_available(self) -> bool:
+        if self.predictor is None or self.predictor.checkpoint is None:
+            return False
+        if not self.predictor.checkpoint.is_file():
+            return False
+        try:
+            path = Path(self.data.source)
+        except (TypeError, ValueError):
+            return False
+        return (path / "train_pack.pt").is_file()
+
+    def _revert_l1(self, checked: bool) -> None:
+        if not hasattr(self, "l1_clusters"):
+            return
+        self.l1_clusters.blockSignals(True)
+        self.l1_clusters.setChecked(bool(checked))
+        self.l1_clusters.blockSignals(False)
+
+    def _on_l1_toggled(self, checked: bool) -> None:
+        want = bool(checked)
+        if want == (self.data.cluster_space == "l1"):
+            return
+        if want and not self._l1_available():
+            self._revert_l1(False)
+            self.status.setText("L1 clustering unavailable (needs train_pack.pt + checkpoint)")
+            return
+        space = "l1" if want else "gradients"
+        method = self._toolbar_method()
+        n_comp = self._toolbar_n_components()
+        algo = self._toolbar_algorithm()
+        k = self._toolbar_k()
+        eps = self._toolbar_eps()
+        seed = int(self.data.cluster_seed)
+        proj_ok = self._projection_cached(method, n_comp, space=space)
+        clus_ok = self._cluster_cached(algo, k, dbscan_epsilon=eps, space=space)
+        if want and self.data.l1_features is None:
+            proj_ok = False
+            clus_ok = False
+        if proj_ok and clus_ok:
+            self._abandon_in_flight()
+            self.data.cluster_space = space
+            reproject(self.data, method, seed=seed, n_components=n_comp)
+            recluster(self.data, k, seed=seed, algorithm=algo, dbscan_epsilon=eps)
+            self._refresh_after_projection()
+            self._sync_cluster_param_controls()
+            self._refresh_after_cluster()
+            return
+        label = "L1 activations" if want else "sample gradients"
+        previous = "sample gradients" if want else "L1 activations"
+        self._start_space_toggle_job(want, space, label=label, previous=previous)
+
+    def _start_space_toggle_job(
+        self,
+        want: bool,
+        space: str,
+        *,
+        label: str,
+        previous: str,
+    ) -> None:
+        pool_n = int(self._pool_n)
+        data_ref = self.data
+        seed = int(self.data.cluster_seed)
+        method = self._toolbar_method()
+        n_comp = self._toolbar_n_components()
+        algo = self._toolbar_algorithm()
+        k = self._toolbar_k()
+        eps = self._toolbar_eps()
+        proj_key = projection_cache_key(method, n_comp, space=space)
+        clus_key = cluster_cache_key(algo, k, dbscan_epsilon=eps, space=space)
+        need_proj = not self._projection_cached(method, n_comp, space=space)
+        need_clus = not self._cluster_cached(algo, k, dbscan_epsilon=eps, space=space)
+        need_l1 = want and data_ref.l1_features is None
+
+        def fn() -> tuple[np.ndarray | None, np.ndarray | None, object | None]:
+            l1: np.ndarray | None = None
+            if need_l1:
+                if self.predictor is None or self.predictor.model() is None:
+                    raise RuntimeError("NNUE checkpoint unavailable for L1 activations")
+                src = Path(data_ref.source)
+                l1 = self.predictor.l1_activations(src, data_ref.sample_id)
+                if l1 is None:
+                    raise RuntimeError("failed to build L1 activations")
+            feats: np.ndarray | None = None
+            if need_proj or need_clus:
+                if want:
+                    feats = l1 if l1 is not None else data_ref.l1_features
+                else:
+                    feats = gradient_features(data_ref)
+            coords: np.ndarray | None = None
+            payload: object | None = None
+            if need_proj:
+                coords = project_gradients(
+                    feats,
+                    method=method,
+                    n_components=n_comp,
+                    seed=seed,
+                )
+            if need_clus:
+                payload = compute_cluster_payload(
+                    feats,
+                    algorithm=algo,
+                    n_clusters=k,
+                    seed=seed,
+                    dbscan_epsilon=eps,
+                )
+            return l1, coords, payload
+
+        def stash(result: object) -> None:
+            l1, coords, payload = result  # type: ignore[misc]
+            target = self._pool_snapshot(pool_n) or data_ref
+            if l1 is not None:
+                target.l1_features = np.ascontiguousarray(l1, dtype=np.float32)
+            if coords is not None:
+                arr = np.ascontiguousarray(coords, dtype=np.float32)
+                target.projection_cache[proj_key] = arr
+                self._stash_projection(pool_n, method, n_comp, arr, space=space)
+            if payload is not None:
+                labels, diag, _k_out, _algo = payload  # type: ignore[misc]
+                self._stash_cluster(pool_n, clus_key, labels, diag)
+
+        def on_ok(result: object) -> None:
+            stash(result)
+            if data_ref is self.data:
+                self.data.cluster_space = space
+                reproject(self.data, method, seed=seed, n_components=n_comp)
+                recluster(self.data, k, seed=seed, algorithm=algo, dbscan_epsilon=eps)
+                self._refresh_after_projection()
+                self._sync_cluster_param_controls()
+                self._refresh_after_cluster()
+
+        def revert() -> None:
+            self._revert_l1(not want)
+
+        self._run_compute(
+            fn,
+            label=f"cluster on {label}",
+            previous=previous,
+            stash=stash,
+            on_ok=on_ok,
+            revert=revert,
         )
 
     def _rebuild_scatter(self) -> None:
@@ -2248,6 +2484,7 @@ class ClusterExplorerWindow(QMainWindow):
         noise = self.data.diagnostics.get("noise")
         noise_txt = f"  ·  noise {noise}" if noise else ""
         algo = CLUSTER_ALGO_LABELS.get(str(self.data.algorithm), str(self.data.algorithm))
+        space_txt = "  ·  L1" if self.data.cluster_space == "l1" else ""
         pct = int(self.display_slider.value()) if hasattr(self, "display_slider") else 100
         self.status.setText(
             f"{len(self._shown):,} / {len(self.data):,} shown ({pct}%)"
@@ -2257,6 +2494,7 @@ class ClusterExplorerWindow(QMainWindow):
             f"  ·  {len(self.selection)} pinned"
             f"  ·  {self.data.method}"
             f"{' 3D' if self._view3d else ''}"
+            f"{space_txt}"
             f"{size_txt}{noise_txt}{hover}"
         )
 

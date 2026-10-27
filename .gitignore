@@ -25,6 +25,7 @@ lc0.exe
 *.tflite
 *.onnx
 *.nnue
+*.zip
 src/cfish/nn-62ef826d1a6d.nnue
 
 # MoE work-dir symlinks into the gitignored data packs
@@ -32,12 +33,14 @@ RESULTS/moe/**/train_pack.pt
 RESULTS/moe/**/slice_ids.npy
 RESULTS/moe/**/local_rows.npy
 RESULTS/moe/**/gradients.npy
+RESULTS/moe/**/l1_activations.npy
 RESULTS/moe/**/meta.json
 
 # Per-row cluster/dispatcher label arrays scale with the pack size and can
 # exceed GitHub's 100 MB limit on large runs.
 RESULTS/moe/**/labels.npy
 RESULTS/moe/**/labels_dispatcher.npy
+RESULTS/moe/**/labels_micro.npy
 
 # Local tools (Stockfish judge download, etc. — use PATH / STOCKFISH_PATH)
 tools/

@@ -16,7 +16,7 @@ from tinymlinternship.nnue.cluster import (
     fit_minibatch_kmeans,
 )
 from tinymlinternship.nnue.model import DualHiddenNNUE, crelu
-from tinymlinternship.nnue.moe import DualHiddenMoE, LinearDispatcher
+from tinymlinternship.nnue.moe import DualHiddenMoE, KitsuneDispatcher, LinearDispatcher
 from tinymlinternship.nnue.moe_data import subsample_parts
 from tinymlinternship.nnue.sample_gradients import (
     EPS,
@@ -374,6 +374,36 @@ def test_assign_to_centroids_matches_kmeans():
     a = km.predict(x)
     b = assign_to_centroids(x, km.cluster_centers_)
     assert np.array_equal(a.astype(np.int16), b)
+
+
+def test_kitsune_dispatcher_applies_map_table():
+    torch.manual_seed(0)
+    in_dim, b_prime, b = 8, 16, 4
+    map_table = np.array([i % b for i in range(b_prime)], dtype=np.int64)
+    micro = LinearDispatcher(in_dim, b_prime)
+    disp = KitsuneDispatcher(in_dim, b, map_table, micro)
+    assert disp.n_clusters == b
+    assert disp.n_micro == b_prime
+    h = torch.randn(5, in_dim)
+    macro = disp.predict(h)
+    micro_ids = micro.predict(h)
+    assert torch.equal(macro, torch.as_tensor(map_table, dtype=torch.int64)[micro_ids.long()])
+    assert int(macro.min()) >= 0 and int(macro.max()) < b
+
+
+def test_kitsune_dispatcher_drops_into_moe():
+    torch.manual_seed(0)
+    base = DualHiddenNNUE(hidden_dim=8, hidden2_dim=12)
+    b, b_prime = 4, 16
+    map_table = np.array([i % b for i in range(b_prime)], dtype=np.int64)
+    disp = KitsuneDispatcher(base.hidden_dim * 2, b, map_table, LinearDispatcher(16, b_prime))
+    moe = DualHiddenMoE.from_base(base, b, dispatcher=disp)
+    batch = _rand_batch(6, seed=12)
+    logits = moe(
+        batch["white_idx"], batch["black_idx"], batch["stm_white"],
+        batch["white_mask"], batch["black_mask"],
+    )
+    assert logits.shape == (6, 3)
 
 
 def test_write_plots_smoke(tmp_path: Path):

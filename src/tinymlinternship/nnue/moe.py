@@ -5,6 +5,7 @@ from __future__ import annotations
 from pathlib import Path
 from typing import Any
 
+import numpy as np
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
@@ -167,6 +168,54 @@ def dispatcher_checkpoint_info(path: Path | str) -> dict[str, Any] | None:
         "n_clusters": int(payload.get("n_clusters", -1)),
         "hidden_dim": int(payload.get("hidden_dim", -1)),
     }
+
+
+class KitsuneDispatcher(nn.Module):
+    """Two-stage KITSUNE router: a micro-dispatcher over ``B'`` L1 micro-buckets
+    plus a static ``MAP[k'] → b`` lookup table into ``B`` macro-experts.
+
+    The wrapped ``micro`` dispatcher (linear or MLP) predicts micro-bucket IDs;
+    :meth:`predict` then applies the MAP table so the output is a macro-expert ID
+    in ``[0, n_experts)``. ``n_clusters`` reports the *macro* expert count so the
+    wrapper drops straight into :class:`DualHiddenMoE` as its dispatcher.
+    """
+
+    def __init__(
+        self,
+        in_dim: int,
+        n_experts: int,
+        map_table: Any,
+        micro: LinearDispatcher | MLPDispatcher,
+    ) -> None:
+        super().__init__()
+        n_experts = int(n_experts)
+        if n_experts < 2:
+            raise ValueError(f"n_experts must be >= 2, got {n_experts}")
+        self.in_dim = int(in_dim)
+        self.n_clusters = n_experts
+        self.n_micro = int(micro.n_clusters)
+        if micro.in_dim != self.in_dim:
+            raise ValueError(f"micro dispatcher in_dim {micro.in_dim} != {self.in_dim}")
+        self.micro = micro
+        table = np.asarray(map_table, dtype=np.int64).reshape(-1)
+        if table.shape[0] != self.n_micro:
+            raise ValueError(
+                f"map_table length {table.shape[0]} != micro buckets {self.n_micro}"
+            )
+        if int(table.min()) < 0 or int(table.max()) >= n_experts:
+            raise ValueError(
+                f"map_table values must be in [0, {n_experts}), got [{table.min()}, {table.max()}]"
+            )
+        self.register_buffer("map_table", torch.from_numpy(table), persistent=True)
+
+    def forward(self, h: torch.Tensor) -> torch.Tensor:
+        """Micro-bucket logits ``(B, B')`` (the dispatch stage)."""
+        return self.micro(h)
+
+    def predict(self, h: torch.Tensor) -> torch.Tensor:
+        """Macro-expert IDs ``(B,)`` = MAP[argmax micro bucket]."""
+        micro_ids = self.micro.predict(h)
+        return self.map_table[micro_ids.long()]
 
 
 class DualHiddenMoE(nn.Module):

@@ -18,12 +18,17 @@ from tinymlinternship.nnue.cluster_explore import (
     cluster_cache_key,
     cluster_color,
     cluster_palette,
+    cluster_space_prefix,
+    clustering_features,
     default_work_dir,
+    gradient_features,
     load_table,
     load_work_dir,
     make_demo_data,
+    normalize_cluster_space,
     orbit_project,
     project_gradients,
+    projection_cache_key,
     recluster,
     reload_pool,
     reproject,
@@ -403,7 +408,7 @@ def test_offscreen_window_pins_cards():
     win._toggle(2)
     app.processEvents()
     assert len(win.cards) == 3
-    assert BOARD_SVG_SIZE == 165
+    assert BOARD_SVG_SIZE == 157
     assert win.cards[0].svg.width() == BOARD_SVG_SIZE
     assert win.cards[0].svg.height() == BOARD_SVG_SIZE
     assert win.cards[0].grad_view.width() == BOARD_SVG_SIZE
@@ -1037,4 +1042,80 @@ def test_pool_switch_timeout_keeps_clustering(monkeypatch):
     assert not win.pool_buttons[1000].isChecked()
     assert win.data.algorithm == "kmedoids"
     assert win.algo_buttons["kmedoids"].isChecked()
+    win.close()
+
+
+def test_cluster_space_prefix_and_cache_keys():
+    assert cluster_space_prefix("gradients") == ""
+    assert cluster_space_prefix(None) == ""
+    assert cluster_space_prefix("l1") == "l1:"
+    assert cluster_space_prefix("L1") == "l1:"
+    assert normalize_cluster_space("gradients") == "gradients"
+    assert normalize_cluster_space("L1") == "l1"
+    assert normalize_cluster_space("l1-activations") == "l1"
+    with pytest.raises(ValueError):
+        normalize_cluster_space("bogus")
+
+    assert cluster_cache_key("kmeans", 4) == "kmeans:4"
+    assert cluster_cache_key("kmeans", 4, space="l1") == "l1:kmeans:4"
+    assert cluster_cache_key("dbscan", 3) == "dbscan:0.3"
+    assert cluster_cache_key("dbscan", 3, space="l1") == "l1:dbscan:0.3"
+    assert projection_cache_key("pca", 2) == "pca:2"
+    assert projection_cache_key("pca", 2, space="l1") == "l1:pca:2"
+    assert cluster_cache_key("kmeans", 4, space="l1") != cluster_cache_key("kmeans", 4)
+
+
+def test_clustering_features_switches_on_space():
+    data = make_demo_data(n=80, n_clusters=4, seed=6)
+    grad = gradient_features(data)
+    l1 = np.random.RandomState(3).randn(80, 8).astype(np.float32)
+    assert clustering_features(data) is grad
+    assert "kmeans:4" in data.cluster_cache
+    data.l1_features = l1
+    data.cluster_space = "l1"
+    assert clustering_features(data) is data.l1_features
+    assert gradient_features(data) is data.features
+
+    recluster(data, 4, seed=6, algorithm="kmeans")
+    assert "l1:kmeans:4" in data.cluster_cache
+    assert data.cluster_id.shape == (80,)
+    assert int(data.cluster_id.max()) < 4
+    l1_labels = data.cluster_id.copy()
+    data.cluster_space = "gradients"
+    assert clustering_features(data) is data.features
+    recluster(data, 4, seed=6, algorithm="kmeans")
+    assert "kmeans:4" in data.cluster_cache
+    assert "l1:kmeans:4" in data.cluster_cache
+    grad_labels = data.cluster_id.copy()
+    assert not np.array_equal(l1_labels, grad_labels)
+
+
+def test_reproject_switches_source_on_space():
+    data = make_demo_data(n=40, n_clusters=3, seed=1)
+    l1 = np.random.RandomState(4).randn(40, 6).astype(np.float32)
+    data.l1_features = l1
+    data.cluster_space = "l1"
+    data.projection_cache.clear()
+    reproject(data, "pca", seed=1, n_components=2)
+    assert data.method == "pca"
+    assert "l1:pca:2" in data.projection_cache
+    assert "pca:2" not in data.projection_cache
+
+
+def test_offscreen_l1_toggle_disabled_for_demo():
+    os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
+    from PyQt6.QtWidgets import QApplication
+
+    from tinymlinternship.nnue.cluster_explorer_ui import ClusterExplorerWindow
+
+    app = QApplication.instance() or QApplication([])
+    data = make_demo_data(n=30, n_clusters=3, seed=4)
+    win = ClusterExplorerWindow(data, checkpoint=None)
+    win.show()
+    app.processEvents()
+    assert hasattr(win, "l1_clusters")
+    assert not win.l1_clusters.isChecked()
+    assert not win.l1_clusters.isEnabled()
+    assert win.data.cluster_space == "gradients"
+    assert win._l1_available() is False
     win.close()
