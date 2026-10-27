@@ -1,0 +1,8 @@
+Representation,Heads K,Micro-bucket factor,MoE CE,Best expert CE,Best expert gain on test (%),Best expert gain on train plot (%)
+KITSUNE,4,4xK,0.65118,0.63726,2.51,
+KITSUNE,4,8xK,0.65137,0.64050,2.01,1.0
+KITSUNE,8,4xK,0.65102,0.61748,5.54,
+KITSUNE,8,8xK,0.65093,0.61275,6.26,6.3
+KITSUNE,16,2xK,0.65043,0.60571,7.34,16
+KITSUNE,16,4xK,0.65061,0.60234,7.85,10
+KITSUNE,16,8xK,0.65138,0.60865,6.89,3.1
