@@ -124,6 +124,8 @@ def main(argv: list[str] | None = None) -> int:
             "base_ce",
             "oracle_ce",
             "moe_mae",
+            "magnitude_mean",
+            "magnitude_std",
         ):
             if key in ev and ev[key] is not None:
                 bits.append(f"{key}={ev[key]}")

@@ -21,6 +21,7 @@ from __future__ import annotations
 import dataclasses
 import json
 import math
+import pickle
 import re
 import shutil
 import sys
@@ -37,7 +38,7 @@ import torch.nn.functional as F
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent.parent / "src"))
 
 from tinymlinternship.config.settings import NNUE_CHECKPOINTS_DIR, PROCESSED_DATA_DIR, PROJECT_ROOT, SARDINE_MODELS_DIR
-from tinymlinternship.data.board_store import BOARD_EVAL_DIR_NAME, FEN_VALUE_VISITS_DIR_NAME
+from tinymlinternship.data.board_store import BOARD_EVAL_2_DIR_NAME
 from tinymlinternship.features import piece_square_count
 from tinymlinternship.nnue.clustering_eval import piece_count_labels, piece_counts_from_indices
 from tinymlinternship.nnue.cluster import (
@@ -77,6 +78,11 @@ from tinymlinternship.nnue.moe_pipeline import (
     compute_gradients,
     configure_torch,
 )
+from tinymlinternship.nnue.moe_plots import (
+    plot_cluster_magnitude_sorted,
+    plot_gradient_magnitude_by_bucket,
+    plot_overfit_latency,
+)
 from tinymlinternship.nnue.optimizers import Rprop
 from tinymlinternship.nnue.sample_gradients import (
     head_parameter_dim,
@@ -84,14 +90,20 @@ from tinymlinternship.nnue.sample_gradients import (
     sample_head_gradients,
 )
 
-DEFAULT_SLICES = PROCESSED_DATA_DIR / BOARD_EVAL_DIR_NAME / FEN_VALUE_VISITS_DIR_NAME
+DEFAULT_SLICES = PROCESSED_DATA_DIR / BOARD_EVAL_2_DIR_NAME
 DEFAULT_CHECKPOINT = NNUE_CHECKPOINTS_DIR / "dual_h128_H256_e200_bpe512_bs10000" / "best.pt"
-UI_PACK_ROOT = PROCESSED_DATA_DIR / BOARD_EVAL_DIR_NAME / "moe"
+UI_PACK_ROOT = PROCESSED_DATA_DIR / BOARD_EVAL_2_DIR_NAME / "moe"
 DISPATCHER_CHECKPOINTS_DIR = SARDINE_MODELS_DIR / "checkpoints" / "dispatchers"
 MOE_RESULTS_ROOT = PROJECT_ROOT / "RESULTS" / "moe"
 
 L1_CHUNK = 16_384
 CLUSTER_CHUNK = 1_000_000
+# KITSUNE clustering is bounded to a fixed representative subset so the whole
+# cluster stage is O(1) in the dataset size (per-sample head gradients are the
+# expensive part). The subset is deterministic (seed 0) and shared by the L1
+# build, gradient computation, and micro-labeling so they stay aligned.
+CLUSTER_MAX_ROWS = 5_000_000
+CLUSTER_SUBSET_SEED = 0
 DISPATCHER_BATCH = 4096
 # Dispatcher training subsamples the L1 matrix into RAM: a linear/MLP router
 # doesn't need all rows, and randomly indexing a disk-backed L1 matrix (hundreds
@@ -102,6 +114,12 @@ EXPERT_BATCH = 2048
 EVAL_BATCH = 4096
 SWITCH_BATCH = 2048
 PIECE_COUNT_BUCKETS_K = 8
+# Number of training rows to re-evaluate for the train-vs-test overfit metric
+# (evaluating the whole pack would be as slow as training; a fixed cap is enough
+# to compare against the test set).
+TRAIN_CE_MAX_ROWS = 100_000
+# How long to run the single-position latency benchmark.
+BENCH_SECONDS = 1.0
 
 # Consecutive iterations whose holdout-CE decrease falls below
 # ``expert_min_ce_decrease`` before the expert is declared stalled and skipped.
@@ -131,7 +149,7 @@ class CancelToken:
 @dataclasses.dataclass
 class TrainingConfig:
     # technique
-    technique: str = "hard_moe"  # "hard_moe" | "switch"
+    technique: str = "hard_moe"  # "hard_moe" | "switch" | "base"
     # base model
     base_source: str = "load"  # "load" | "new"
     base_checkpoint: str = str(DEFAULT_CHECKPOINT)
@@ -403,8 +421,13 @@ def build_l1(
     cancel: CancelToken,
     emit: EmitFn,
     path: Path,
+    rows: np.ndarray | None = None,
 ) -> np.ndarray:
-    n = len(pack)
+    if rows is None:
+        n = len(pack)
+    else:
+        rows = np.ascontiguousarray(rows, dtype=np.int64)
+        n = int(rows.shape[0])
     hidden = int(base.hidden_dim)
     # Materialize the L1 activation matrix on disk via mmap instead of a single
     # in-RAM array: at max_rows=99M and hidden=256 this is ~189 GiB of float32,
@@ -416,7 +439,11 @@ def build_l1(
         for start in range(0, n, L1_CHUNK):
             cancel.check()
             end = min(start + L1_CHUNK, n)
-            batch = pack.gather(torch.arange(start, end, dtype=torch.long))
+            if rows is None:
+                idx = torch.arange(start, end, dtype=torch.long)
+            else:
+                idx = torch.from_numpy(rows[start:end])
+            batch = pack.gather(idx)
             h = base.l1_concat(
                 batch["white_idx"].to(device),
                 batch["black_idx"].to(device),
@@ -439,14 +466,10 @@ def build_l1(
 # --------------------------------------------------------------------------- #
 # Clustering stage
 # --------------------------------------------------------------------------- #
-def _kmeans_labels(
-    matrix: np.ndarray, k: int, cancel: CancelToken, emit: EmitFn
-) -> tuple[np.ndarray, np.ndarray, dict]:
-    def progress(frac: float, msg: str) -> None:
-        cancel.check()
-        emit({"stage": "cluster", "event": "progress", "progress": frac, "msg": msg})
-
-    km = fit_minibatch_kmeans(matrix, k, seed=0, max_fit_rows=5_000_000, progress=progress)
+def _predict_kmeans(
+    km, matrix: np.ndarray, cancel: CancelToken, emit: EmitFn, *, stage: str = "cluster"
+) -> np.ndarray:
+    """Chunked ``km.predict`` over a (possibly disk-backed) matrix."""
     n = int(matrix.shape[0])
     labels = np.empty(n, dtype=np.int16)
     for start in range(0, n, CLUSTER_CHUNK):
@@ -457,15 +480,27 @@ def _kmeans_labels(
         ).astype(np.int16)
         emit(
             {
-                "stage": "cluster",
+                "stage": stage,
                 "event": "progress",
                 "progress": end / n,
                 "msg": f"assigning labels {end:,}/{n:,}",
             }
         )
+    return labels
+
+
+def _kmeans_labels(
+    matrix: np.ndarray, k: int, cancel: CancelToken, emit: EmitFn
+) -> tuple[np.ndarray, np.ndarray, dict, object]:
+    def progress(frac: float, msg: str) -> None:
+        cancel.check()
+        emit({"stage": "cluster", "event": "progress", "progress": frac, "msg": msg})
+
+    km = fit_minibatch_kmeans(matrix, k, seed=0, max_fit_rows=5_000_000, progress=progress)
+    labels = _predict_kmeans(km, matrix, cancel, emit)
     centroids = np.ascontiguousarray(km.cluster_centers_, dtype=np.float32)
     diag = cluster_diagnostics(labels, centroids, inertia=float(km.inertia_))
-    return labels, centroids, diag
+    return labels, centroids, diag, km
 
 
 def _piece_labels(pack, cancel: CancelToken, emit: EmitFn) -> np.ndarray:
@@ -614,6 +649,116 @@ def _kitsune_macro_cluster(
     return map_table, diag
 
 
+def _gradient_magnitude_by_partition(
+    pack_dir: Path,
+    labels: np.ndarray,
+    n_partitions: int,
+    work_dir: Path,
+    emit: EmitFn,
+    cancel: CancelToken,
+    representation: str,
+) -> dict:
+    """Aggregate per-partition gradient magnitude before fine-tuning.
+
+    Reads ``gradient_norms.npy`` (written alongside ``gradients.npy`` by
+    ``compute_gradients``) and groups the L2 norms of the per-sample head
+    gradients by the final expert partition. Writes a JSON summary and a PNG
+    plot into ``work_dir``; returns the summary dict (empty if unavailable).
+    """
+    norm_path = pack_dir / "gradient_norms.npy"
+    if not norm_path.is_file():
+        emit(
+            {
+                "stage": "cluster",
+                "event": "note",
+                "msg": "gradient_norms.npy missing; skipping per-partition magnitude",
+            }
+        )
+        return {}
+
+    norms = np.load(norm_path, mmap_mode="r")
+    n = int(norms.shape[0])
+    labels = np.asarray(labels, dtype=np.int64)
+    if int(labels.shape[0]) != n:
+        emit(
+            {
+                "stage": "cluster",
+                "event": "note",
+                "msg": f"gradient norms {n} != labels {labels.shape[0]}; skipping magnitude",
+            }
+        )
+        return {}
+
+    n_partitions = int(n_partitions)
+    sums = np.zeros(n_partitions, dtype=np.float64)
+    sumsq = np.zeros(n_partitions, dtype=np.float64)
+    mins = np.full(n_partitions, np.inf, dtype=np.float64)
+    maxs = np.full(n_partitions, -np.inf, dtype=np.float64)
+    sizes = np.zeros(n_partitions, dtype=np.int64)
+
+    chunk = 1_000_000
+    for start in range(0, n, chunk):
+        cancel.check()
+        end = min(start + chunk, n)
+        block = np.asarray(norms[start:end], dtype=np.float64).reshape(-1)
+        lab = labels[start:end]
+        np.add.at(sums, lab, block)
+        np.add.at(sumsq, lab, block * block)
+        np.minimum.at(mins, lab, block)
+        np.maximum.at(maxs, lab, block)
+        sizes += np.bincount(lab, minlength=n_partitions).astype(np.int64)
+
+    nonzero = sizes > 0
+    means = np.where(nonzero, sums / np.maximum(sizes, 1), 0.0)
+    var = np.where(
+        nonzero,
+        np.maximum(sumsq / np.maximum(sizes, 1) - means * means, 0.0),
+        0.0,
+    )
+    stds = np.sqrt(var)
+    mins = np.where(nonzero, mins, 0.0)
+    maxs = np.where(nonzero, maxs, 0.0)
+
+    order = np.argsort(means)[::-1]
+    summary = {
+        "representation": representation,
+        "n_partitions": n_partitions,
+        "n_rows": n,
+        "mean": np.round(means, 6).tolist(),
+        "std": np.round(stds, 6).tolist(),
+        "min": np.round(mins, 6).tolist(),
+        "max": np.round(maxs, 6).tolist(),
+        "sizes": sizes.astype(int).tolist(),
+        "order_by_magnitude": order.astype(int).tolist(),
+    }
+    (work_dir / "gradient_magnitude.json").write_text(
+        json.dumps(summary, indent=2), encoding="utf-8"
+    )
+    plot_path = plot_gradient_magnitude_by_bucket(
+        means.tolist(),
+        stds.tolist(),
+        sizes.tolist(),
+        work_dir / "gradient_magnitude_by_partition.png",
+    )
+    sorted_plot_path = plot_cluster_magnitude_sorted(
+        means.tolist(),
+        work_dir / "gradient_magnitude_sorted.png",
+        stds=stds.tolist(),
+    )
+    emit(
+        {
+            "stage": "cluster",
+            "event": "magnitude",
+            "msg": f"per-partition gradient magnitude → {plot_path.name}, {sorted_plot_path.name}",
+            "magnitude_mean": summary["mean"],
+            "magnitude_std": summary["std"],
+            "magnitude_order": summary["order_by_magnitude"],
+            "sizes": summary["sizes"],
+        }
+    )
+    return summary
+
+
 # --------------------------------------------------------------------------- #
 # Dispatcher stage
 # --------------------------------------------------------------------------- #
@@ -676,8 +821,8 @@ def _train_dispatcher(
         train_idx = train_idx[:DISPATCHER_MAX_TRAIN]
     if int(val_idx.size) > DISPATCHER_MAX_VAL:
         val_idx = val_idx[:DISPATCHER_MAX_VAL]
-    X_train = _gather_l1_rows(l1, train_idx, cancel, emit, "training")
-    X_val = _gather_l1_rows(l1, val_idx, cancel, emit, "validation")
+    X_train = torch.from_numpy(_gather_l1_rows(l1, train_idx, cancel, emit, "training")).to(device)
+    X_val = torch.from_numpy(_gather_l1_rows(l1, val_idx, cancel, emit, "validation")).to(device)
     y_train = torch.from_numpy(labels[train_idx].astype(np.int64)).to(device)
     y_val = torch.from_numpy(labels[val_idx].astype(np.int64)).to(device)
 
@@ -698,18 +843,14 @@ def _train_dispatcher(
     with torch.no_grad():
         for start in range(0, n_train, DISPATCHER_BATCH):
             end = min(start + DISPATCHER_BATCH, n_train)
-            x = torch.from_numpy(
-                np.ascontiguousarray(X_train[start:end], dtype=np.float32)
-            ).to(device)
+            x = X_train[start:end]
             y = y_train[start:end]
             train_correct0 += int((disp(x).argmax(dim=-1) == y).sum().item())
     val_correct0 = 0
     with torch.no_grad():
         for start in range(0, n_val_v, DISPATCHER_BATCH):
             end = min(start + DISPATCHER_BATCH, n_val_v)
-            x = torch.from_numpy(
-                np.ascontiguousarray(X_val[start:end], dtype=np.float32)
-            ).to(device)
+            x = X_val[start:end]
             y = y_val[start:end]
             val_correct0 += int((disp(x).argmax(dim=-1) == y).sum().item())
     emit(
@@ -732,9 +873,7 @@ def _train_dispatcher(
         for start in range(0, n_train, DISPATCHER_BATCH):
             cancel.check()
             end = min(start + DISPATCHER_BATCH, n_train)
-            x = torch.from_numpy(
-                np.ascontiguousarray(X_train[start:end], dtype=np.float32)
-            ).to(device)
+            x = X_train[start:end]
             y = y_train[start:end]
             opt.zero_grad(set_to_none=True)
             loss = F.cross_entropy(disp(x), y)
@@ -748,9 +887,7 @@ def _train_dispatcher(
         with torch.no_grad():
             for start in range(0, n_val_v, DISPATCHER_BATCH):
                 end = min(start + DISPATCHER_BATCH, n_val_v)
-                x = torch.from_numpy(
-                    np.ascontiguousarray(X_val[start:end], dtype=np.float32)
-                ).to(device)
+                x = X_val[start:end]
                 y = y_val[start:end]
                 val_correct += int((disp(x).argmax(dim=-1) == y).sum().item())
         train_acc = train_correct / max(n_train, 1)
@@ -904,6 +1041,10 @@ def _fine_tune_experts(
             if full_batch:
                 # snapshot weights before the step for loss-based backtracking
                 prev_state = {k: v.detach().cpu().clone() for k, v in expert.state_dict().items()}
+            else:
+                # snapshot once so ``last_delta`` reflects the whole-epoch update
+                # (cloning + norming every batch was pure overhead).
+                epoch_before = _snapshot_params(expert)
             opt.zero_grad(set_to_none=True)
             for batch in _batches(train_pos):
                 logits = expert(
@@ -914,14 +1055,14 @@ def _fine_tune_experts(
                 loss = ce / w.clamp_min(1e-8)
                 loss.backward()
                 if not full_batch:
-                    before = _snapshot_params(expert)
                     opt.step()
                     opt.zero_grad(set_to_none=True)
-                    last_delta = _weight_update_norm(expert, before)
             if full_batch:
                 before = _snapshot_params(expert)
                 opt.step()
                 last_delta = _weight_update_norm(expert, before)
+            else:
+                last_delta = _weight_update_norm(expert, epoch_before)
             if sched is not None:
                 sched.step()
             hold_ce = _eval(hold_pos)
@@ -1361,13 +1502,195 @@ def _train_switch(
     return moe, best_test
 
 
+def _train_ce_on_pack(
+    model,
+    pack,
+    device: torch.device,
+    cancel: CancelToken,
+    *,
+    max_rows: int = TRAIN_CE_MAX_ROWS,
+) -> float | None:
+    """Weighted CE of ``model`` over the first ``max_rows`` rows of the pack.
+
+    Used for the train-vs-test overfit metric. Returns ``None`` when the pack is
+    missing (e.g. a base-only run that loaded its checkpoint).
+    """
+    if pack is None:
+        return None
+    n = min(int(len(pack)), int(max_rows))
+    if n <= 0:
+        return None
+    model.eval()
+    ce_sum = 0.0
+    w_sum = 0.0
+    with torch.inference_mode():
+        for start in range(0, n, EVAL_BATCH):
+            cancel.check()
+            idx = torch.arange(start, min(start + EVAL_BATCH, n), dtype=torch.long)
+            batch = batches_to_device(pack.gather(idx), device)
+            out = model(
+                batch["white_idx"], batch["black_idx"], batch["stm_white"],
+                batch["white_mask"], batch["black_mask"],
+            )
+            logits = out[0] if isinstance(out, tuple) else out
+            ce, _mae, w = ce_and_mae(logits, batch["target"].float(), batch["weight"])
+            ce_sum += float(ce.item())
+            w_sum += float(w.item())
+    return ce_sum / max(w_sum, 1e-8)
+
+
+def _benchmark_call_time(model, device: torch.device, *, n_seconds: float = BENCH_SECONDS) -> tuple[float, float]:
+    """Avg seconds per single-position call and calls/sec over ``n_seconds``.
+
+    Calls the model on one synthetic position (32 active features per side) as
+    many times as possible within the time budget, mirroring a realistic
+    per-position inference cost.
+    """
+    model.eval()
+    active = 32
+    idx = torch.arange(active, dtype=torch.long, device=device).unsqueeze(0)
+    mask = torch.ones((1, active), dtype=torch.bool, device=device)
+    stm = torch.ones(1, dtype=torch.bool, device=device)
+
+    def _call() -> None:
+        model(idx, idx, stm, mask, mask)
+
+    with torch.inference_mode():
+        for _ in range(10):
+            _call()
+        if device.type == "cuda":
+            torch.cuda.synchronize()
+        start = time.perf_counter()
+        n = 0
+        while True:
+            _call()
+            n += 1
+            if time.perf_counter() - start >= n_seconds:
+                break
+        if device.type == "cuda":
+            torch.cuda.synchronize()
+        elapsed = time.perf_counter() - start
+    avg_s = elapsed / max(n, 1)
+    return avg_s, n / max(elapsed, 1e-9)
+
+
+def _measure_overfit_and_latency(
+    base: DualHiddenNNUE,
+    moe,
+    pack,
+    test_metrics: dict,
+    work_dir: Path,
+    device: torch.device,
+    cancel: CancelToken,
+) -> dict:
+    """Compute train CE + single-position latency and write the summary plot.
+
+    Returns a dict of extra metrics to merge into ``eval.json`` / ``summary.json``.
+    """
+    extra: dict = {}
+
+    base_train_ce = _train_ce_on_pack(base, pack, device, cancel)
+    extra["base_train_ce"] = base_train_ce
+    base_avg, base_cps = _benchmark_call_time(base, device)
+    extra["base_call_time_s"] = base_avg
+    extra["base_calls_per_sec"] = base_cps
+
+    moe_train_ce = None
+    moe_avg = moe_cps = None
+    if moe is not None:
+        moe_train_ce = _train_ce_on_pack(moe, pack, device, cancel)
+        moe_avg, moe_cps = _benchmark_call_time(moe, device)
+    extra["moe_train_ce"] = moe_train_ce
+    extra["moe_call_time_s"] = moe_avg
+    extra["moe_calls_per_sec"] = moe_cps
+
+    try:
+        base_info = {
+            "train_ce": base_train_ce,
+            "test_ce": test_metrics.get("base_ce"),
+            "call_ms": base_avg * 1000.0 if base_avg is not None else None,
+        }
+        moe_info = None
+        if moe is not None:
+            moe_info = {
+                "train_ce": moe_train_ce,
+                "test_ce": test_metrics.get("moe_ce"),
+                "call_ms": moe_avg * 1000.0 if moe_avg is not None else None,
+            }
+        plot_overfit_latency(
+            work_dir / "overfit_latency.png", base=base_info, moe=moe_info
+        )
+    except Exception as exc:  # noqa: BLE001 — plotting must not fail the run
+        print(f"[overfit_latency] plot skipped: {exc}", file=sys.stderr)
+
+    return extra
+
+
+def _finalize_run(
+    work_dir: Path,
+    pack_dir: Path,
+    *,
+    base: DualHiddenNNUE | None = None,
+) -> None:
+    """Strip a completed run folder down to weights, metadata, and plots.
+
+    Deletes the cached data pack (``train_pack.pt``, ``gradients.npy``,
+    ``gradient_norms.npy``, ``slice_ids.npy``, ``local_rows.npy``) and any
+    per-run intermediate arrays (labels, centroids, map tables, pickled
+    quantizers, L1 activations). Leaves only the trained weights (``moe.pt`` /
+    ``base.pt``), JSON metadata, and plot images in ``work_dir``.
+    """
+    for name in (
+        "labels.npy",
+        "centroids.npy",
+        "labels_dispatcher.npy",
+        "map_table.npy",
+        "labels_micro.npy",
+        "micro_kmeans.pkl",
+        "l1_activations.npy",
+    ):
+        p = work_dir / name
+        if p.is_file():
+            p.unlink(missing_ok=True)
+    if base is not None:
+        base.save(work_dir / "base.pt")
+    if pack_dir.is_dir():
+        shutil.rmtree(pack_dir, ignore_errors=True)
+
+
 # --------------------------------------------------------------------------- #
 # Top-level pipeline
 # --------------------------------------------------------------------------- #
+class _StageTimer:
+    """Wall-clock timing of each pipeline stage, keyed by stage name.
+
+    ``mark(name)`` records the seconds elapsed since the previous mark (or since
+    construction) under ``name``. ``as_dict()`` returns the per-stage times plus
+    a ``total`` wall-clock entry, all rounded to milliseconds.
+    """
+
+    def __init__(self) -> None:
+        self._begin = time.perf_counter()
+        self._stage_start = self._begin
+        self.times: dict[str, float] = {}
+
+    def mark(self, name: str) -> None:
+        now = time.perf_counter()
+        self.times[name] = now - self._stage_start
+        self._stage_start = now
+
+    def as_dict(self) -> dict[str, float]:
+        return {
+            **{k: round(v, 3) for k, v in self.times.items()},
+            "total": round(time.perf_counter() - self._begin, 3),
+        }
+
+
 def run_moe_training(cfg: TrainingConfig, emit: EmitFn, cancel: CancelToken) -> dict:
     device = _resolve_device(cfg.device)
     configure_torch(device)
     emit({"stage": "init", "event": "start", "config": cfg.to_dict(), "device": str(device)})
+    timer = _StageTimer()
 
     slices_dir = DEFAULT_SLICES
     folders = slice_folders(slices_dir)
@@ -1410,7 +1733,14 @@ def run_moe_training(cfg: TrainingConfig, emit: EmitFn, cancel: CancelToken) -> 
     # count would reuse (and clash with) a stale cache from a previous run.
     use_world_model = cfg.encoder == "world_model"
     if use_world_model and cfg.world_model_source == "load":
+        if not cfg.wm_checkpoint:
+            raise ValueError(
+                "world model source is 'load' but no checkpoint was selected "
+                "(the checkpoint list is empty)"
+            )
         wm_ckpt = Path(cfg.wm_checkpoint)
+        if not wm_ckpt.is_file():
+            raise FileNotFoundError(f"world model checkpoint not found: {wm_ckpt}")
         base = load_dual_hidden_checkpoint(wm_ckpt, device=device)
         if not base.is_world_model:
             raise ValueError(
@@ -1418,12 +1748,20 @@ def run_moe_training(cfg: TrainingConfig, emit: EmitFn, cancel: CancelToken) -> 
             )
         h_actual, H_actual = base.hidden_dim, base.hidden2_dim
     elif cfg.base_source == "load":
+        if not cfg.base_checkpoint:
+            raise ValueError(
+                "base model source is 'load' but no checkpoint was selected "
+                "(the checkpoint list is empty)"
+            )
         ckpt = Path(cfg.base_checkpoint)
+        if not ckpt.is_file():
+            raise FileNotFoundError(f"base checkpoint not found: {ckpt}")
         base = load_dual_hidden_checkpoint(ckpt, device=device)
         h_actual, H_actual = base.hidden_dim, base.hidden2_dim
     else:
         base = DualHiddenNNUE(hidden_dim=cfg.h, hidden2_dim=cfg.H).to(device)
         h_actual, H_actual = cfg.h, cfg.H
+    timer.mark("base_resolve")
 
     pack_dir = UI_PACK_ROOT / f"moe_ui_{cfg.run_name}_h{h_actual}_H{H_actual}_n{cfg.max_rows}"
     pack_dir.mkdir(parents=True, exist_ok=True)
@@ -1443,6 +1781,7 @@ def run_moe_training(cfg: TrainingConfig, emit: EmitFn, cancel: CancelToken) -> 
         _build_pack(folders, pack_dir, cfg, emit, cancel)
     else:
         emit({"stage": "loading", "event": "skip", "msg": "base-only (no pack)"})
+    timer.mark("loading")
 
     # -- base model ----------------------------------------------------------
     emit({"stage": "base", "event": "start"})
@@ -1535,23 +1874,60 @@ def run_moe_training(cfg: TrainingConfig, emit: EmitFn, cancel: CancelToken) -> 
         pack, _s, _l = load_train_pack(pack_dir)
         _train_new_base(base, pack, cfg, device, emit, cancel)
         del pack
-        emit({"stage": "base", "event": "done", "source": "new", "h": cfg.h, "H": cfg.H})
+        # persist the freshly-trained base so it can be loaded again later
+        ckpt_name = f"h{h_actual}_H{H_actual}_be{cfg.base_epochs}_{cfg.max_rows // 1_000_000}M"
+        ckpt_dir = NNUE_CHECKPOINTS_DIR / ckpt_name
+        base.save(ckpt_dir / "best.pt")
+        (ckpt_dir / "config.json").write_text(
+            json.dumps(
+                {
+                    "hidden_dim": h_actual,
+                    "hidden2_dim": H_actual,
+                    "encoder": "standard",
+                    "normalize_l1": base.normalize_l1,
+                    "base_epochs": cfg.base_epochs,
+                    "max_rows": cfg.max_rows,
+                    "run_name": cfg.run_name,
+                },
+                indent=2,
+            ),
+            encoding="utf-8",
+        )
+        emit(
+            {
+                "stage": "base",
+                "event": "done",
+                "source": "new",
+                "h": h_actual,
+                "H": H_actual,
+                "saved": str(ckpt_dir / "best.pt"),
+                "msg": f"trained base → {ckpt_name} (W{h_actual}_H{H_actual})",
+            }
+        )
+
+    timer.mark("base")
 
     # -- base-only (K=1, no MoE) --------------------------------------------
     if int(cfg.k) <= 1:
         emit({"stage": "eval", "event": "start"})
         metrics = _evaluate_base(base, folders, cfg, device, emit, cancel)
+        metrics.update(
+            _measure_overfit_and_latency(base, None, None, metrics, work_dir, device, cancel)
+        )
         (work_dir / "eval.json").write_text(json.dumps(metrics, indent=2), encoding="utf-8")
         emit({"stage": "eval", "event": "done", **metrics})
+        timer.mark("eval")
         summary = {
             "run_name": cfg.run_name,
             "technique": "base",
             "config": cfg.to_dict(),
             "metrics": metrics,
+            "stage_times": timer.as_dict(),
             "timestamp": datetime.now(timezone.utc).isoformat(timespec="seconds"),
         }
         (work_dir / "summary.json").write_text(json.dumps(summary, indent=2), encoding="utf-8")
         emit({"stage": "done", "summary": summary})
+        _finalize_run(work_dir, pack_dir, base=base)
         return metrics
 
     # -- switch (end-to-end sparse top-1 MoE) --------------------------------
@@ -1569,13 +1945,17 @@ def run_moe_training(cfg: TrainingConfig, emit: EmitFn, cancel: CancelToken) -> 
         )
         moe, best_test = _train_switch(base, pack, folders, cfg, device, emit, cancel)
         moe.save(work_dir / "moe.pt")
-        del pack
         emit({"stage": "switch", "event": "done"})
+        timer.mark("switch")
 
         emit({"stage": "eval", "event": "start"})
         metrics = _switch_eval(base, moe, folders, cfg, device, cancel, full=True, emit=emit)
+        metrics.update(
+            _measure_overfit_and_latency(base, moe, pack, metrics, work_dir, device, cancel)
+        )
         (work_dir / "eval.json").write_text(json.dumps(metrics, indent=2), encoding="utf-8")
         emit({"stage": "eval", "event": "done", **metrics})
+        timer.mark("eval")
 
         summary = {
             "run_name": cfg.run_name,
@@ -1583,10 +1963,12 @@ def run_moe_training(cfg: TrainingConfig, emit: EmitFn, cancel: CancelToken) -> 
             "config": cfg.to_dict(),
             "metrics": metrics,
             "best_test_ce": best_test,
+            "stage_times": timer.as_dict(),
             "timestamp": datetime.now(timezone.utc).isoformat(timespec="seconds"),
         }
         (work_dir / "summary.json").write_text(json.dumps(summary, indent=2), encoding="utf-8")
         emit({"stage": "done", "summary": summary})
+        _finalize_run(work_dir, pack_dir, base=base)
         return metrics
 
     # -- cluster -------------------------------------------------------------
@@ -1600,30 +1982,48 @@ def run_moe_training(cfg: TrainingConfig, emit: EmitFn, cancel: CancelToken) -> 
             resume=True, log=_loading_forwarder(emit, cancel),
         )
         gradients = np.load(pack_dir / "gradients.npy", mmap_mode="r")
-        labels, centroids, diag = _kmeans_labels(gradients, cfg.k, cancel, emit)
+        labels, centroids, diag, _km = _kmeans_labels(gradients, cfg.k, cancel, emit)
         diag["representation"] = "head_gradient_48d"
         del gradients
     elif cfg.clustering == "l1":
         pack, _s, _l = load_train_pack(pack_dir)
         l1 = build_l1(pack, base, device, cancel, emit, path=work_dir / "l1_activations.npy")
-        labels, centroids, diag = _kmeans_labels(l1, cfg.k, cancel, emit)
+        labels, centroids, diag, _km = _kmeans_labels(l1, cfg.k, cancel, emit)
         diag["representation"] = "l1_256d"
         del l1
         (work_dir / "l1_activations.npy").unlink(missing_ok=True)
         del pack
     elif cfg.clustering == "kitsune":
-        # Stage 1: micro-quantize L1 into B' = factor * B micro-buckets.
+        # Bound the clustering to a fixed representative subset so this stage is
+        # O(1) in the dataset size. The subset is deterministic (seed 0) and
+        # shared by the L1 build, gradient computation, and micro-labels so they
+        # stay aligned with one another.
         pack, _s, _l = load_train_pack(pack_dir)
-        l1 = build_l1(pack, base, device, cancel, emit, path=work_dir / "l1_activations.npy")
+        n_pack = len(pack)
         b_prime = max(int(cfg.k) * int(cfg.micro_bucket_factor), int(cfg.k) + 1, 2)
-        micro_labels, centroids, micro_diag = _kmeans_labels(l1, b_prime, cancel, emit)
+        cluster_n = min(int(CLUSTER_MAX_ROWS), n_pack)
+        cluster_idx = np.sort(
+            np.random.RandomState(CLUSTER_SUBSET_SEED)
+            .choice(n_pack, size=cluster_n, replace=False)
+            .astype(np.int64)
+        )
+        # Stage 1: micro-quantize L1 into B' = factor * B micro-buckets (subset).
+        l1 = build_l1(
+            pack, base, device, cancel, emit,
+            path=work_dir / "l1_activations.npy", rows=cluster_idx,
+        )
+        micro_labels, centroids, micro_diag, micro_km = _kmeans_labels(l1, b_prime, cancel, emit)
         del l1
         (work_dir / "l1_activations.npy").unlink(missing_ok=True)
         del pack
-        # Stage 2: mean sample gradient per micro-bucket.
+        # Persist the micro-quantizer so the dispatcher can label the full dataset.
+        with open(work_dir / "micro_kmeans.pkl", "wb") as fh:
+            pickle.dump(micro_km, fh)
+        # Stage 2: mean sample gradient per micro-bucket (subset only).
         compute_gradients(
             base, folders, pack_dir, device=device, max_rows=cfg.max_rows,
-            resume=True, log=_loading_forwarder(emit, cancel),
+            row_idx=cluster_idx, resume=False,
+            log=_loading_forwarder(emit, cancel),
         )
         gradients = np.load(pack_dir / "gradients.npy", mmap_mode="r")
         mean_grads, bucket_sizes = _micro_bucket_means(
@@ -1639,6 +2039,7 @@ def run_moe_training(cfg: TrainingConfig, emit: EmitFn, cancel: CancelToken) -> 
             "representation": "kitsune_l1_gradient",
             "sizes": np.bincount(labels.astype(np.int64), minlength=cfg.k).tolist(),
             "inertia": micro_diag.get("inertia"),
+            "cluster_subset_rows": cluster_n,
             **map_diag,
         }
         np.save(work_dir / "map_table.npy", map_table.astype(np.int64))
@@ -1651,6 +2052,16 @@ def run_moe_training(cfg: TrainingConfig, emit: EmitFn, cancel: CancelToken) -> 
             labels.astype(np.int64), minlength=PIECE_COUNT_BUCKETS_K).tolist()}
         del pack
     save_cluster_run(work_dir, labels=labels, centroids=centroids, diagnostics=diag)
+    if cfg.clustering in ("gradient", "kitsune"):
+        _gradient_magnitude_by_partition(
+            pack_dir,
+            labels,
+            int(cfg.k),
+            work_dir,
+            emit,
+            cancel,
+            representation=str(diag.get("representation", cfg.clustering)),
+        )
     emit(
         {
             "stage": "cluster",
@@ -1660,6 +2071,7 @@ def run_moe_training(cfg: TrainingConfig, emit: EmitFn, cancel: CancelToken) -> 
             "n_rows": int(labels.shape[0]),
         }
     )
+    timer.mark("cluster")
 
     # -- dispatcher ----------------------------------------------------------
     if cfg.clustering == "piece_count":
@@ -1672,8 +2084,13 @@ def run_moe_training(cfg: TrainingConfig, emit: EmitFn, cancel: CancelToken) -> 
         l1 = build_l1(pack, base, device, cancel, emit, path=work_dir / "l1_activations.npy")
         in_dim = int(base.hidden_dim) * 2
         emit({"stage": "dispatcher", "event": "start", "type": cfg.dispatcher_type})
+        # Label the full dataset with the micro-quantizer fitted on the cluster
+        # subset; the dispatcher needs ground-truth micro-bucket ids for its rows.
+        with open(work_dir / "micro_kmeans.pkl", "rb") as fh:
+            micro_km = pickle.load(fh)
+        full_micro_labels = _predict_kmeans(micro_km, l1, cancel, emit, stage="dispatcher")
         micro_disp, info = _train_dispatcher(
-            l1, micro_labels, cfg, device, emit, cancel, n_classes=b_prime
+            l1, full_micro_labels, cfg, device, emit, cancel, n_classes=b_prime
         )
         best_val_acc = info["best_val_acc"]
         disp = KitsuneDispatcher(in_dim, cfg.k, map_table, micro_disp).to(device)
@@ -1744,6 +2161,7 @@ def run_moe_training(cfg: TrainingConfig, emit: EmitFn, cancel: CancelToken) -> 
             }
         )
     np.save(work_dir / "labels_dispatcher.npy", disp_labels.astype(np.int16))
+    timer.mark("dispatcher")
 
     # -- experts -------------------------------------------------------------
     pack, _s, _l = load_train_pack(pack_dir)
@@ -1752,6 +2170,7 @@ def run_moe_training(cfg: TrainingConfig, emit: EmitFn, cancel: CancelToken) -> 
     moe = _fine_tune_experts(base, disp_labels, pack, cfg, device, emit, cancel, dispatcher=disp)
     moe.save(work_dir / "moe.pt")
     emit({"stage": "experts", "event": "done"})
+    timer.mark("experts")
 
     # -- eval ----------------------------------------------------------------
     emit({"stage": "eval", "event": "start"})
@@ -1759,8 +2178,12 @@ def run_moe_training(cfg: TrainingConfig, emit: EmitFn, cancel: CancelToken) -> 
         base, moe, folders, cfg, device, emit, cancel,
         centroids=centroids, map_table=map_table,
     )
+    metrics.update(
+        _measure_overfit_and_latency(base, moe, pack, metrics, work_dir, device, cancel)
+    )
     (work_dir / "eval.json").write_text(json.dumps(metrics, indent=2), encoding="utf-8")
     emit({"stage": "eval", "event": "done", **metrics})
+    timer.mark("eval")
 
     summary = {
         "run_name": cfg.run_name,
@@ -1769,10 +2192,12 @@ def run_moe_training(cfg: TrainingConfig, emit: EmitFn, cancel: CancelToken) -> 
         "metrics": metrics,
         "dispatcher_val_acc": best_val_acc,
         "cluster_sizes": diag.get("sizes", []),
+        "stage_times": timer.as_dict(),
         "timestamp": datetime.now(timezone.utc).isoformat(timespec="seconds"),
     }
     (work_dir / "summary.json").write_text(json.dumps(summary, indent=2), encoding="utf-8")
     emit({"stage": "done", "summary": summary})
+    _finalize_run(work_dir, pack_dir, base=base)
     return metrics
 
 
@@ -1876,10 +2301,11 @@ def iter_history() -> list[dict]:
 
 
 def delete_run(run_name: str) -> tuple[bool, str]:
-    """Delete a run's results folder (and its sibling ``.zip`` if present).
+    """Delete a run's results folder, its cached data pack, and any ``.zip``.
 
-    Returns ``(ok, message)``. Only the ``RESULTS/moe/<run_name>`` directory is
-    removed; cached data packs and dispatcher checkpoints are left untouched.
+    Returns ``(ok, message)``. Removes ``RESULTS/moe/<run_name>`` plus the
+    matching cached pack dir under ``data/processed/<dataset>/moe/`` so deleting
+    a (failed) run also frees the intermediate tensors it left behind.
     """
     root = MOE_RESULTS_ROOT
     run_dir = root / run_name
@@ -1891,6 +2317,8 @@ def delete_run(run_name: str) -> tuple[bool, str]:
             shutil.rmtree(run_dir)
         if zip_path.exists():
             zip_path.unlink()
+        for pack_dir in UI_PACK_ROOT.glob(f"moe_ui_{run_name}_*"):
+            shutil.rmtree(pack_dir, ignore_errors=True)
     except OSError as exc:
         return False, f"failed to delete '{run_name}': {exc}"
     return True, f"deleted '{run_name}'"

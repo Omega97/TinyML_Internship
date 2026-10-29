@@ -152,14 +152,16 @@ def normalize_projected(
     return projected / scale.unsqueeze(1)
 
 
-def sample_head_gradients(
+def _head_grad_parts(
     model: DualHiddenNNUE,
     batch: dict[str, torch.Tensor],
-    projection: torch.Tensor,
-    *,
-    eps: float = EPS,
-) -> torch.Tensor:
-    """L2-normalized, projected per-sample head grads. No autograd graph."""
+) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor]:
+    """Forward + head-gradient pieces shared by the projected and norm paths.
+
+    Returns ``(g_pre, h, g_logits, h2)`` — the four tensors needed to form the
+    full head gradient ``∇_{W_head} L`` as outer products, without ever
+    materializing the ``(B, P)`` vector.
+    """
     model.eval()
     white_idx = batch["white_idx"]
     black_idx = batch["black_idx"]
@@ -181,9 +183,39 @@ def sample_head_gradients(
         g_pre = g_h2 * _crelu_mask(pre_l2, model.crelu_clip).to(dtype=g_h2.dtype)
         h_f = h.to(dtype=g_pre.dtype)
         h2_f = h2.to(dtype=g_pre.dtype)
-        proj = project_head_grads(g_pre, h_f, g_logits, h2_f, projection.to(dtype=g_pre.dtype))
-        norm_sq = head_grad_norm_sq(g_pre, h_f, g_logits, h2_f)
-        return normalize_projected(proj, norm_sq, eps=eps)
+    return g_pre, h_f, g_logits, h2_f
+
+
+def sample_head_gradients_and_norms(
+    model: DualHiddenNNUE,
+    batch: dict[str, torch.Tensor],
+    projection: torch.Tensor,
+    *,
+    eps: float = EPS,
+) -> tuple[torch.Tensor, torch.Tensor]:
+    """Normalized projected per-sample grads plus their raw L2 magnitudes.
+
+    The gradient magnitude ``‖∇_{W_head} L_i‖`` is discarded by the projection
+    normalization but is exactly the quantity needed for the per-partition
+    gradient-magnitude diagnostic (GOAL step 5).
+    """
+    g_pre, h_f, g_logits, h2_f = _head_grad_parts(model, batch)
+    proj = project_head_grads(g_pre, h_f, g_logits, h2_f, projection.to(dtype=g_pre.dtype))
+    norm_sq = head_grad_norm_sq(g_pre, h_f, g_logits, h2_f)
+    norms = norm_sq.clamp_min(0.0).sqrt()
+    return normalize_projected(proj, norm_sq, eps=eps), norms
+
+
+def sample_head_gradients(
+    model: DualHiddenNNUE,
+    batch: dict[str, torch.Tensor],
+    projection: torch.Tensor,
+    *,
+    eps: float = EPS,
+) -> torch.Tensor:
+    """L2-normalized, projected per-sample head grads. No autograd graph."""
+    grads, _norms = sample_head_gradients_and_norms(model, batch, projection, eps=eps)
+    return grads
 
 
 def flatten_head_grad_autograd(
@@ -230,6 +262,25 @@ def open_float16_store(
             raise ValueError(f"{path} shape/dtype {arr.shape} {arr.dtype} != {shape} float16")
         return arr
     return np.lib.format.open_memmap(path, mode="w+", dtype=np.float16, shape=shape)
+
+
+def open_float32_store(
+    path: Path,
+    n_rows: int,
+    n_dim: int,
+    *,
+    resume: bool = False,
+) -> np.memmap:
+    """Pre-allocate ``(n_rows, n_dim)`` float32 mmap. Resume keeps existing bytes."""
+    path = Path(path)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    shape = (int(n_rows), int(n_dim))
+    if resume and path.is_file():
+        arr = np.load(path, mmap_mode="r+")
+        if arr.shape != shape or arr.dtype != np.float32:
+            raise ValueError(f"{path} shape/dtype {arr.shape} {arr.dtype} != {shape} float32")
+        return arr
+    return np.lib.format.open_memmap(path, mode="w+", dtype=np.float32, shape=shape)
 
 
 def write_grad_meta(path: Path, payload: dict[str, Any]) -> None:

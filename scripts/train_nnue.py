@@ -30,7 +30,7 @@ import torch.nn.functional as F
 from torch.utils.data import DataLoader, Subset
 
 from tinymlinternship.config.settings import NNUE_CHECKPOINTS_DIR, PROCESSED_DATA_DIR, PROJECT_ROOT
-from tinymlinternship.data.board_store import BOARD_EVAL_DIR_NAME, FEN_VALUE_VISITS_DIR_NAME
+from tinymlinternship.data.board_store import BOARD_EVAL_2_DIR_NAME
 from tinymlinternship.nnue.dataset import (
     ConcatSliceDataset,
     FenValueVisitsDataset,
@@ -42,7 +42,7 @@ from tinymlinternship.nnue.dataset import (
 )
 from tinymlinternship.nnue.model import DualHiddenNNUE
 
-DEFAULT_SLICES = PROCESSED_DATA_DIR / BOARD_EVAL_DIR_NAME / FEN_VALUE_VISITS_DIR_NAME
+DEFAULT_SLICES = PROCESSED_DATA_DIR / BOARD_EVAL_2_DIR_NAME
 DEFAULT_TEST_FRACTION = 0.10
 PLOTS_DIR = PROJECT_ROOT / "plots"
 

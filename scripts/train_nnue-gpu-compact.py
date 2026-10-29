@@ -33,7 +33,7 @@ import torch
 import torch.nn.functional as F
 
 from tinymlinternship.config.settings import NNUE_CHECKPOINTS_DIR, PROCESSED_DATA_DIR, PROJECT_ROOT
-from tinymlinternship.data.board_store import BOARD_EVAL_DIR_NAME, FEN_VALUE_VISITS_DIR_NAME
+from tinymlinternship.data.board_store import BOARD_EVAL_2_DIR_NAME
 from tinymlinternship.nnue.dataset import (
     CompactPackedTensors,
     discover_slice_folders,
@@ -42,7 +42,7 @@ from tinymlinternship.nnue.dataset import (
 )
 from tinymlinternship.nnue.model import DualHiddenNNUE
 
-DEFAULT_SLICES = PROCESSED_DATA_DIR / BOARD_EVAL_DIR_NAME / FEN_VALUE_VISITS_DIR_NAME
+DEFAULT_SLICES = PROCESSED_DATA_DIR / BOARD_EVAL_2_DIR_NAME
 DEFAULT_TEST_FRACTION = 0.10
 PLOTS_DIR = PROJECT_ROOT / "plots"
 
@@ -61,7 +61,7 @@ def resolve_slices_dir(
 
     Absolute paths are kept. Relative paths are tried under ``project_root``,
     then as a slice folder name under ``default_slices``
-    (``data/processed/board_eval/fen_value_visits/``).
+    (``data/processed/board_eval_2/``).
     """
     if path.is_absolute():
         return path

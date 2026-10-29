@@ -28,7 +28,7 @@ import torch
 from torch.utils.data import DataLoader
 
 from tinymlinternship.config.settings import NNUE_CHECKPOINTS_DIR, PROCESSED_DATA_DIR, PROJECT_ROOT
-from tinymlinternship.data.board_store import BOARD_EVAL_DIR_NAME, FEN_VALUE_VISITS_DIR_NAME
+from tinymlinternship.data.board_store import BOARD_EVAL_2_DIR_NAME
 from tinymlinternship.nnue.dataset import (
     UniformRowBatchSampler,
     collate_sparse,
@@ -37,7 +37,7 @@ from tinymlinternship.nnue.model import LinearWDLNNUE
 
 import train_nnue as tn
 
-DEFAULT_SLICES = PROCESSED_DATA_DIR / BOARD_EVAL_DIR_NAME / FEN_VALUE_VISITS_DIR_NAME
+DEFAULT_SLICES = PROCESSED_DATA_DIR / BOARD_EVAL_2_DIR_NAME
 PLOTS_DIR = PROJECT_ROOT / "plots"
 
 

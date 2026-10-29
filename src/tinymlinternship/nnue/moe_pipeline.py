@@ -54,8 +54,10 @@ from tinymlinternship.nnue.sample_gradients import (
     head_parameter_dim,
     make_projection_matrix,
     open_float16_store,
+    open_float32_store,
     read_grad_meta,
     sample_head_gradients,
+    sample_head_gradients_and_norms,
     write_grad_meta,
 )
 
@@ -147,14 +149,35 @@ def compute_gradients(
     reduce_dim: int = DEFAULT_REDUCE_DIM,
     proj_seed: int = 0,
     resume: bool = False,
+    row_idx: np.ndarray | None = None,
     log: Callable[[str], None] | None = print,
 ) -> dict[str, Any]:
     work_dir = Path(work_dir)
     work_dir.mkdir(parents=True, exist_ok=True)
-    planned = plan_split_indices(folders, test_fraction, seed=split_seed)
-    folder_list = [p[0] for p in planned]
-    train_parts = subsample_parts([p[1] for p in planned], max_rows, seed=subset_seed)
-    n = count_rows(train_parts)
+
+    grad_path = work_dir / "gradients.npy"
+    norm_path = work_dir / "gradient_norms.npy"
+    meta_path = work_dir / "meta.json"
+    pack_path = work_dir / "train_pack.pt"
+
+    if row_idx is not None:
+        # Compute gradients for an explicit subset of rows gathered from the
+        # already-packed training table (shared with the clustering subset so
+        # gradients stay aligned with micro-labels).
+        row_idx = np.ascontiguousarray(row_idx, dtype=np.int64)
+        n = int(row_idx.shape[0])
+        if not pack_path.is_file():
+            raise FileNotFoundError(f"no pack to gather from: {pack_path}")
+        pack, slice_ids, local_rows = load_train_pack(work_dir)
+        if n and int(row_idx.max()) >= len(pack):
+            raise ValueError(f"row_idx max {row_idx.max()} >= pack rows {len(pack)}")
+        folder_list: list[Path] = []
+    else:
+        planned = plan_split_indices(folders, test_fraction, seed=split_seed)
+        folder_list = [p[0] for p in planned]
+        train_parts = subsample_parts([p[1] for p in planned], max_rows, seed=subset_seed)
+        n = count_rows(train_parts)
+
     hidden_dim = model.hidden_dim
     hidden2_dim = model.hidden2_dim
     p_head = head_parameter_dim(hidden_dim, hidden2_dim)
@@ -167,28 +190,26 @@ def compute_gradients(
         if budget > 100 * 1024 * 1024:
             log("WARNING: reduce_dim exceeds 100 MiB per million positions")
 
-    grad_path = work_dir / "gradients.npy"
-    meta_path = work_dir / "meta.json"
-    pack_path = work_dir / "train_pack.pt"
-
-    if resume and pack_path.is_file():
-        pack, slice_ids, local_rows = load_train_pack(work_dir)
-        if len(pack) != n:
-            raise ValueError(f"resume pack has {len(pack)} rows, expected {n}")
-    else:
-        if log:
-            log("packing selected rows into a compact CPU table")
-        pack, slice_ids, local_rows = pack_parts(folder_list, train_parts, log=log)
-        save_train_pack(work_dir, pack, slice_ids, local_rows)
+    if row_idx is None:
+        if resume and pack_path.is_file():
+            pack, slice_ids, local_rows = load_train_pack(work_dir)
+            if len(pack) != n:
+                raise ValueError(f"resume pack has {len(pack)} rows, expected {n}")
+        else:
+            if log:
+                log("packing selected rows into a compact CPU table")
+            pack, slice_ids, local_rows = pack_parts(folder_list, train_parts, log=log)
+            save_train_pack(work_dir, pack, slice_ids, local_rows)
 
     n_done = 0
-    if resume and meta_path.is_file() and grad_path.is_file():
+    if row_idx is None and resume and meta_path.is_file() and grad_path.is_file() and norm_path.is_file():
         prev = read_grad_meta(meta_path)
         n_done = int(prev.get("n_done", 0))
         if int(prev.get("n_rows", -1)) != n or int(prev.get("reduce_dim", -1)) != int(reduce_dim):
             raise ValueError("resume meta does not match this run (n_rows / reduce_dim)")
 
     store = open_float16_store(grad_path, n, int(reduce_dim), resume=resume and n_done > 0)
+    norms = open_float32_store(norm_path, n, 1, resume=resume and n_done > 0)
     projection = make_projection_matrix(
         p_head, int(reduce_dim), seed=proj_seed, device=device, dtype=torch.float32
     )
@@ -199,13 +220,15 @@ def compute_gradients(
     bs = int(batch_size)
     while written < n:
         end = min(written + bs, n)
-        batch = batches_to_device(
-            pack.gather(torch.arange(written, end, dtype=torch.long)),
-            device,
-        )
-        grads = sample_head_gradients(model, batch, projection)
+        if row_idx is None:
+            idx = torch.arange(written, end, dtype=torch.long)
+        else:
+            idx = torch.from_numpy(row_idx[written:end])
+        batch = batches_to_device(pack.gather(idx), device)
+        grads, norm_batch = sample_head_gradients_and_norms(model, batch, projection)
         k = end - written
         store[written:end] = grads.detach().cpu().numpy().astype(np.float16, copy=False)
+        norms[written:end, 0] = norm_batch.detach().cpu().numpy().astype(np.float32, copy=False)
         written = end
         now = time.perf_counter()
         if log and (written == n or now - last_report >= 5.0):
@@ -231,6 +254,7 @@ def compute_gradients(
             )
 
     store.flush()
+    norms.flush()
     elapsed = time.perf_counter() - t0
     rate = (written - n_done) / max(elapsed, 1e-9)
     meta = {
@@ -249,6 +273,7 @@ def compute_gradients(
         "split_seed": int(split_seed),
         "subset_seed": int(subset_seed),
         "max_rows": int(max_rows),
+        "gradient_norms": True,
     }
     write_grad_meta(meta_path, meta)
     if log:

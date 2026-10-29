@@ -186,6 +186,7 @@ class MainWindow(QMainWindow):
         self._live_ylabel = ""
         self._live_series: dict[str, list[tuple[float, float]]] = {}
         self._plots: dict[str, QPixmap] = {}
+        self._magnitude: dict | None = None
 
         central = QWidget()
         split = QSplitter(Qt.Orientation.Horizontal)
@@ -235,6 +236,7 @@ class MainWindow(QMainWindow):
         self.technique = QComboBox()
         self.technique.addItem("Hard MoE (cluster + router)", "hard_moe")
         self.technique.addItem("Switch (end-to-end top-1)", "switch")
+        self.technique.addItem("Base model only (no MoE)", "base")
         self.technique.currentIndexChanged.connect(self._sync_enabled_state)
         self.k_combo = QComboBox()
         self.k_combo.addItem("1 (no MoE)", 1)
@@ -870,11 +872,12 @@ class MainWindow(QMainWindow):
         self._restore_combo_data(self.device, s.value("device"))
 
     def _sync_enabled_state(self) -> None:
+        is_base_only = self.technique.currentData() == "base"
         is_switch = self.technique.currentData() == "switch"
         is_world_model = self.encoder.currentData() == "world_model"
         wm_load = is_world_model and self.world_model_source.currentData() == "load"
         eff_k = int(self.k_combo.currentData())
-        no_moe = eff_k <= 1
+        no_moe = eff_k <= 1 or is_base_only
 
         show_moe = not no_moe
         self.cluster_group.setVisible(show_moe and not is_switch)
@@ -912,9 +915,12 @@ class MainWindow(QMainWindow):
         kitsune = self.clustering.currentData() == "kitsune"
         if piece and not no_moe:
             self.k_combo.setCurrentIndex(3)  # lock to K=8
+        if is_base_only:
+            self.k_combo.setCurrentIndex(0)  # lock to K=1 (no MoE)
         # Heads K stays editable in every mode so the user can always switch
-        # between "1 (no MoE)" and a real MoE; only piece-count pins it to 8.
-        self.k_combo.setEnabled(not piece)
+        # between "1 (no MoE)" and a real MoE; piece-count pins it to 8 and the
+        # base-only architecture pins it to 1.
+        self.k_combo.setEnabled(not piece and not is_base_only)
         # KITSUNE micro-bucket resolution only applies to the kitsune clustering.
         self._set_row_visible(self.micro_bucket_factor, kitsune, self.cluster_layout)
         self._set_row_visible(self.kitsune_alpha, kitsune, self.cluster_layout)
@@ -1069,6 +1075,28 @@ class MainWindow(QMainWindow):
     def _start(self) -> None:
         if self._thread is not None and self._thread.is_alive():
             return
+        if self.base_source.currentIndex() == 0 and not self.checkpoint.currentData():
+            QMessageBox.warning(
+                self,
+                "No base checkpoint",
+                "Base model source is 'Load checkpoint' but no checkpoint is "
+                "available or selected.\n\nEither switch the source to 'Train new' "
+                "or add a trained model to models\\checkpoints\\nnue\\<name>\\best.pt "
+                "and press 'Refresh model list'.",
+            )
+            return
+        if (
+            self.encoder.currentData() == "world_model"
+            and self.world_model_source.currentData() == "load"
+            and not self.wm_checkpoint.currentData()
+        ):
+            QMessageBox.warning(
+                self,
+                "No world model",
+                "World model source is 'Load' but no checkpoint is available or "
+                "selected.\n\nTrain a world model first, or switch the source to 'Train'.",
+            )
+            return
         cfg = self._collect_config()
         self._last_run_name = cfg.run_name
         self._save_settings()
@@ -1138,6 +1166,7 @@ class MainWindow(QMainWindow):
         self._live_ylabel = ""
         self._live_series = {}
         self._plots = {}
+        self._magnitude = None
         self.plot_combo.clear()
         self.plot_combo.setEnabled(False)
 
@@ -1232,6 +1261,14 @@ class MainWindow(QMainWindow):
                 row.set_progress(ev.get("progress"))
                 if ev.get("msg"):
                     row.set_metric(str(ev.get("msg")))
+            elif event == "magnitude":
+                self._magnitude = {
+                    "mean": ev.get("magnitude_mean") or [],
+                    "std": ev.get("magnitude_std") or [],
+                    "order": ev.get("magnitude_order") or [],
+                }
+                if ev.get("msg"):
+                    self._log(str(ev.get("msg")))
             elif event == "done":
                 row.set_progress(1.0)
                 sizes = ev.get("sizes") or []
@@ -1572,6 +1609,40 @@ class MainWindow(QMainWindow):
         buf.seek(0)
         return QPixmap.fromImage(QImage.fromData(buf.getvalue(), "PNG"))
 
+    def _render_magnitude_plot(self) -> QPixmap | None:
+        data = self._magnitude
+        if not data or not data.get("mean"):
+            return None
+        means = [float(m) for m in data["mean"]]
+        order = data.get("order")
+        if order:
+            order = [int(i) for i in order]
+        else:
+            order = sorted(range(len(means)), key=lambda i: means[i], reverse=True)
+        values = [means[i] for i in order]
+        fig, ax = plt.subplots(figsize=(7, 3.2), dpi=100)
+        fig.patch.set_facecolor("#121418")
+        ax.set_facecolor("#121418")
+        ax.spines["top"].set_visible(False)
+        ax.spines["right"].set_visible(False)
+        ax.spines["left"].set_color("#3a4454")
+        ax.spines["bottom"].set_color("#3a4454")
+        ax.tick_params(colors="#9aa6b8")
+        x = list(range(len(order)))
+        ax.bar(x, values, 0.6, color="#5b8dd9")
+        ax.set_xticks(x)
+        ax.set_xticklabels([str(i) for i in order])
+        ax.set_xlabel("cluster id (sorted by gradient magnitude)", color="#e8edf4")
+        ax.set_ylabel("mean ‖∇W_head L‖", color="#e8edf4")
+        ax.set_title("Cluster gradient magnitude", color="#e8edf4")
+        ax.grid(True, axis="y", alpha=0.2)
+        fig.tight_layout()
+        buf = io.BytesIO()
+        fig.savefig(buf, format="png")
+        plt.close(fig)
+        buf.seek(0)
+        return QPixmap.fromImage(QImage.fromData(buf.getvalue(), "PNG"))
+
     def _show_plot(self, metrics: dict) -> None:
         self._finalize_live_plot()
         pixmap = self._render_bar_plot(metrics)
@@ -1581,12 +1652,39 @@ class MainWindow(QMainWindow):
         score_pixmap = self._render_score_plot(metrics)
         if score_pixmap is not None:
             self._register_plot("MoE score", score_pixmap)
+        magnitude_pixmap = self._render_magnitude_plot()
+        if magnitude_pixmap is not None:
+            self._register_plot("Cluster magnitude", magnitude_pixmap)
+
+    def _run_dir(self) -> Path | None:
+        if not self._last_run_name:
+            return None
+        return PROJECT_ROOT / "RESULTS" / "moe" / self._last_run_name
+
+    def _plot_filename(self, name: str) -> str:
+        slug = re.sub(r"[^A-Za-z0-9]+", "_", str(name)).strip("_").lower()
+        return f"{slug}.png"
+
+    def _save_plots(self) -> None:
+        run_dir = self._run_dir()
+        if run_dir is None:
+            return
+        run_dir.mkdir(parents=True, exist_ok=True)
+        for name, pixmap in self._plots.items():
+            if pixmap is None or pixmap.isNull():
+                continue
+            path = run_dir / self._plot_filename(name)
+            if not pixmap.save(str(path), "PNG"):
+                self._log(f"failed to save plot {path}")
+        self._log(f"saved {len(self._plots)} plots to {run_dir}")
 
     def _on_finished(self, metrics: dict) -> None:
         self._set_running(False)
         self.status.showMessage("Done")
         self._log("run finished")
+        self._save_plots()
         self.open_results_btn.setVisible(True)
+        self._refresh_models()
         self._refresh_history()
 
     def _on_failed(self, err: str) -> None:

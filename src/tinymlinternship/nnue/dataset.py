@@ -412,6 +412,15 @@ def slice_features_path(folder: Path) -> Path:
 
 
 def slice_db_is_valid(folder: Path, source: Path, *, max_active: int) -> bool:
+    """True when ``features.npz`` is present with the expected schema.
+
+    Pre-encoded slices shipped with the dataset are trusted as-is. The
+    ``source`` / ``source_size`` / ``source_mtime_ns`` recorded in
+    ``features.meta.json`` refer to the machine that wrote the archive, so
+    comparing them against the current machine would force an unnecessary
+    re-encode. Re-encode explicitly with ``--rebuild-cache`` / ``--rebuild``.
+    """
+    del source  # schema-only validity; source provenance is intentionally ignored
     npz = slice_features_path(folder)
     meta_path = folder / SLICE_FEATURES_META
     if not npz.is_file() or not meta_path.is_file():
@@ -420,7 +429,6 @@ def slice_db_is_valid(folder: Path, source: Path, *, max_active: int) -> bool:
         meta = json.loads(meta_path.read_text(encoding="utf-8"))
     except (OSError, json.JSONDecodeError):
         return False
-    expected = _source_stat(source)
     if int(meta.get("version", -1)) != SLICE_DB_VERSION:
         return False
     if int(meta.get("max_active", -1)) != int(max_active):
@@ -428,12 +436,6 @@ def slice_db_is_valid(folder: Path, source: Path, *, max_active: int) -> bool:
     if int(meta.get("feature_dim", -1)) != FEATURE_DIM:
         return False
     if "visits" in meta.get("columns", []):
-        return False
-    if meta.get("source") != expected["source"]:
-        return False
-    if int(meta.get("source_size", -1)) != expected["source_size"]:
-        return False
-    if int(meta.get("source_mtime_ns", -1)) != expected["source_mtime_ns"]:
         return False
     return True
 

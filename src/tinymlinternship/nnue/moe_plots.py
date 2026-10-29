@@ -293,6 +293,82 @@ def plot_moe_vs_base(
     return _save(fig, path)
 
 
+def plot_gradient_magnitude_by_bucket(
+    means: Sequence[float],
+    stds: Sequence[float] | None,
+    sizes: Sequence[int] | None,
+    path: Path,
+    *,
+    title: str = "Gradient magnitude per partition (pre fine-tune)",
+) -> Path:
+    """Bar plot of per-partition gradient magnitude (with std) and partition sizes."""
+    plt = _require_mpl()
+    b = len(means)
+    means = [float(m) for m in means]
+    stds = [float(s) for s in stds] if stds is not None else [0.0] * b
+    sizes = [int(s) for s in sizes] if sizes is not None else None
+    x = np.arange(b)
+    fig, (ax1, ax2) = plt.subplots(
+        2, 1, figsize=(max(7.2, 0.5 * b + 3.0), 7.0), sharex=True
+    )
+    ax1.bar(x, means, 0.6, yerr=stds, capsize=3, color="#4c72b0", ecolor="#333333")
+    ax1.set_ylabel("mean ‖∇W_head L‖")
+    ax1.grid(True, axis="y", alpha=0.3)
+    if sizes is not None:
+        ax2.bar(x, sizes, 0.6, color="#dd8452")
+        ax2.set_ylabel("positions")
+        ax2.grid(True, axis="y", alpha=0.3)
+    ax2.set_xticks(x)
+    ax2.set_xticklabels(
+        [str(i) for i in range(b)],
+        rotation=30 if b > 6 else 0,
+        ha="right" if b > 6 else "center",
+    )
+    ax2.set_xlabel("expert partition")
+    fig.suptitle(title)
+    fig.tight_layout()
+    return _save(fig, path)
+
+
+def plot_cluster_magnitude_sorted(
+    means: Sequence[float],
+    path: Path,
+    *,
+    stds: Sequence[float] | None = None,
+    title: str = "Cluster gradient magnitude (sorted by magnitude)",
+) -> Path:
+    """Bar plot of per-cluster gradient magnitude, sorted descending by magnitude.
+
+    The x-axis shows the original cluster ids ordered from largest to smallest
+    mean gradient magnitude.
+    """
+    plt = _require_mpl()
+    means = np.asarray([float(m) for m in means], dtype=np.float64)
+    b = int(means.shape[0])
+    order = np.argsort(means)[::-1]
+    ordered = means[order]
+    stds_arr = (
+        np.asarray([float(s) for s in stds], dtype=np.float64)[order]
+        if stds is not None
+        else None
+    )
+    x = np.arange(b)
+    fig, ax = plt.subplots(figsize=(max(7.2, 0.55 * b + 3.0), 4.4))
+    ax.bar(x, ordered, 0.6, yerr=stds_arr, capsize=3, color="#4c72b0", ecolor="#333333")
+    ax.set_xticks(x)
+    ax.set_xticklabels(
+        [str(int(i)) for i in order],
+        rotation=30 if b > 6 else 0,
+        ha="right" if b > 6 else "center",
+    )
+    ax.set_xlabel("cluster id (sorted by gradient magnitude)")
+    ax.set_ylabel("mean ‖∇W_head L‖")
+    ax.set_title(title)
+    ax.grid(True, axis="y", alpha=0.3)
+    fig.tight_layout()
+    return _save(fig, path)
+
+
 def plot_run_ce_bars(
     rows: Sequence[dict[str, Any]],
     path: Path,
@@ -331,6 +407,75 @@ def plot_run_ce_bars(
     ax.set_title(title)
     ax.grid(True, axis="y", alpha=0.3)
     ax.legend()
+    fig.tight_layout()
+    return _save(fig, path)
+
+
+def plot_overfit_latency(
+    path: Path,
+    *,
+    base: dict[str, float | None] | None = None,
+    moe: dict[str, float | None] | None = None,
+    title: str = "Overfit (train vs test CE) and inference latency",
+) -> Path:
+    """Single-figure summary: train/test CE (left) and avg call time (right).
+
+    ``base`` / ``moe`` are dicts with optional keys ``train_ce``, ``test_ce``,
+    and ``call_ms``. Missing entries are skipped rather than plotted as zero.
+    """
+    plt = _require_mpl()
+    fig, (ax1, ax2) = plt.subplots(1, 2, figsize=(10.4, 4.4))
+
+    labels: list[str] = []
+    train_ce: list[float | None] = []
+    test_ce: list[float | None] = []
+    call_ms: list[float | None] = []
+    for name, d in (("base", base), ("MoE", moe)):
+        if d is None:
+            continue
+        labels.append(name)
+        train_ce.append(d.get("train_ce"))
+        test_ce.append(d.get("test_ce"))
+        call_ms.append(d.get("call_ms"))
+
+    x = np.arange(len(labels))
+    width = 0.35
+    if any(v is not None for v in train_ce):
+        ax1.bar(
+            x - width / 2,
+            [float(v) if v is not None else 0.0 for v in train_ce],
+            width,
+            label="train",
+            color="#4c72b0",
+        )
+    if any(v is not None for v in test_ce):
+        ax1.bar(
+            x + width / 2,
+            [float(v) if v is not None else 0.0 for v in test_ce],
+            width,
+            label="test",
+            color="#dd8452",
+        )
+    ax1.set_xticks(x)
+    ax1.set_xticklabels(labels)
+    ax1.set_ylabel("cross-entropy")
+    ax1.set_title("Train vs test CE")
+    ax1.grid(True, axis="y", alpha=0.3)
+    ax1.legend()
+
+    ax2.bar(
+        x,
+        [float(v) if v is not None else 0.0 for v in call_ms],
+        0.5,
+        color="#55a868",
+    )
+    ax2.set_xticks(x)
+    ax2.set_xticklabels(labels)
+    ax2.set_ylabel("avg call time (ms)")
+    ax2.set_title("Single-position inference")
+    ax2.grid(True, axis="y", alpha=0.3)
+
+    fig.suptitle(title)
     fig.tight_layout()
     return _save(fig, path)
 

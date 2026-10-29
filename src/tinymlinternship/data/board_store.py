@@ -12,6 +12,7 @@ import chess
 from tinymlinternship.data.wdl import labeled_payload, stm_wdl_from_white_value
 
 BOARD_EVAL_DIR_NAME = "board_eval"
+BOARD_EVAL_2_DIR_NAME = "board_eval_2"
 DATASET_JSON_NAME = "dataset.json"
 # Per-source slim tables live in this subfolder; the join is the parquet in BOARD_EVAL_DIR_NAME.
 FEN_VALUE_VISITS_DIR_NAME = "fen_value_visits"
