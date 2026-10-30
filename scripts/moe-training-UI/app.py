@@ -357,7 +357,7 @@ class MainWindow(QMainWindow):
         # No hard upper limit: B' can be scaled arbitrarily high (QSpinBox's
         # largest representable value is used as an effectively-unbounded cap).
         self.micro_bucket_factor.setRange(2, 2_147_483_647)
-        self.micro_bucket_factor.setValue(4)
+        self.micro_bucket_factor.setValue(2)
         self.micro_bucket_factor.setSuffix(" ×K")
         self.micro_bucket_factor.setToolTip(
             "KITSUNE micro-bucket resolution: B' = factor × B micro-buckets "
@@ -405,11 +405,34 @@ class MainWindow(QMainWindow):
         self.dispatcher_lr.setDecimals(4)
         self.dispatcher_lr.setRange(1e-5, 1.0)
         self.dispatcher_lr.setValue(1e-2)
+        self.dispatcher_patience = QSpinBox()
+        self.dispatcher_patience.setRange(1, 1000)
+        self.dispatcher_patience.setValue(5)
+        self.dispatcher_min_acc_gain = QDoubleSpinBox()
+        self.dispatcher_min_acc_gain.setDecimals(3)
+        self.dispatcher_min_acc_gain.setRange(0.0, 100.0)
+        self.dispatcher_min_acc_gain.setSingleStep(0.1)
+        self.dispatcher_min_acc_gain.setValue(1.0)
+        self.dispatcher_min_acc_gain.setToolTip(
+            "Early stop when val accuracy improves by less than this % (relative) "
+            "for 'Patience' consecutive epochs. 0 disables early stopping."
+        )
+        self.dispatcher_max_train = QSpinBox()
+        self.dispatcher_max_train.setRange(0, 10_000)
+        self.dispatcher_max_train.setValue(1)
+        self.dispatcher_max_train.setSuffix(" M")
+        self.dispatcher_max_train.setToolTip(
+            "Cap on rows used to train the dispatcher (its L1 build + SGD). "
+            "0 = no cap. The trained router is still applied to the full dataset."
+        )
         pf.addRow("Source", self.dispatcher_source)
         pf.addRow("Dispatcher", self.dispatcher_checkpoint)
         pf.addRow("Type", self.dispatcher_type)
         pf.addRow("Hidden width", self.dispatcher_hidden)
-        pf.addRow("Epochs", self.dispatcher_epochs)
+        pf.addRow("Epochs (max)", self.dispatcher_epochs)
+        pf.addRow("Patience", self.dispatcher_patience)
+        pf.addRow("Min acc gain (%)", self.dispatcher_min_acc_gain)
+        pf.addRow("Train rows cap", self.dispatcher_max_train)
         pf.addRow("LR", self.dispatcher_lr)
         layout.addWidget(disp_group)
         self.disp_group = disp_group
@@ -445,12 +468,29 @@ class MainWindow(QMainWindow):
             "this amount (percent, relative) for 10 consecutive iterations "
             "(0 = off)."
         )
+        self.expert_max_train = QSpinBox()
+        self.expert_max_train.setRange(0, 10_000)
+        self.expert_max_train.setValue(2)
+        self.expert_max_train.setSuffix(" M")
+        self.expert_max_train.setToolTip(
+            "Cap on training rows per expert (0 = no cap). The frozen L1 already "
+            "extracts strong features, so a large subset converges almost as well."
+        )
+        self.expert_max_hold = QSpinBox()
+        self.expert_max_hold.setRange(0, 10_000)
+        self.expert_max_hold.setValue(100)
+        self.expert_max_hold.setSuffix(" K")
+        self.expert_max_hold.setToolTip(
+            "Cap on holdout rows per expert (0 = no cap). Used for early stopping."
+        )
         ef.addRow("Epochs", self.expert_epochs)
         ef.addRow("LR", self.expert_lr)
         ef.addRow("LR end", self.expert_lr_end)
         ef.addRow("Optimizer", self.expert_optimizer)
         ef.addRow("", self.l1_frozen)
         ef.addRow("Min CE decrease (%)", self.expert_min_ce_decrease)
+        ef.addRow("Train rows cap", self.expert_max_train)
+        ef.addRow("Holdout rows cap", self.expert_max_hold)
         layout.addWidget(exp_group)
         self.exp_group = exp_group
 
@@ -791,12 +831,17 @@ class MainWindow(QMainWindow):
         s.setValue("dispatcher_hidden", self.dispatcher_hidden.currentData())
         s.setValue("dispatcher_epochs", self.dispatcher_epochs.value())
         s.setValue("dispatcher_lr", self.dispatcher_lr.value())
+        s.setValue("dispatcher_patience", self.dispatcher_patience.value())
+        s.setValue("dispatcher_min_acc_gain", self.dispatcher_min_acc_gain.value())
+        s.setValue("dispatcher_max_train", self.dispatcher_max_train.value())
         s.setValue("expert_epochs", self.expert_epochs.value())
         s.setValue("expert_lr", self.expert_lr.value())
         s.setValue("expert_lr_end", self.expert_lr_end.value())
         s.setValue("expert_optimizer", self.expert_optimizer.currentData())
         s.setValue("l1_frozen", self.l1_frozen.isChecked())
         s.setValue("expert_min_ce_decrease", self.expert_min_ce_decrease.value())
+        s.setValue("expert_max_train", self.expert_max_train.value())
+        s.setValue("expert_max_hold", self.expert_max_hold.value())
         s.setValue("switch_alpha", self.switch_alpha.value())
         s.setValue("switch_epochs", self.switch_epochs.value())
         s.setValue("switch_lr", self.switch_lr.value())
@@ -858,6 +903,9 @@ class MainWindow(QMainWindow):
         self._restore_combo_data(self.dispatcher_hidden, s.value("dispatcher_hidden"))
         self._restore_spin(self.dispatcher_epochs, s.value("dispatcher_epochs"))
         self._restore_double(self.dispatcher_lr, s.value("dispatcher_lr"))
+        self._restore_spin(self.dispatcher_patience, s.value("dispatcher_patience"))
+        self._restore_double(self.dispatcher_min_acc_gain, s.value("dispatcher_min_acc_gain"))
+        self._restore_spin(self.dispatcher_max_train, s.value("dispatcher_max_train"))
         self._restore_spin(self.expert_epochs, s.value("expert_epochs"))
         self._restore_double(self.expert_lr, s.value("expert_lr"))
         self._restore_double(self.expert_lr_end, s.value("expert_lr_end"))
@@ -866,6 +914,8 @@ class MainWindow(QMainWindow):
         if frozen is not None:
             self.l1_frozen.setChecked(frozen in (True, "true", "1", 1))
         self._restore_double(self.expert_min_ce_decrease, s.value("expert_min_ce_decrease"))
+        self._restore_spin(self.expert_max_train, s.value("expert_max_train"))
+        self._restore_spin(self.expert_max_hold, s.value("expert_max_hold"))
         self._restore_double(self.switch_alpha, s.value("switch_alpha"))
         self._restore_spin(self.switch_epochs, s.value("switch_epochs"))
         self._restore_double(self.switch_lr, s.value("switch_lr"))
@@ -936,7 +986,7 @@ class MainWindow(QMainWindow):
         self.dispatcher_source.setEnabled(disp_active and not kitsune)
         disp_load = self.dispatcher_source.currentData() == "load"
         self._set_row_visible(self.dispatcher_checkpoint, disp_load, self.disp_layout)
-        for w in (self.dispatcher_type, self.dispatcher_hidden, self.dispatcher_epochs, self.dispatcher_lr):
+        for w in (self.dispatcher_type, self.dispatcher_hidden, self.dispatcher_epochs, self.dispatcher_lr, self.dispatcher_patience, self.dispatcher_min_acc_gain, self.dispatcher_max_train):
             self._set_row_visible(w, not disp_load, self.disp_layout)
         self.dispatcher_source.setEnabled(disp_active)
         self.dispatcher_checkpoint.setEnabled(disp_active and disp_load)
@@ -946,6 +996,9 @@ class MainWindow(QMainWindow):
         )
         self.dispatcher_epochs.setEnabled(disp_active and not disp_load)
         self.dispatcher_lr.setEnabled(disp_active and not disp_load)
+        self.dispatcher_patience.setEnabled(disp_active and not disp_load)
+        self.dispatcher_min_acc_gain.setEnabled(disp_active and not disp_load)
+        self.dispatcher_max_train.setEnabled(disp_active and not disp_load)
 
         # Rprop has no learning-rate schedule, so "LR end" is irrelevant.
         self.expert_lr_end.setEnabled(self.expert_optimizer.currentData() != "rprop")
@@ -1058,12 +1111,17 @@ class MainWindow(QMainWindow):
             dispatcher_hidden=int(self.dispatcher_hidden.currentData()),
             dispatcher_epochs=self.dispatcher_epochs.value(),
             dispatcher_lr=float(self.dispatcher_lr.value()),
+            dispatcher_patience=self.dispatcher_patience.value(),
+            dispatcher_min_acc_gain=float(self.dispatcher_min_acc_gain.value()),
+            dispatcher_max_train=self.dispatcher_max_train.value() * 1_000_000,
             expert_epochs=self.expert_epochs.value(),
             expert_lr=float(self.expert_lr.value()),
             expert_lr_end=float(self.expert_lr_end.value()),
             expert_optimizer=self.expert_optimizer.currentData(),
             l1_frozen=self.l1_frozen.isChecked(),
             expert_min_ce_decrease=float(self.expert_min_ce_decrease.value()),
+            expert_max_train=self.expert_max_train.value() * 1_000_000,
+            expert_max_hold=self.expert_max_hold.value() * 1_000,
             switch_alpha=float(self.switch_alpha.value()),
             switch_epochs=self.switch_epochs.value(),
             switch_lr=float(self.switch_lr.value()),
@@ -1143,9 +1201,12 @@ class MainWindow(QMainWindow):
             self.dispatcher_source,
             self.dispatcher_checkpoint, self.dispatcher_type,
             self.dispatcher_hidden, self.dispatcher_epochs, self.dispatcher_lr,
+            self.dispatcher_patience, self.dispatcher_min_acc_gain,
+            self.dispatcher_max_train,
             self.expert_epochs, self.expert_lr, self.expert_lr_end,
             self.expert_optimizer,
             self.l1_frozen, self.expert_min_ce_decrease, self.switch_alpha,
+            self.expert_max_train, self.expert_max_hold,
             self.switch_epochs, self.switch_lr, self.device,
             self.refresh_models_btn,
         ):
@@ -1297,6 +1358,8 @@ class MainWindow(QMainWindow):
                 row.set_progress(ev.get("progress"))
                 if ev.get("msg"):
                     row.set_metric(str(ev.get("msg")))
+            elif event == "early_stop":
+                row.set_metric(str(ev.get("msg", "stopped early")))
             elif event == "done":
                 row.set_progress(1.0)
                 if ev.get("best_val_acc") is not None:

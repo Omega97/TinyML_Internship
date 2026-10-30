@@ -105,11 +105,7 @@ CLUSTER_CHUNK = 1_000_000
 CLUSTER_MAX_ROWS = 5_000_000
 CLUSTER_SUBSET_SEED = 0
 DISPATCHER_BATCH = 4096
-# Dispatcher training subsamples the L1 matrix into RAM: a linear/MLP router
-# doesn't need all rows, and randomly indexing a disk-backed L1 matrix (hundreds
-# of GB) for SGD degenerates into page-fault thrashing.
-DISPATCHER_MAX_TRAIN = 5_000_000
-DISPATCHER_MAX_VAL = 500_000
+DISPATCHER_SUBSET_SEED = 0
 EXPERT_BATCH = 2048
 EVAL_BATCH = 4096
 SWITCH_BATCH = 2048
@@ -173,7 +169,7 @@ class TrainingConfig:
     clustering: str = "gradient"  # "gradient" | "l1" | "piece_count" | "kitsune"
     k: int = 8
     # KITSUNE micro-bucket resolution: B' = micro_bucket_factor * B
-    micro_bucket_factor: int = 4
+    micro_bucket_factor: int = 2
     # KITSUNE balanced-draft fraction: share of micro-buckets claimed by the
     # round-robin draft (even split); the rest fall back to nearest centroid.
     kitsune_alpha: float = 1.0  # 0 = pure nearest-centroid, 1 = fully balanced
@@ -182,6 +178,14 @@ class TrainingConfig:
     dispatcher_hidden: int = 64
     dispatcher_epochs: int = 8
     dispatcher_lr: float = 1e-2
+    # Early stop once val accuracy improves by less than ``dispatcher_min_acc_gain``%
+    # (relative) for ``dispatcher_patience`` epochs in a row. 0 disables it.
+    dispatcher_patience: int = 5
+    dispatcher_min_acc_gain: float = 1.0
+    # Cap on rows used to TRAIN the dispatcher (its L1 build + SGD). 0 = no cap
+    # (train on all rows). The trained router is still applied to the full
+    # dataset afterward, so this only bounds the training cost.
+    dispatcher_max_train: int = 1_000_000
     dispatcher_source: str = "train"  # "train" | "load"
     dispatcher_checkpoint: str = ""
     # experts (hard MoE)
@@ -191,6 +195,12 @@ class TrainingConfig:
     expert_optimizer: str = "adam"  # "adam" | "sgd" | "rprop"
     l1_frozen: bool = True
     expert_min_ce_decrease: float = 0.01  # min % CE decrease per iteration; 0 = off
+    # Cap on train / holdout rows per expert (0 = no cap). The frozen shared L1
+    # already extracts strong features, so the shallow expert heads (L2 + head)
+    # converge on a large representative subset — making the fine-tune stage
+    # O(1) in the dataset size with minimal CE loss.
+    expert_max_train: int = 2_000_000
+    expert_max_hold: int = 100_000
     # switch (end-to-end top-1)
     switch_alpha: float = 0.01
     switch_epochs: int = 5
@@ -762,6 +772,23 @@ def _gradient_magnitude_by_partition(
 # --------------------------------------------------------------------------- #
 # Dispatcher stage
 # --------------------------------------------------------------------------- #
+def _dispatcher_train_rows(n: int, cap: int) -> np.ndarray:
+    """Deterministic dispatcher training subset (``cap`` rows, 0 = all rows).
+
+    Sorted indices into the pack. Keeping this subset fixed (seed 0) means the
+    dispatcher's training cost is O(cap) regardless of the dataset size.
+    """
+    n = int(n)
+    cap = int(cap)
+    if cap > 0 and n > cap:
+        return np.sort(
+            np.random.RandomState(DISPATCHER_SUBSET_SEED)
+            .choice(n, size=cap, replace=False)
+            .astype(np.int64)
+        )
+    return np.arange(n, dtype=np.int64)
+
+
 def _gather_l1_rows(
     l1: np.ndarray,
     idx: np.ndarray,
@@ -800,6 +827,7 @@ def _train_dispatcher(
     emit: EmitFn,
     cancel: CancelToken,
     n_classes: int | None = None,
+    map_table: np.ndarray | None = None,
 ) -> tuple[object, dict]:
     n = int(l1.shape[0])
     in_dim = int(l1.shape[1])
@@ -814,13 +842,8 @@ def _train_dispatcher(
     n_val = max(1, int(n * 0.10))
     val_idx = perm[:n_val]
     train_idx = perm[n_val:]
-    # Cap to a RAM-sized subsample and materialize once: the router is a simple
-    # linear/MLP classifier, so a representative subset is statistically sound
-    # and avoids random-access page-fault thrashing on a disk-backed L1 matrix.
-    if int(train_idx.size) > DISPATCHER_MAX_TRAIN:
-        train_idx = train_idx[:DISPATCHER_MAX_TRAIN]
-    if int(val_idx.size) > DISPATCHER_MAX_VAL:
-        val_idx = val_idx[:DISPATCHER_MAX_VAL]
+    # The caller caps the training subset via ``dispatcher_max_train`` and passes
+    # an already-bounded L1 + labels, so this split is over that subset only.
     X_train = torch.from_numpy(_gather_l1_rows(l1, train_idx, cancel, emit, "training")).to(device)
     X_val = torch.from_numpy(_gather_l1_rows(l1, val_idx, cancel, emit, "validation")).to(device)
     y_train = torch.from_numpy(labels[train_idx].astype(np.int64)).to(device)
@@ -837,6 +860,9 @@ def _train_dispatcher(
     best_state = {k: v.detach().cpu().clone() for k, v in disp.state_dict().items()}
     n_train = int(train_idx.shape[0])
     n_val_v = int(val_idx.shape[0])
+    min_acc_gain = cfg.dispatcher_min_acc_gain / 100.0  # percent -> fraction
+    stall_steps = 0
+    stopped_early = False
 
     disp.eval()
     train_correct0 = 0
@@ -904,24 +930,81 @@ def _train_dispatcher(
                 "progress": epoch / cfg.dispatcher_epochs,
             }
         )
+        best_before = best_acc
         if val_acc >= best_acc:
             best_acc = val_acc
             best_state = {k: v.detach().cpu().clone() for k, v in disp.state_dict().items()}
+        # Early stop: halt once the relative val-accuracy gain over the best
+        # model seen so far stays below ``dispatcher_min_acc_gain``% for
+        # ``dispatcher_patience`` consecutive epochs.
+        if cfg.dispatcher_min_acc_gain > 0:
+            if best_before <= 0.0:
+                gain = float("inf")
+            else:
+                gain = (val_acc - best_before) / best_before
+            stall_steps = 0 if gain > min_acc_gain else stall_steps + 1
+            if stall_steps >= cfg.dispatcher_patience:
+                stopped_early = True
+                break
 
     disp.load_state_dict(best_state)
     disp.eval()
-    return disp, {"best_val_acc": best_acc}
+    # Post-stitching accuracy: when the caller supplies the KITSUNE MAP table,
+    # re-score the *macro* partitions (MAP[argmax micro-bucket] vs MAP[true micro
+    # bucket]) on the same val split. This is the accuracy on the final B experts
+    # rather than on the B' micro-buckets.
+    macro_val_acc = None
+    if map_table is not None:
+        table = torch.as_tensor(np.asarray(map_table, dtype=np.int64), device=device)
+        correct = 0
+        with torch.no_grad():
+            for start in range(0, n_val_v, DISPATCHER_BATCH):
+                end = min(start + DISPATCHER_BATCH, n_val_v)
+                micro_pred = disp.predict(X_val[start:end]).long()
+                macro_pred = table[micro_pred]
+                macro_true = table[y_val[start:end].long()]
+                correct += int((macro_pred == macro_true).sum().item())
+        macro_val_acc = correct / max(n_val_v, 1)
+    if stopped_early:
+        emit(
+            {
+                "stage": "dispatcher",
+                "event": "early_stop",
+                "epoch": epoch,
+                "epochs": cfg.dispatcher_epochs,
+                "msg": (
+                    f"dispatcher stopped early — val-acc gain < "
+                    f"{cfg.dispatcher_min_acc_gain:g}% for "
+                    f"{cfg.dispatcher_patience} epochs"
+                ),
+            }
+        )
+    return disp, {"best_val_acc": best_acc, "stopped_early": stopped_early, "macro_val_acc": macro_val_acc}
 
 
-def _predict_labels(disp, l1: np.ndarray, device: torch.device, cancel: CancelToken) -> np.ndarray:
-    n = int(l1.shape[0])
+def _predict_labels_from_pack(disp, pack, base, device: torch.device, cancel: CancelToken) -> np.ndarray:
+    """Apply the trained dispatcher to every pack row (streamed, no full L1).
+
+    Computes L1 features in ``L1_CHUNK`` chunks straight from the pack, predicts,
+    and discards, so the label application is O(n) forward passes with no full
+    L1 materialization.
+    """
+    n = int(len(pack))
     out = np.empty(n, dtype=np.int16)
     with torch.no_grad():
         for start in range(0, n, L1_CHUNK):
             cancel.check()
             end = min(start + L1_CHUNK, n)
-            x = torch.from_numpy(np.ascontiguousarray(l1[start:end], dtype=np.float32)).to(device)
-            out[start:end] = disp.predict(x).cpu().numpy().astype(np.int16)
+            idx = torch.arange(start, end, dtype=torch.long)
+            batch = pack.gather(idx)
+            h = base.l1_concat(
+                batch["white_idx"].to(device),
+                batch["black_idx"].to(device),
+                batch["stm_white"].to(device),
+                batch["white_mask"].to(device),
+                batch["black_mask"].to(device),
+            )
+            out[start:end] = disp.predict(h).cpu().numpy().astype(np.int16)
     return out
 
 
@@ -978,8 +1061,12 @@ def _fine_tune_experts(
             continue
         perm = rng.permutation(idx_all.size)
         n_hold = max(1, int(idx_all.size * 0.10))
+        if cfg.expert_max_hold > 0:
+            n_hold = min(n_hold, int(cfg.expert_max_hold))
         hold_pos = np.sort(idx_all[perm[:n_hold]])
         train_pos = np.sort(idx_all[perm[n_hold:]])
+        if cfg.expert_max_train > 0 and int(train_pos.size) > int(cfg.expert_max_train):
+            train_pos = train_pos[: int(cfg.expert_max_train)]
 
         expert = DualHiddenNNUE(
             hidden_dim=base.hidden_dim, hidden2_dim=base.hidden2_dim, crelu_clip=base.crelu_clip
@@ -2077,35 +2164,43 @@ def run_moe_training(cfg: TrainingConfig, emit: EmitFn, cancel: CancelToken) -> 
     if cfg.clustering == "piece_count":
         disp_labels = labels
         best_val_acc = None
+        best_macro_val_acc = None
         disp = None
         emit({"stage": "dispatcher", "event": "skip", "msg": "piece-count rule (no dispatcher)"})
     elif cfg.clustering == "kitsune":
         pack, _s, _l = load_train_pack(pack_dir)
-        l1 = build_l1(pack, base, device, cancel, emit, path=work_dir / "l1_activations.npy")
         in_dim = int(base.hidden_dim) * 2
         emit({"stage": "dispatcher", "event": "start", "type": cfg.dispatcher_type})
-        # Label the full dataset with the micro-quantizer fitted on the cluster
-        # subset; the dispatcher needs ground-truth micro-bucket ids for its rows.
+        # Train the micro-dispatcher on a bounded subset (``dispatcher_max_train``);
+        # the full dataset is labeled afterward by a streamed forward pass.
+        train_rows = _dispatcher_train_rows(int(len(pack)), cfg.dispatcher_max_train)
+        l1_train = build_l1(
+            pack, base, device, cancel, emit,
+            path=work_dir / "l1_activations.npy", rows=train_rows,
+        )
         with open(work_dir / "micro_kmeans.pkl", "rb") as fh:
             micro_km = pickle.load(fh)
-        full_micro_labels = _predict_kmeans(micro_km, l1, cancel, emit, stage="dispatcher")
+        micro_labels_train = _predict_kmeans(micro_km, l1_train, cancel, emit, stage="dispatcher")
         micro_disp, info = _train_dispatcher(
-            l1, full_micro_labels, cfg, device, emit, cancel, n_classes=b_prime
+            l1_train, micro_labels_train, cfg, device, emit, cancel,
+            n_classes=b_prime, map_table=map_table,
         )
         best_val_acc = info["best_val_acc"]
+        best_macro_val_acc = info.get("macro_val_acc")
+        del l1_train
+        (work_dir / "l1_activations.npy").unlink(missing_ok=True)
         disp = KitsuneDispatcher(in_dim, cfg.k, map_table, micro_disp).to(device)
-        disp_labels = _predict_labels(disp, l1, device, cancel)
+        disp_labels = _predict_labels_from_pack(disp, pack, base, device, cancel)
         save_dispatcher(
             micro_disp, DISPATCHER_CHECKPOINTS_DIR / cfg.run_name / "dispatcher.pt"
         )
-        del l1
-        (work_dir / "l1_activations.npy").unlink(missing_ok=True)
         del pack
         emit(
             {
                 "stage": "dispatcher",
                 "event": "done",
                 "best_val_acc": best_val_acc,
+                "macro_val_acc": best_macro_val_acc,
                 "label_sizes": np.bincount(
                     disp_labels.astype(np.int64), minlength=cfg.k
                 ).tolist(),
@@ -2113,7 +2208,6 @@ def run_moe_training(cfg: TrainingConfig, emit: EmitFn, cancel: CancelToken) -> 
         )
     else:
         pack, _s, _l = load_train_pack(pack_dir)
-        l1 = build_l1(pack, base, device, cancel, emit, path=work_dir / "l1_activations.npy")
         if cfg.dispatcher_source == "load":
             # A dispatcher is independent of the clustering algorithm: it only
             # needs its input dim and bucket count to match the current base and
@@ -2130,8 +2224,8 @@ def run_moe_training(cfg: TrainingConfig, emit: EmitFn, cancel: CancelToken) -> 
                     f"dispatcher buckets {disp.n_clusters} != Heads K {cfg.k} "
                     f"(set Heads K to {disp.n_clusters})"
                 )
-            disp_labels = _predict_labels(disp, l1, device, cancel)
             best_val_acc = None
+            best_macro_val_acc = None
             emit(
                 {
                     "stage": "dispatcher",
@@ -2142,19 +2236,28 @@ def run_moe_training(cfg: TrainingConfig, emit: EmitFn, cancel: CancelToken) -> 
             )
         else:
             emit({"stage": "dispatcher", "event": "start", "type": cfg.dispatcher_type})
-            disp, info = _train_dispatcher(l1, labels, cfg, device, emit, cancel)
+            # Train on a bounded subset (``dispatcher_max_train``); the full
+            # dataset is labeled afterward by a streamed forward pass.
+            train_rows = _dispatcher_train_rows(int(len(pack)), cfg.dispatcher_max_train)
+            l1_train = build_l1(
+                pack, base, device, cancel, emit,
+                path=work_dir / "l1_activations.npy", rows=train_rows,
+            )
+            disp, info = _train_dispatcher(l1_train, labels[train_rows], cfg, device, emit, cancel)
             best_val_acc = info["best_val_acc"]
-            disp_labels = _predict_labels(disp, l1, device, cancel)
+            best_macro_val_acc = best_val_acc
+            del l1_train
+            (work_dir / "l1_activations.npy").unlink(missing_ok=True)
             # persist the trained dispatcher so it can be loaded in later runs
             save_dispatcher(disp, DISPATCHER_CHECKPOINTS_DIR / cfg.run_name / "dispatcher.pt")
-        del l1
-        (work_dir / "l1_activations.npy").unlink(missing_ok=True)
+        disp_labels = _predict_labels_from_pack(disp, pack, base, device, cancel)
         del pack
         emit(
             {
                 "stage": "dispatcher",
                 "event": "done",
                 "best_val_acc": best_val_acc,
+                "macro_val_acc": best_macro_val_acc,
                 "label_sizes": np.bincount(
                     disp_labels.astype(np.int64), minlength=cfg.k
                 ).tolist(),
@@ -2189,8 +2292,10 @@ def run_moe_training(cfg: TrainingConfig, emit: EmitFn, cancel: CancelToken) -> 
         "run_name": cfg.run_name,
         "technique": cfg.technique,
         "config": cfg.to_dict(),
+        "device": str(device),
         "metrics": metrics,
         "dispatcher_val_acc": best_val_acc,
+        "dispatcher_macro_val_acc": best_macro_val_acc,
         "cluster_sizes": diag.get("sizes", []),
         "stage_times": timer.as_dict(),
         "timestamp": datetime.now(timezone.utc).isoformat(timespec="seconds"),
